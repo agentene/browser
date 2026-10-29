@@ -1,9 +1,9 @@
-# docker compose configuration for chendefine/playwright-cdp-selkies
+# docker compose configuration for agentene/browser
 #
 #   build & start:   docker compose up -d --build
 #   logs:            docker compose logs -f
 #   stop:            docker compose down
-#   shell access:    docker compose exec playwright-cdp-selkies bash
+#   shell access:    docker compose exec browser bash
 #   rebuild only:    docker compose build
 #
 # Every runtime knob reads from a .env file next to this file (create it with
@@ -40,7 +40,7 @@
 #                   environment: section)
 
 services:
-  playwright-cdp-selkies:
+  browser:
     build:
       context: .
       args:
@@ -52,9 +52,9 @@ services:
         # Selkies upstream release; its wheels (and the pixelflux/pcmflux
         # dependency wheels) are fetched from the GitHub releases
         SELKIES_VERSION: "${SELKIES_VERSION:-2.1.0}"
-    image: chendefine/playwright-cdp-selkies:latest
-    container_name: playwright-cdp-selkies
-    hostname: playwright-cdp-selkies
+    image: agentene/browser:latest
+    container_name: agentene-browser
+    hostname: agentene-browser
     restart: always
 
     # Pass everything in .env through to the container as-is; covers variables
@@ -259,5 +259,5 @@ services:
 # with an "incorrect label" error instead.
 networks:
   default:
-    name: "${NETWORK_NAME:-${COMPOSE_PROJECT_NAME:-playwright-cdp-selkies}_default}"
+    name: "${NETWORK_NAME:-${COMPOSE_PROJECT_NAME:-agentene-browser}_default}"
     external: "${NETWORK_EXTERNAL:-false}"

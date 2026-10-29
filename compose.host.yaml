@@ -33,7 +33,7 @@
 # This file carries no other settings; everything else stays in compose.yaml.
 
 services:
-  playwright-cdp-selkies:
+  browser:
     network_mode: host
     # docker rejects a custom hostname together with the host network
     hostname: !reset null

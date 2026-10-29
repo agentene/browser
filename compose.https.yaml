@@ -26,7 +26,7 @@
 # This file carries no other settings; everything else stays in compose.yaml.
 
 services:
-  playwright-cdp-selkies:
+  browser:
     ports:
       - "${NGINX_HTTPS_PORT:-8443}:${NGINX_LISTEN_HTTPS_PORT:-443}" # web UI, HTTPS
     volumes:

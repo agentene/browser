@@ -28,7 +28,7 @@
 # the host driver version): the CDI spec injects the host's libraries and
 # device nodes at container start.
 services:
-  playwright-cdp-selkies:
+  browser:
     devices:
       # CDI device name — resolved by the daemon against /etc/cdi/*.yaml
       - "nvidia.com/gpu=all"

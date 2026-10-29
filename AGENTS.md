@@ -6,7 +6,7 @@ User-facing docs: [README.md](README.md) / [README.zh-CN.md](README.zh-CN.md).
 
 ## What this repo is
 
-A single Docker image (`chendefine/playwright-cdp-selkies`) bundling a
+A single Docker image (`agentene/browser`) bundling a
 Chrome for Testing browser, a live-viewable Selkies remote desktop, and a
 public CDP endpoint behind one nginx front door. It is an infrastructure
 repo, not an application codebase: the deliverables are a Dockerfile, a bash
@@ -56,13 +56,13 @@ docker compose build
 
 # CDP path (Selkies off)
 docker run -d --name cdp-smoke -p 9222:9222 -e ENABLE_SELKIES=false \
-  chendefine/playwright-cdp-selkies:latest
+  agentene/browser:latest
 curl -sf http://127.0.0.1:9222/json/version | jq -e '.Browser and .webSocketDebuggerUrl'
 docker rm -f cdp-smoke
 
 # Web-UI path (CDP off)
 docker run -d --name web-smoke -p 8080:80 -e ENABLE_CDP=false \
-  chendefine/playwright-cdp-selkies:latest
+  agentene/browser:latest
 curl -sf http://127.0.0.1:8080/ | grep -qi '<html'
 docker rm -f web-smoke
 ```

@@ -5,8 +5,8 @@ Thanks for taking the time to improve this project! Issues and pull requests are
 ## Getting started
 
 ```bash
-git clone https://github.com/chendefine/playwright-cdp-selkies.git
-cd playwright-cdp-selkies
+git clone https://github.com/agentene/browser.git
+cd browser
 cp .env.example .env        # optional; defaults work
 docker compose up -d --build
 ```
@@ -27,7 +27,7 @@ docker build --check .                        # Dockerfile lint (BuildKit)
 # full build + runtime smoke tests
 docker compose build
 docker run -d --name cdp-smoke -p 9222:9222 -e ENABLE_SELKIES=false \
-  chendefine/playwright-cdp-selkies:latest
+  agentene/browser:latest
 curl -sf http://127.0.0.1:9222/json/version   # then: docker rm -f cdp-smoke
 ```
 

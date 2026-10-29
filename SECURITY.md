@@ -7,7 +7,7 @@ Only the latest published image tag (and `main`) receive updates. Pin by digest 
 ## Reporting a vulnerability
 
 Please report vulnerabilities **privately** to the repository owner via
-[GitHub security advisories](https://github.com/chendefine/playwright-cdp-selkies/security/advisories/new)
+[GitHub security advisories](https://github.com/agentene/browser/security/advisories/new)
 ("Report a vulnerability"), or email the maintainer if an address is listed on
 the GitHub profile. Do **not** open a public issue for security problems.
 

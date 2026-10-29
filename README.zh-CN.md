@@ -1,11 +1,11 @@
-# playwright-cdp-selkies
+# agentene-browser
 
 **单个 Docker 容器,同时提供 Chrome for Testing 浏览器、可实时观看的远程桌面、以及对外暴露的 CDP 端点。**
 
-[![ci](https://github.com/chendefine/playwright-cdp-selkies/actions/workflows/ci.yaml/badge.svg)](https://github.com/chendefine/playwright-cdp-selkies/actions/workflows/ci.yaml)
+[![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![docker image size](https://img.shields.io/docker/image-size/chendefine/playwright-cdp-selkies)](https://hub.docker.com/r/chendefine/playwright-cdp-selkies)
-[![docker pulls](https://img.shields.io/docker/pulls/chendefine/playwright-cdp-selkies)](https://hub.docker.com/r/chendefine/playwright-cdp-selkies)
+[![docker image size](https://img.shields.io/docker/image-size/agentene/browser)](https://hub.docker.com/r/agentene/browser)
+[![docker pulls](https://img.shields.io/docker/pulls/agentene/browser)](https://hub.docker.com/r/agentene/browser)
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -72,8 +72,8 @@ docker run ─┬─ Xvfb        虚拟显示(Selkies 采集的画面;DISPLAY_BA
 ### Docker Compose
 
 ```bash
-git clone https://github.com/chendefine/playwright-cdp-selkies.git
-cd playwright-cdp-selkies
+git clone https://github.com/agentene/browser.git
+cd browser
 
 cp .env.example .env        # 可选 —— 默认值即可直接跑
 docker compose up -d --build
@@ -87,25 +87,25 @@ docker compose up -d --build
 常用命令:
 
 ```bash
-docker compose logs -f      # 跟随日志
-docker compose exec playwright-cdp-selkies bash   # 进入容器 shell
-docker compose down         # 停止并删除容器(以及 compose 创建的网络)
+docker compose logs -f            # 跟随日志
+docker compose exec browser bash  # 进入容器 shell
+docker compose down               # 停止并删除容器(以及 compose 创建的网络)
 ```
 
 ### 纯 docker run
 
 ```bash
-docker build -t chendefine/playwright-cdp-selkies .
+docker build -t agentene/browser .
 
-docker run -d --name playwright-cdp-selkies \
+docker run -d --name agentene-browser \
   --restart always \
   -p 8080:80 \
   -p 9222:9222 \
   -v "$PWD/browser:/browser" \
-  chendefine/playwright-cdp-selkies
+  agentene/browser
 ```
 
-传给容器的首参数若不是隐式的 `start`,会被直接 exec,例如 `docker run -it chendefine/playwright-cdp-selkies bash` 进入 shell。
+传给容器的首参数若不是隐式的 `start`,会被直接 exec,例如 `docker run -it agentene/browser bash` 进入 shell。
 
 ## 端口
 
@@ -385,7 +385,7 @@ COMPOSE_FILE=compose.yaml:compose.gpu-nvidia.yaml
 
 entrypoint 启动时自动探测设备(`CHROMIUM_GPU=auto` 为默认)并把 Chromium 切到 Vulkan/ANGLE 后端(`--use-angle=vulkan --enable-features=Vulkan`):WebGL/WebGPU 上下文经 Vulkan 渲染(原生 GL 路径在 Xvfb 上根本走不通),显示合成器也跑在 Vulkan 上(不开启合成标志时,chrome://gpu 会把 WebGL 标为 "Hardware accelerated but at reduced performance"—— GPU 帧被回读进 CPU 合成器)。实测:NVIDIA 直通 → `ANGLE (NVIDIA, Vulkan … GeForce RTX …)`;AMD 核显 → `ANGLE (AMD, Vulkan … RADV)`,`webgl/webgpu: enabled`(无回读)。此时无头模式也不再追加 `--disable-gpu`,SwiftShader 仍作为运行时兜底保留,设备中途出错 WebGL 不断供。`CHROMIUM_GPU=strict` 永不允许 SwiftShader(反指纹:浏览器不得上报软件渲染器,无 GPU 时 WebGL 不可用);`off` 即使挂了 GPU 也强制走软件路径。
 
-镜像内置了 Intel/AMD 的 Mesa/VA-API 用户态;NVIDIA 的 GL 库无法内置(必须与宿主机驱动版本匹配)—— 由 nvidia container toolkit 在容器启动时注入。验证方式:`docker compose exec playwright-cdp-selkies glxinfo -B` / `vainfo`(Intel/AMD)或 `nvidia-smi`(NVIDIA),再在串流的浏览器里打开 `chrome://gpu`,WebGL 应显示硬件渲染器。[`examples/webgl-renderer-probe.mjs`](examples/webgl-renderer-probe.mjs) 无需任何依赖即可打印 WebGL 渲染器和 `chrome://gpu` 的特性状态:默认连接回环 DevTools 端口 `127.0.0.1:9221`(在容器内运行,例如先 `docker cp` 进去),也可以用 `node examples/webgl-renderer-probe.mjs localhost 9222` 指向公开端点。
+镜像内置了 Intel/AMD 的 Mesa/VA-API 用户态;NVIDIA 的 GL 库无法内置(必须与宿主机驱动版本匹配)—— 由 nvidia container toolkit 在容器启动时注入。验证方式:`docker compose exec browser glxinfo -B` / `vainfo`(Intel/AMD)或 `nvidia-smi`(NVIDIA),再在串流的浏览器里打开 `chrome://gpu`,WebGL 应显示硬件渲染器。[`examples/webgl-renderer-probe.mjs`](examples/webgl-renderer-probe.mjs) 无需任何依赖即可打印 WebGL 渲染器和 `chrome://gpu` 的特性状态:默认连接回环 DevTools 端口 `127.0.0.1:9221`(在容器内运行,例如先 `docker cp` 进去),也可以用 `node examples/webgl-renderer-probe.mjs localhost 9222` 指向公开端点。
 
 ### Wayland 桌面(`DISPLAY_BACKEND=wayland`)
 
@@ -479,7 +479,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # 建议:CDP 与 Web UI 不暴露到网络
 ## 从源码构建
 
 ```bash
-docker compose build            # 或:docker build -t chendefine/playwright-cdp-selkies .
+docker compose build            # 或:docker build -t agentene/browser .
 ```
 
 单阶段 Dockerfile,各部分各自成层地安装:Node.js、Chrome for Testing 及其系统依赖、nginx、Xvfb/PulseAudio/labwc、Selkies 官方 release wheel,以及 CDP 网关的 npm 依赖(按 lockfile `npm ci`)。Chrome 直接从 Chrome for Testing 官方存储桶下载(不经过 Playwright);Selkies 及其 `pixelflux`/`pcmflux` 依赖从各自的 GitHub release 下载。
@@ -499,12 +499,12 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 
 ## CI/CD 与发布的镜像
 
-[![ci](https://github.com/chendefine/playwright-cdp-selkies/actions/workflows/ci.yaml/badge.svg)](https://github.com/chendefine/playwright-cdp-selkies/actions/workflows/ci.yaml)
+[![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
 每个 pull request 以及每次推送到 `main` 都会运行 [`ci.yaml`](.github/workflows/ci.yaml):静态检查(hadolint、`docker build --check`、shellcheck、`node --check`、`py_compile`)、完整镜像构建、运行时冒烟测试(CDP 端点、Web UI、CDP 网关、Wayland 桌面)。推送 `v*` 标签(或手动运行该 workflow)时构建并发布 `linux/amd64` 镜像(Dockerfile 只支持这一种架构):
 
-* **GHCR**:`ghcr.io/chendefine/playwright-cdp-selkies`(使用内置 `GITHUB_TOKEN`)
-* **Docker Hub**:`chendefine/playwright-cdp-selkies`(需要仓库 secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`;未配置则跳过)
+* **GHCR**:`ghcr.io/agentene/browser`(使用内置 `GITHUB_TOKEN`)
+* **Docker Hub**:`agentene/browser`(与 GHCR 同为 `<owner>/<repo>` 路径;需要仓库 secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`,且该账号有权推送到此命名空间;未配置则跳过)
 
 标签规则(标签与 Chrome 版本对齐):`v150.0.7871.100` → `150.0.7871.100`、`150`、`sha-<短哈希>`、`latest`。手动运行 workflow(无标签)时只发布 `sha-<短哈希>` 标签。
 

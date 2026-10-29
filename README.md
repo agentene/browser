@@ -1,11 +1,11 @@
-# playwright-cdp-selkies
+# agentene-browser
 
 **A single Docker container that bundles Chrome for Testing with a live-viewable remote desktop and a public CDP endpoint.**
 
-[![ci](https://github.com/chendefine/playwright-cdp-selkies/actions/workflows/ci.yaml/badge.svg)](https://github.com/chendefine/playwright-cdp-selkies/actions/workflows/ci.yaml)
+[![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![docker image size](https://img.shields.io/docker/image-size/chendefine/playwright-cdp-selkies)](https://hub.docker.com/r/chendefine/playwright-cdp-selkies)
-[![docker pulls](https://img.shields.io/docker/pulls/chendefine/playwright-cdp-selkies)](https://hub.docker.com/r/chendefine/playwright-cdp-selkies)
+[![docker image size](https://img.shields.io/docker/image-size/agentene/browser)](https://hub.docker.com/r/agentene/browser)
+[![docker pulls](https://img.shields.io/docker/pulls/agentene/browser)](https://hub.docker.com/r/agentene/browser)
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -72,8 +72,8 @@ All services are loopback-only inside the container; nginx is the single public 
 ### Docker Compose
 
 ```bash
-git clone https://github.com/chendefine/playwright-cdp-selkies.git
-cd playwright-cdp-selkies
+git clone https://github.com/agentene/browser.git
+cd browser
 
 cp .env.example .env        # optional — defaults work out of the box
 docker compose up -d --build
@@ -87,25 +87,25 @@ Then:
 Useful commands:
 
 ```bash
-docker compose logs -f      # follow logs
-docker compose exec playwright-cdp-selkies bash   # shell in the container
-docker compose down         # stop and remove the container (and compose's network)
+docker compose logs -f            # follow logs
+docker compose exec browser bash  # shell in the container
+docker compose down               # stop and remove the container (and compose's network)
 ```
 
 ### Plain docker run
 
 ```bash
-docker build -t chendefine/playwright-cdp-selkies .
+docker build -t agentene/browser .
 
-docker run -d --name playwright-cdp-selkies \
+docker run -d --name agentene-browser \
   --restart always \
   -p 8080:80 \
   -p 9222:9222 \
   -v "$PWD/browser:/browser" \
-  chendefine/playwright-cdp-selkies
+  agentene/browser
 ```
 
-Any argument other than the implicit `start` is exec'd instead of the supervisor, e.g. `docker run -it chendefine/playwright-cdp-selkies bash` drops to a shell.
+Any argument other than the implicit `start` is exec'd instead of the supervisor, e.g. `docker run -it agentene/browser bash` drops to a shell.
 
 ## Ports
 
@@ -386,7 +386,7 @@ COMPOSE_FILE=compose.yaml:compose.gpu-nvidia.yaml
 
 The entrypoint auto-detects the device at start (`CHROMIUM_GPU=auto`, the default) and switches Chromium to the Vulkan/ANGLE backend (`--use-angle=vulkan --enable-features=Vulkan`): WebGL/WebGPU contexts render via Vulkan — the native-GL path cannot work on Xvfb at all — and the display compositor runs on Vulkan too (without the compositing flag chrome://gpu reports WebGL as "Hardware accelerated but at reduced performance": GPU frames read back into a CPU compositor). Verified results: NVIDIA passthrough → `ANGLE (NVIDIA, Vulkan … GeForce RTX …)`, AMD iGPU → `ANGLE (AMD, Vulkan … RADV)` with `webgl/webgpu: enabled` (no readback). `--disable-gpu` is then no longer added in headless mode, and SwiftShader stays allowed as a runtime fallback so WebGL survives a flaky device. `CHROMIUM_GPU=strict` never allows SwiftShader (anti-fingerprinting: the browser must not report a software renderer — WebGL is then unavailable without a GPU); `off` forces the software path even with a GPU attached.
 
-The image bakes in the Mesa/VA-API userland for Intel/AMD; NVIDIA GL libraries cannot be baked in (they must match the host driver) — the nvidia container toolkit injects them at container start. Verify with `docker compose exec playwright-cdp-selkies glxinfo -B` / `vainfo` (Intel/AMD) or `nvidia-smi` (NVIDIA), and with `chrome://gpu` in the streamed browser: WebGL should report the hardware renderer. [`examples/webgl-renderer-probe.mjs`](examples/webgl-renderer-probe.mjs) prints the WebGL renderer and the `chrome://gpu` feature status without any dependency: it defaults to the loopback DevTools port `127.0.0.1:9221` (run it inside the container, e.g. after `docker cp`), or point it at the public endpoint with `node examples/webgl-renderer-probe.mjs localhost 9222`.
+The image bakes in the Mesa/VA-API userland for Intel/AMD; NVIDIA GL libraries cannot be baked in (they must match the host driver) — the nvidia container toolkit injects them at container start. Verify with `docker compose exec browser glxinfo -B` / `vainfo` (Intel/AMD) or `nvidia-smi` (NVIDIA), and with `chrome://gpu` in the streamed browser: WebGL should report the hardware renderer. [`examples/webgl-renderer-probe.mjs`](examples/webgl-renderer-probe.mjs) prints the WebGL renderer and the `chrome://gpu` feature status without any dependency: it defaults to the loopback DevTools port `127.0.0.1:9221` (run it inside the container, e.g. after `docker cp`), or point it at the public endpoint with `node examples/webgl-renderer-probe.mjs localhost 9222`.
 
 ### Wayland desktop (`DISPLAY_BACKEND=wayland`)
 
@@ -479,7 +479,7 @@ What changes in this mode:
 ## Building from source
 
 ```bash
-docker compose build            # or: docker build -t chendefine/playwright-cdp-selkies .
+docker compose build            # or: docker build -t agentene/browser .
 ```
 
 The single-stage Dockerfile installs, each in its own layer: Node.js, Chrome for Testing + its system deps, nginx, Xvfb/PulseAudio/labwc, the official Selkies release wheels, and the CDP gateway's npm dependencies (`npm ci` from its lockfile). Chrome is downloaded straight from the official Chrome for Testing bucket (no Playwright involved); Selkies and its `pixelflux`/`pcmflux` dependencies come from their GitHub releases.
@@ -499,12 +499,12 @@ node update-chrome-node.mjs --node 22        # force the Node major instead of t
 
 ## CI/CD and published images
 
-[![ci](https://github.com/chendefine/playwright-cdp-selkies/actions/workflows/ci.yaml/badge.svg)](https://github.com/chendefine/playwright-cdp-selkies/actions/workflows/ci.yaml)
+[![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
 Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland desktop). Pushing a `v*` tag (or a manual run of the workflow) builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for):
 
-* **GHCR**: `ghcr.io/chendefine/playwright-cdp-selkies` (uses the built-in `GITHUB_TOKEN`)
-* **Docker Hub**: `chendefine/playwright-cdp-selkies` (needs the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets; skipped otherwise)
+* **GHCR**: `ghcr.io/agentene/browser` (uses the built-in `GITHUB_TOKEN`)
+* **Docker Hub**: `agentene/browser` (same `<owner>/<repo>` path as GHCR; needs the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets of an account allowed to push there; skipped otherwise)
 
 Tag scheme (tags follow the Chrome version): `v150.0.7871.100` → `150.0.7871.100`, `150`, `sha-<short>` and `latest`. A manual run of the workflow (no tag) publishes only the `sha-<short>` tag.
 

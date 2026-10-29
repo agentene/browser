@@ -13,11 +13,11 @@
 # the device nodes' gids to the dropped user's groups itself.
 #
 # Verify:
-#   docker compose exec playwright-cdp-selkies glxinfo -B | grep -i renderer
-#   docker compose exec playwright-cdp-selkies vainfo
+#   docker compose exec browser glxinfo -B | grep -i renderer
+#   docker compose exec browser vainfo
 # and open chrome://gpu in the streamed browser: WebGL should report the
 # hardware renderer instead of SwiftShader.
 services:
-  playwright-cdp-selkies:
+  browser:
     devices:
       - /dev/dri:/dev/dri

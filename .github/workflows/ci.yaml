@@ -1,4 +1,4 @@
-# CI for the playwright-cdp-selkies image.
+# CI for the agentene/browser image.
 #
 #   lint        : hadolint + docker build --check (Dockerfile), shellcheck
 #                 (entrypoint), node --check, py_compile (python helpers)
@@ -8,7 +8,8 @@
 #                 pushes tag v<chrome-version> (or ...-r2, -r3, ... if taken),
 #                 which re-triggers this workflow's publish job
 #   publish     : on `v*` tags and manual dispatch — pushes to GHCR (always) and
-#                 Docker Hub (when DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are set)
+#                 Docker Hub (when DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are set; same
+#                 <owner>/<repo> path as GHCR)
 #
 # Together with chrome-update.yaml (daily Chrome for Testing watch) this
 # closes the loop: upstream release -> re-pin PR -> CI here -> auto-merge ->
@@ -35,7 +36,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: playwright-cdp-selkies
+  IMAGE_NAME: browser
 
 jobs:
   lint:
@@ -258,7 +259,7 @@ jobs:
             echo "images<<EOI"
             echo "ghcr.io/${GITHUB_REPOSITORY,,}"
             if [ -n "${DOCKERHUB_USERNAME}" ]; then
-              echo "docker.io/${DOCKERHUB_USERNAME,,}/${{ env.IMAGE_NAME }}"
+              echo "docker.io/${GITHUB_REPOSITORY,,}"
             fi
             echo "EOI"
           } >> "$GITHUB_OUTPUT"

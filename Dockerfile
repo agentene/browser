@@ -1,4 +1,4 @@
-## chendefine/playwright-cdp-selkies
+## agentene/browser
 
 FROM ubuntu:26.04
 
