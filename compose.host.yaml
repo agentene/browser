@@ -1,0 +1,57 @@
+# Optional overlay: run the container on the HOST network stack
+# (network_mode: host), so the browser reaches services on the host directly
+# — e.g. a web app you are developing on http://localhost:3000.
+#
+#   cp .env.example .env
+#   # in .env (keep this overlay LAST when combining with other overlays):
+#   COMPOSE_FILE=compose.yaml:compose.host.yaml
+#   docker compose up -d
+#
+# What changes with host networking:
+#   * there is no port publishing — nginx binds its listen ports directly on
+#     the host. This overlay therefore drops the ports: list, and each listen
+#     port defaults to the host port the bridge setup would have published,
+#     so the URLs stay the same when switching modes:
+#       NGINX_LISTEN_HTTP_PORT   <- NGINX_HTTP_PORT  <- 8080  (web UI, HTTP)
+#       NGINX_LISTEN_HTTPS_PORT  <- NGINX_HTTPS_PORT <- 8443  (web UI, HTTPS — add
+#                          compose.https.yaml before this overlay: it turns
+#                          HTTPS on and mounts ./tls; its port mapping is dropped)
+#       CDP_LISTEN_PORT <- CDP_PORT         <- 9222  (CDP endpoint)
+#     Setting NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT / CDP_LISTEN_PORT in .env wins.
+#   * the loopback-only internals bind on the host's loopback too:
+#     SELKIES_INTERNAL_PORT (8081), CDP_INTERNAL_PORT (9221) and, with
+#     ENABLE_CDP_GATEWAY=true, CDP_GATEWAY_INTERNAL_PORT (9220). Move them in
+#     .env if your own apps use those ports — a bind failure stops the
+#     container.
+#   * nginx listens on ALL host interfaces unless NGINX_LISTEN_ADDR is set;
+#     the CDP endpoint has no authentication, so on a machine reachable from
+#     an untrusted network set NGINX_LISTEN_ADDR=127.0.0.1 in .env.
+#   * the docker network settings (NETWORK_NAME / NETWORK_EXTERNAL) do not
+#     apply, and PORT_FORWARDS peers are resolved through the host's DNS
+#     (there is no docker embedded DNS; container names do not resolve).
+#
+# This file carries no other settings; everything else stays in compose.yaml.
+
+services:
+  playwright-cdp-selkies:
+    network_mode: host
+    # docker rejects a custom hostname together with the host network
+    hostname: !reset null
+    # nothing to publish: nginx binds its listen ports on the host directly
+    # (!reset also drops ports added by an earlier overlay, e.g. https)
+    ports: !reset []
+    environment:
+      NGINX_LISTEN_HTTP_PORT: "${NGINX_LISTEN_HTTP_PORT:-${NGINX_HTTP_PORT:-8080}}"
+      NGINX_LISTEN_HTTPS_PORT: "${NGINX_LISTEN_HTTPS_PORT:-${NGINX_HTTPS_PORT:-8443}}"
+      CDP_LISTEN_PORT: "${CDP_LISTEN_PORT:-${CDP_PORT:-9222}}"
+    healthcheck:
+      # same probe as compose.yaml, on the host-mode listen port defaults
+      test:
+        - CMD-SHELL
+        - >-
+          if [ "$${ENABLE_SELKIES:-true}" = false ]; then
+          curl -sf -o /dev/null http://127.0.0.1:${CDP_LISTEN_PORT:-${CDP_PORT:-9222}}/json/version;
+          else
+          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-${NGINX_HTTP_PORT:-8080}}/)" in
+          2??|3??|401) true ;; *) false ;; esac;
+          fi

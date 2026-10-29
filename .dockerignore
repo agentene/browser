@@ -1,0 +1,31 @@
+# Keep the build context small — docker sends everything not listed here to
+# the daemon on every build, and browser/ alone can be hundreds of MB.
+
+# VCS + CI
+.git
+.gitignore
+.github
+
+# Local runtime state (bind-mount sources, never part of the image)
+browser
+tls
+.env
+.docker-tmp
+
+# Docs (not referenced by the Dockerfile)
+*.md
+LICENSE
+
+# lint config
+.shellcheckrc
+
+# Python bytecode (the py_compile lint step writes entrypoint/helpers/__pycache__)
+**/__pycache__
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# CDP gateway: dependencies are installed in the image (npm ci)
+cdp-gateway/node_modules

@@ -1,0 +1,22 @@
+# local configuration & secrets
+.env
+
+# runtime state (bind-mount sources)
+tls/
+browser/
+
+# local npm install of the CDP gateway (the image runs npm ci)
+cdp-gateway/node_modules/
+
+# scratch
+.docker-tmp/
+detect/
+.playwright-cli/
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+
+__pycache__/

@@ -1,0 +1,23 @@
+# Opt-in overlay: pass the host's Intel/AMD GPU into the container so both
+# Chromium (WebGL, rasterization) and the Selkies encoder (VA-API) can use
+# hardware acceleration instead of software rendering.
+#
+# Enable in .env (colon-separate to combine with the https overlay or the
+# nvidia overlay):
+#
+#   COMPOSE_FILE=compose.yaml:compose.gpu.yaml
+#
+# Host requirements: a /dev/dri render node (Intel/AMD with the i915/amdgpu
+# kernel driver). Nothing else — no device group mapping is needed: the
+# processes run as root by default, and with RUN_USER the entrypoint adds
+# the device nodes' gids to the dropped user's groups itself.
+#
+# Verify:
+#   docker compose exec playwright-cdp-selkies glxinfo -B | grep -i renderer
+#   docker compose exec playwright-cdp-selkies vainfo
+# and open chrome://gpu in the streamed browser: WebGL should report the
+# hardware renderer instead of SwiftShader.
+services:
+  playwright-cdp-selkies:
+    devices:
+      - /dev/dri:/dev/dri

@@ -1,0 +1,35 @@
+# Optional overlay that publishes the HTTPS port and turns HTTPS on.
+#
+#   cp .env.example .env
+#   # in .env:   COMPOSE_FILE=compose.yaml:compose.https.yaml
+#   docker compose up -d
+#
+# COMPOSE_FILE is read by docker compose from .env, so the whole switch lives
+# in .env. The overlay does three things:
+#   1. publishes ${NGINX_HTTPS_PORT:-8443} on the host -> container port
+#      ${NGINX_LISTEN_HTTPS_PORT:-443} (the base compose.yaml deliberately does NOT
+#      publish the HTTPS port, so a non-HTTPS setup does not occupy a host
+#      port),
+#   2. sets ENABLE_HTTPS=true, so nginx also listens on NGINX_LISTEN_HTTPS_PORT,
+#   3. mounts ${TLS_CERTS_HOST_DIR:-./tls} -> /etc/nginx/tls: drop
+#      fullchain.pem + privkey.pem there to use your own certificate (an
+#      existing valid pair is always reused, self-signed included); leave it
+#      empty to have a self-signed pair generated once — into this mount, so
+#      it persists and is reused on later starts. The mount lives here, not
+#      in compose.yaml, so a setup without HTTPS gets no empty ./tls (docker
+#      creates a missing bind-mount source directory).
+# ENABLE_HTTPS can still be set manually from .env without this overlay
+# (= HTTPS only inside the docker network, nothing published to the host);
+# the self-signed pair then stays inside the container and is regenerated
+# when the container is recreated.
+#
+# This file carries no other settings; everything else stays in compose.yaml.
+
+services:
+  playwright-cdp-selkies:
+    ports:
+      - "${NGINX_HTTPS_PORT:-8443}:${NGINX_LISTEN_HTTPS_PORT:-443}" # web UI, HTTPS
+    volumes:
+      - "${TLS_CERTS_HOST_DIR:-./tls}:/etc/nginx/tls"
+    environment:
+      ENABLE_HTTPS: "true"

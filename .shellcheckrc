@@ -1,0 +1,7 @@
+# The entrypoint is split into modules sourced from entrypoint/lib/ (see
+# docker-entrypoint.sh). Follow those `source` statements and resolve their
+# `# shellcheck source=` paths against the script's own directory, so
+# checking docker-entrypoint.sh lints every module as one program (the
+# modules share globals, so linting one alone would flag them).
+external-sources=true
+source-path=SCRIPTDIR

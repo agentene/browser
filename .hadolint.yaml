@@ -1,0 +1,17 @@
+# hadolint configuration — `docker run --rm -i hadolint/hadolint < Dockerfile`
+# and the CI lint job both read this file.
+#
+# Warnings below the failure threshold and rules listed under `ignored` do not
+# fail the build; each ignore has a reason.
+failure-threshold: error
+
+ignored:
+  # apt package pinning: the image deliberately tracks the distro's current
+  # package set so `docker build` picks up security updates. Rebuilds are not
+  # meant to be bit-for-bit reproducible at the distro-package level (the
+  # pieces that matter for reproducibility — Chrome for Testing, Node major,
+  # the Selkies release wheels — ARE pinned by version build args).
+  - DL3008
+  # pip install of the Selkies release wheels: pip installs local wheel
+  # files whose versions are pinned by build args (in the file names).
+  - DL3013

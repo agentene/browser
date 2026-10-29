@@ -1,0 +1,9 @@
+{
+  "name": "cdp-gateway",
+  "private": true,
+  "description": "CDP gateway that turns isolated browser contexts into profile-cloned Chromium processes",
+  "type": "module",
+  "dependencies": {
+    "ws": "8.21.3"
+  }
+}

@@ -1,0 +1,47 @@
+# Opt-in overlay: pass the host's NVIDIA GPU into the container for
+# hardware-accelerated Chromium rendering (WebGL, rasterization).
+#
+# Enable in .env (colon-separate to combine with other overlays):
+#
+#   COMPOSE_FILE=compose.yaml:compose.gpu-nvidia.yaml
+#
+# CDI mode — the modern path: works on Docker Engine >= 27 / Compose >= 2.31
+# WITHOUT registering an "nvidia" runtime or restarting the daemon.
+#
+# Host requirements:
+#   * the NVIDIA proprietary driver (kernel module + MATCHING userspace GL
+#     libraries — libEGL_nvidia.so must exist on the host)
+#   * nvidia-container-toolkit and a generated CDI spec:
+#       sudo pacman -S nvidia-container-toolkit               # Arch
+#       sudo apt-get install -y nvidia-container-toolkit      # Debian/Ubuntu
+#       sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+#
+# Verify the passthrough before starting the stack:
+#   docker run --rm --device nvidia.com/gpu=all <this-image> nvidia-smi -L
+#   docker run --rm --device nvidia.com/gpu=all <this-image> \
+#       sh -c 'ls /usr/lib/libEGL_nvidia.* | head -1'
+# (device nodes + nvidia-smi but NO libEGL_nvidia = the CDI spec was
+# generated against a driver without GL libraries; install/reinstall the
+# full driver package and regenerate the spec.)
+#
+# The NVIDIA GL/EGL userspace is NOT baked into the image (it must match
+# the host driver version): the CDI spec injects the host's libraries and
+# device nodes at container start.
+services:
+  playwright-cdp-selkies:
+    devices:
+      # CDI device name — resolved by the daemon against /etc/cdi/*.yaml
+      - "nvidia.com/gpu=all"
+
+    # Legacy mode for older docker engines (< 27, no CDI support): register
+    # the nvidia runtime instead —
+    #   sudo nvidia-ctk runtime configure --runtime=docker
+    #   sudo systemctl restart docker
+    # — delete the devices: block above and uncomment this:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

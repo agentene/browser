@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CDP Console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #667085;
+    --line: #e3e6eb; --accent: #2f6fde; --danger: #c43d3d; --chip: #eef2f8;
+    --thumb: #dde2ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e6e9ef; --muted: #98a2b3;
+      --line: #2a313d; --accent: #6b9cf5; --danger: #f07171; --chip: #252c38;
+      --thumb: #2a313d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
+    padding: 20px 16px 8px; max-width: 1200px; margin: 0 auto;
+  }
+  h1 { font-size: 20px; margin: 0; }
+  .summary { color: var(--muted); }
+  main {
+    display: grid; gap: 16px; padding: 8px 16px 32px; max-width: 1200px; margin: 0 auto;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .card-head {
+    display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .name { font-weight: 600; font-size: 15px; }
+  .chip {
+    background: var(--chip); color: var(--muted); border-radius: 999px;
+    padding: 1px 8px; font-size: 12px; white-space: nowrap;
+  }
+  .meta { color: var(--muted); font-size: 12px; padding: 8px 14px 0; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 13px; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--text);
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.danger:hover { border-color: var(--danger); color: var(--danger); }
+  ul { list-style: none; margin: 0; padding: 10px 14px 14px; display: grid; gap: 10px; }
+  li { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: start; min-width: 0; }
+  .thumb {
+    width: 120px; aspect-ratio: 16 / 10; object-fit: cover; object-position: top;
+    background: var(--thumb); border-radius: 6px; border: 1px solid var(--line); cursor: pointer;
+  }
+  .tab-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab-url { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--muted); padding: 14px; }
+  .error { color: var(--danger); padding: 0 16px; max-width: 1200px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CDP Console</h1>
+  <span class="summary" id="summary">loading…</span>
+</header>
+<div class="error" id="error"></div>
+<main id="cards"></main>
+<script>
+  const THUMB_REFRESH_MS = 4000;
+  const cards = document.getElementById('cards');
+  let thumbStamp = Date.now();
+
+  function el(tag, attrs = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'onclick') node.onclick = v;
+      else node.setAttribute(k, v);
+    }
+    node.append(...children);
+    return node;
+  }
+
+  async function call(method, path) {
+    const res = await fetch(path, { method });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  }
+
+  function card(context, isMain) {
+    const base = `api/${encodeURIComponent(context.name)}`;
+    const head = el('div', { class: 'card-head' },
+      el('span', { class: 'name' }, isMain ? 'Main browser' : context.name),
+      el('span', { class: 'chip' }, `${context.tabs.length} tab${context.tabs.length === 1 ? '' : 's'}`),
+      el('span', { class: 'spacer' }),
+      el('button', { title: 'Bring this browser window to the front of the desktop',
+        onclick: () => call('POST', `${base}/focus`).catch(showError) }, 'Show on desktop'));
+    if (!isMain) {
+      head.append(el('button', { class: 'danger', title: 'Close the context and disconnect its client',
+        onclick: () => confirm(`Delete ${context.name}? Its client gets disconnected.`)
+          && call('DELETE', base).then(refresh, showError) }, 'Delete'));
+    }
+    // a context's color is also its browser frame color on the desktop
+    const node = el('section', { class: 'card', style: `border-top: 4px solid ${context.color || 'var(--line)'}` }, head);
+    node.append(el('div', { class: 'meta' }, isMain
+      ? 'The persistent profile every isolated context is cloned from. Isolated contexts show up on the desktop with their card color as browser frame color.'
+      : `client ${context.client} · since ${new Date(context.createdAt).toLocaleTimeString()} · pid ${context.pid ?? '—'}`));
+    if (!context.tabs.length) {
+      node.append(el('div', { class: 'empty' }, 'No open tabs.'));
+      return node;
+    }
+    const list = el('ul');
+    for (const tab of context.tabs) {
+      const img = el('img', { class: 'thumb', alt: '', loading: 'lazy',
+        src: `${base}/thumb/${encodeURIComponent(tab.id)}?t=${thumbStamp}`,
+        title: 'Show this tab on the desktop' });
+      img.onerror = () => img.removeAttribute('src');
+      img.onclick = () => call('POST', `${base}/focus/${encodeURIComponent(tab.id)}`).catch(showError);
+      list.append(el('li', {}, img, el('div', { style: 'min-width:0' },
+        el('div', { class: 'tab-title', title: tab.title }, tab.title || '(untitled)'),
+        el('div', { class: 'tab-url', title: tab.url }, tab.url))));
+    }
+    node.append(list);
+    return node;
+  }
+
+  function showError(err) {
+    document.getElementById('error').textContent = err ? String(err.message || err) : '';
+  }
+
+  let lastRender = '';
+  async function refresh() {
+    try {
+      const state = await (await fetch('api', { cache: 'no-store' })).json();
+      showError(null);
+      document.getElementById('summary').textContent =
+        `${state.contexts.length} of ${state.max} contexts in use`;
+      if (Date.now() - thumbStamp > THUMB_REFRESH_MS) thumbStamp = Date.now();
+      // re-render only when something changed, so thumbnails do not flicker
+      const key = JSON.stringify(state) + thumbStamp;
+      if (key === lastRender) return;
+      lastRender = key;
+      cards.replaceChildren(card(state.main, true), ...state.contexts.map((s) => card(s, false)));
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+</body>
+</html>
