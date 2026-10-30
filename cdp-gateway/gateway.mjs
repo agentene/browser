@@ -22,6 +22,11 @@
 //   * Target.disposeBrowserContext(alias) or the client disconnecting
 //     destroys the context: process killed, cloned profile deleted.
 //
+// With CHROMIUM_AUTOSTART=false the gateway also owns the main browser
+// (MainBrowser): nothing runs until the first CDP client or the console's
+// "Start", and the browser may exit (window closed, "Stop") without taking
+// the container down.
+//
 // Also serves /json/* (with URLs rewritten to the public host:port the
 // client dialed) and a small dashboard + API under /console/, plus the
 // sidebar script nginx injects into the Selkies page (panel.js; nginx
@@ -45,6 +50,8 @@ const CONTEXTS_DIR = env.CDP_CONTEXTS_DIR || '/browser/contexts';
 const MAIN_PROFILE = env.CHROMIUM_USER_DATA_DIR || '/browser/user-data';
 const CHROME_BIN = env.CHROME_BIN;
 const FLAGS_FILE = env.CDP_GATEWAY_FLAGS_FILE || '/tmp/cdp-gateway-chromium-flags';
+const MAIN_FLAGS_FILE = env.CDP_GATEWAY_MAIN_FLAGS_FILE || '/tmp/cdp-gateway-main-flags';
+const MAIN_LOG = '/tmp/chromium.log';
 const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
@@ -92,10 +99,10 @@ function log(...args) {
   console.log(new Date().toISOString(), '[cdp-gateway]', ...args);
 }
 
-function readFlags() {
+function readFlags(file = FLAGS_FILE) {
   // NUL-separated, written by the entrypoint from the same flag assembly as
   // the main chromium (GPU policy, locale features, CHROMIUM_EXTRA_ARGS, ...)
-  return readFileSync(FLAGS_FILE, 'utf8').split('\0').filter(Boolean);
+  return readFileSync(file, 'utf8').split('\0').filter(Boolean);
 }
 
 // A free loopback port for a context's DevTools. Not --remote-debugging-port=0:
@@ -184,6 +191,118 @@ class CdpClient {
     this.ws.close();
   }
 }
+
+// --- the main browser -------------------------------------------------------
+// By default (CHROMIUM_AUTOSTART=true) the entrypoint supervises the main
+// chromium: it is always up, and its exit restarts the container. With
+// CHROMIUM_AUTOSTART=false it is this process's child instead, started on
+// demand — by the first CDP client (ensure() in handleHttp/handleUpgrade) or
+// the console — from the command line the entrypoint left in
+// MAIN_FLAGS_FILE; when it exits the gateway just marks it stopped.
+class MainBrowser {
+  constructor() {
+    this.onDemand = env.CHROMIUM_AUTOSTART === 'false';
+    this.state = this.onDemand ? 'stopped' : 'running'; // | 'starting'
+    this.proc = null;
+    this.starting = null; // the launch in progress, shared by concurrent callers
+  }
+
+  get running() {
+    return this.state === 'running';
+  }
+
+  pid() {
+    return this.onDemand ? this.proc?.pid : env.CDP_MAIN_CHROMIUM_PID;
+  }
+
+  // Resolves once the main browser's DevTools endpoint answers.
+  ensure() {
+    if (this.running) return Promise.resolve();
+    this.starting ??= this.launch().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  async launch() {
+    this.state = 'starting';
+    const t0 = Date.now();
+    let proc;
+    try {
+      // something else on the fixed DevTools port would be mistaken for it
+      if (await fetchJson(MAIN_PORT, '/json/version').then(() => true, () => false)) {
+        throw new Error(`port ${MAIN_PORT} (CDP_INTERNAL_PORT) is already in use`);
+      }
+      // a crashed run leaves its lock files behind, which chromium refuses
+      // to start on (chromium.sh clears them at container start likewise)
+      for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+        await fs.rm(path.join(MAIN_PROFILE, name), { force: true });
+      }
+      const logFile = createWriteStream(MAIN_LOG, { flags: 'a' });
+      await new Promise((resolve, reject) => {
+        logFile.once('open', resolve);
+        logFile.once('error', reject);
+      });
+      logFile.write(`--- ${new Date().toISOString()} main browser started by the CDP gateway ---\n`);
+      proc = spawn(CHROME_BIN, readFlags(MAIN_FLAGS_FILE), {
+        detached: true, // own process group: stop() takes renderers down too
+        stdio: ['ignore', logFile, logFile],
+      });
+      this.proc = proc;
+      proc.once('exit', (code, signal) => {
+        log(`main browser exited (code=${code} signal=${signal}); the container keeps running without it`);
+        try { process.kill(-proc.pid, 'SIGKILL'); } catch { /* group already gone */ }
+        logFile.end();
+        if (this.proc === proc) {
+          this.proc = null;
+          this.state = 'stopped';
+        }
+      });
+      for (let i = 0; i < 150; i++) {
+        if (this.proc !== proc) throw new Error(`main chromium exited during startup, see ${MAIN_LOG}`);
+        if (await fetchJson(MAIN_PORT, '/json/version').then(() => true, () => false)) {
+          this.state = 'running';
+          log(`main browser up on 127.0.0.1:${MAIN_PORT} (pid ${proc.pid}, ${Date.now() - t0}ms)`);
+          return;
+        }
+        await sleep(100);
+      }
+      throw new Error(`main chromium did not open its DevTools port ${MAIN_PORT} within 15s, see ${MAIN_LOG}`);
+    } catch (err) {
+      log(`main browser start failed: ${err.message}`);
+      if (proc) await this.stop();
+      this.state = 'stopped';
+      throw err;
+    }
+  }
+
+  // Browser.close is chromium's orderly exit, the one closing its last window
+  // takes: it commits cookies and the session to the profile first. A
+  // SIGTERM exits with code 0 as well but drops what is still in memory
+  // (verified: a cookie set seconds before was gone after the restart), so
+  // it is only the fallback; the group is killed after a grace period.
+  async stop() {
+    const proc = this.proc;
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+    const exited = new Promise((resolve) => proc.once('exit', resolve));
+    const term = () => {
+      try { process.kill(proc.pid, 'SIGTERM'); } catch { /* already gone */ }
+    };
+    const timers = [setTimeout(term, 5000), setTimeout(() => {
+      try { process.kill(-proc.pid, 'SIGKILL'); } catch { /* already gone */ }
+    }, 15000)];
+    if (this.running) {
+      fetchJson(MAIN_PORT, '/json/version')
+        .then((v) => CdpClient.connect(v.webSocketDebuggerUrl))
+        .then((cdp) => cdp.send('Browser.close').catch(() => { /* the connection dies with it */ }))
+        .catch(term);
+    } else {
+      term(); // still starting: no DevTools to ask yet
+    }
+    await exited;
+    timers.forEach(clearTimeout);
+  }
+}
+
+const mainBrowser = new MainBrowser();
 
 // --- contexts ---------------------------------------------------------------
 class Context {
@@ -361,8 +480,11 @@ async function preparePrefs(profile, color) {
 
 // The cookie database is copied while the main browser runs, so it may lag
 // behind the in-memory jar by a flush interval; overlay the live cookies
-// (HttpOnly included) from the main browser to close that gap.
+// (HttpOnly included) from the main browser to close that gap. Clients
+// reach contexts through the main browser, which starts an on-demand one; if
+// it was stopped in between, its orderly exit left them all on disk.
 async function copyCookies(contextWsUrl) {
+  if (!mainBrowser.running) return 0;
   const version = await fetchJson(MAIN_PORT, '/json/version');
   const main = await CdpClient.connect(version.webSocketDebuggerUrl);
   let cookies;
@@ -867,7 +989,10 @@ async function apiState() {
   const tabs = (list) => list.map((t) => ({ id: t.id, title: t.title, url: t.url }));
   const result = {
     max: MAX_CONTEXTS,
-    main: { name: 'main', tabs: tabs(await pageTargets(MAIN_PORT)) },
+    main: {
+      name: 'main', state: mainBrowser.state, onDemand: mainBrowser.onDemand,
+      tabs: mainBrowser.running ? tabs(await pageTargets(MAIN_PORT)) : [],
+    },
     contexts: [],
   };
   for (const s of contexts.values()) {
@@ -929,7 +1054,7 @@ async function focus(name, targetId) {
   if (WAYLAND) {
     await run('wlrctl', ['toplevel', 'focus', `app_id:${appId(name)}`]);
   } else {
-    const pid = name === 'main' ? env.CDP_MAIN_CHROMIUM_PID : contexts.get(name)?.proc?.pid;
+    const pid = name === 'main' ? mainBrowser.pid() : contexts.get(name)?.proc?.pid;
     if (pid) await run('python3', [path.join(HERE, 'raise-window.py'), String(pid)]);
   }
   return true;
@@ -979,11 +1104,14 @@ async function handleHttp(req, res) {
   const p = url.pathname;
   const host = publicHost(req);
   try {
+    // what a CDP client connects with starts an on-demand main browser; mere
+    // listings and target lookups do not
+    if (/^\/json\/(version|protocol)\/?$/.test(p) || p.startsWith('/json/new')) await mainBrowser.ensure();
     if (p === '/json/version' || p === '/json/version/') {
       return send(res, 200, rewriteHost(await fetchJson(MAIN_PORT, '/json/version'), MAIN_PORT, host));
     }
     if (['/json', '/json/', '/json/list', '/json/list/'].includes(p)) {
-      let list = rewriteHost(await fetchJson(MAIN_PORT, '/json/list'), MAIN_PORT, host);
+      let list = mainBrowser.running ? rewriteHost(await fetchJson(MAIN_PORT, '/json/list'), MAIN_PORT, host) : [];
       for (const s of contexts.values()) {
         try {
           list = list.concat(rewriteHost(await fetchJson(s.port, '/json/list'), s.port, host));
@@ -1019,7 +1147,7 @@ async function handleHttp(req, res) {
       return send(res, 200, await fs.readFile(path.join(HERE, 'panel.js')), 'text/javascript; charset=UTF-8');
     }
     if (p === '/console/api') return send(res, 200, await apiState());
-    const a = p.match(/^\/console\/api\/([\w.-]+)(?:\/(thumb|focus)(?:\/([^/]+))?)?$/);
+    const a = p.match(/^\/console\/api\/([\w.-]+)(?:\/(thumb|focus|start|stop)(?:\/([^/]+))?)?$/);
     if (a) {
       const [, name, action, targetId] = a;
       if (action === 'thumb' && req.method === 'GET') {
@@ -1030,6 +1158,13 @@ async function handleHttp(req, res) {
         } catch (err) {
           return send(res, 503, { error: err.message });
         }
+      }
+      if ((action === 'start' || action === 'stop') && req.method === 'POST' && !targetId) {
+        if (name !== 'main') return send(res, 404, { error: 'only the main browser can be started or stopped' });
+        if (!mainBrowser.onDemand) return send(res, 409, { error: 'the main browser is supervised by the container (CHROMIUM_AUTOSTART=true)' });
+        if (action === 'start') await mainBrowser.ensure();
+        else await mainBrowser.stop();
+        return send(res, 200, { ok: true, state: mainBrowser.state });
       }
       if (action === 'focus' && req.method === 'POST') {
         return (await focus(name, targetId)) ? send(res, 200, { ok: true }) : send(res, 404, { error: 'nothing to focus' });
@@ -1086,6 +1221,7 @@ async function handleUpgrade(req, socket, head) {
   try {
     let target;
     if (p.startsWith('/devtools/browser/')) {
+      await mainBrowser.ensure();
       target = { kind: 'browser', url: (await fetchJson(MAIN_PORT, '/json/version')).webSocketDebuggerUrl };
     } else if (p.startsWith('/devtools/page/')) {
       const port = await targetPort(p.slice('/devtools/page/'.length));
@@ -1117,13 +1253,13 @@ server.on('upgrade', (req, socket, head) => {
   handleUpgrade(req, socket, head);
 });
 server.listen(LISTEN_PORT, '127.0.0.1', () => {
-  log(`listening on 127.0.0.1:${LISTEN_PORT} (main chromium on :${MAIN_PORT}, max ${MAX_CONTEXTS} contexts, data in ${CONTEXTS_DIR})`);
+  log(`listening on 127.0.0.1:${LISTEN_PORT} (main chromium on :${MAIN_PORT}${mainBrowser.onDemand ? ', started on demand' : ''}, max ${MAX_CONTEXTS} contexts, data in ${CONTEXTS_DIR})`);
 });
 
 async function shutdown(signal) {
   log(`${signal}: destroying ${contexts.size} context(s)`);
   server.close();
-  await Promise.all([...contexts.values()].map((s) => s.destroy('gateway shutdown')));
+  await Promise.all([...contexts.values()].map((s) => s.destroy('gateway shutdown')).concat(mainBrowser.stop()));
   process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

@@ -8,8 +8,13 @@
 # Everything the entrypoint adds goes BEFORE CHROMIUM_EXTRA_ARGS, so user
 # flags win (chromium honors the last occurrence of a repeated switch).
 #
+# With CHROMIUM_AUTOSTART=false the main browser is not started here: its
+# command line goes to CHROMIUM_MAIN_FLAGS_FILE and the CDP gateway starts it
+# on demand, as its own child (so closing it does not stop the container).
+#
 # Sets for cdp-gateway.sh: CHROME_BIN, CHROMIUM_COMMON_FLAGS,
-# CHROMIUM_TAIL_FLAGS, CHROMIUM_ENV, CHROMIUM_LOCALE_POSIX, CHROMIUM_PID.
+# CHROMIUM_TAIL_FLAGS, CHROMIUM_ENV, CHROMIUM_LOCALE_POSIX, CHROMIUM_PID
+# (empty when on demand), CHROMIUM_MAIN_FLAGS_FILE.
 
 chromium_start() {
     CHROME_BIN="${CHROME_BIN:-/opt/chrome-for-testing/chrome}"
@@ -245,6 +250,17 @@ chromium_prepare_profile() {
 }
 
 chromium_launch() {
+    CHROMIUM_PID=""
+    CHROMIUM_MAIN_FLAGS_FILE=/tmp/cdp-gateway-main-flags
+    if [ "${CHROMIUM_AUTOSTART}" = "false" ]; then
+        # NUL-separated, read by the gateway; the log file is pre-created for
+        # the (possibly dropped) gateway, which appends a run per start
+        printf '%s\0' "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
+        : >/tmp/chromium.log
+        give_to_run_user /tmp/chromium.log
+        log "chromium: on demand (CHROMIUM_AUTOSTART=false) — the CDP gateway starts it on the first CDP client or from the console"
+        return 0
+    fi
     log "starting chromium (headless=${CHROMIUM_HEADLESS}) with CDP on 127.0.0.1:${CDP_INTERNAL_PORT}"
     start_service /tmp/chromium.log \
         env "${CHROMIUM_ENV[@]}" "${DROP[@]}" "${CHROME_BIN}" "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}"

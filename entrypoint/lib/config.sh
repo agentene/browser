@@ -88,6 +88,14 @@
 #                               fingerprinting): hardware GL only, WebGL
 #                               unavailable without a GPU
 #   CHROMIUM_START_URL=about:blank  page the main browser opens at startup
+#   CHROMIUM_AUTOSTART=true      false = do not start the main browser with
+#                                the container (needs ENABLE_CDP_GATEWAY=true,
+#                                which then owns it): an idle container runs
+#                                no chromium at all. The gateway starts it on
+#                                the first CDP client (/json/version, a
+#                                browser WebSocket) or from the CDP console
+#                                ("Start"); closing it leaves the container
+#                                running instead of restarting it
 #   CHROMIUM_USER_DATA_DIR=/browser/user-data  the persisted browser profile
 #   CHROMIUM_EXTRA_ARGS=""      extra chromium flags (word-split), appended
 #                               after the entrypoint's own so they win
@@ -272,6 +280,13 @@ config_chromium() {
     CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT:-9221}" # chromium loopback DevTools port
     CHROMIUM_HEADLESS="${CHROMIUM_HEADLESS:-0}"
     CHROMIUM_START_URL="${CHROMIUM_START_URL:-about:blank}"
+    # Main browser at container start (true) or on demand through the CDP
+    # gateway (false; checked against ENABLE_CDP_GATEWAY in config_cdp_gateway).
+    CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART:-true}"
+    case "${CHROMIUM_AUTOSTART}" in
+        true|false) : ;;
+        *) die "CHROMIUM_AUTOSTART='${CHROMIUM_AUTOSTART}' must be true or false" ;;
+    esac
     CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR:-/browser/user-data}"
     # Browser UI locale + Accept-Language; en-US by default (env override: any
     # other locale, e.g. zh-CN).
@@ -311,6 +326,12 @@ config_cdp_gateway() {
     if [ "${ENABLE_CDP_CONSOLE_PANEL}" = "true" ] && [ "${ENABLE_SELKIES}" = "true" ] \
         && [ "${ENABLE_CDP}" = "true" ] && [ "${ENABLE_CDP_GATEWAY}" = "true" ]; then
         CDP_CONSOLE_PANEL_ACTIVE=true
+    fi
+    # An on-demand main browser is started, watched and stopped by the gateway;
+    # without it nothing could ever start the browser.
+    if [ "${CHROMIUM_AUTOSTART}" = "false" ] && [ "${ENABLE_CDP}" = "true" ] \
+        && [ "${ENABLE_CDP_GATEWAY}" != "true" ]; then
+        die "CHROMIUM_AUTOSTART=false needs ENABLE_CDP_GATEWAY=true (the gateway starts the main browser on demand)"
     fi
     case "${CDP_CONTEXTS_MAX}" in
         ''|*[!0-9]*|0) die "CDP_CONTEXTS_MAX='${CDP_CONTEXTS_MAX}' must be a positive number" ;;

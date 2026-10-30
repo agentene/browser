@@ -144,6 +144,10 @@ services:
       CHROMIUM_LANG: "${CHROMIUM_LANG:-en-US}"
       # Page opened at startup, e.g. "https://example.com"
       CHROMIUM_START_URL: "${CHROMIUM_START_URL:-about:blank}"
+      # false = no main browser at container start (needs ENABLE_CDP_GATEWAY=
+      # true): the gateway starts it on the first CDP client or from the CDP
+      # console ("Start browser"), and closing it keeps the container running
+      CHROMIUM_AUTOSTART: "${CHROMIUM_AUTOSTART:-true}"
       # Extra chromium flags, e.g. "--proxy-server=http://host:3128"
       CHROMIUM_EXTRA_ARGS: "${CHROMIUM_EXTRA_ARGS:-}"
       # GPU/rendering policy (default owned by the entrypoint, so it also
@@ -229,14 +233,16 @@ services:
       # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
       # or 401 when the login screen is on (502 = Selkies not up). With
       # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
-      # probed instead. A dead service is caught by the entrypoint itself (it
+      # probed instead — its console API with CHROMIUM_AUTOSTART=false, which
+      # (unlike /json/version) does not start the main browser. A dead service is caught by the entrypoint itself (it
       # exits and docker restarts the container). $$ = evaluated in the
       # container at check time, not by compose.
       test:
         - CMD-SHELL
         - >-
           if [ "$${ENABLE_SELKIES:-true}" = false ]; then
-          curl -sf -o /dev/null http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/json/version;
+          if [ "$${CHROMIUM_AUTOSTART:-true}" = false ]; then probe=console/api; else probe=json/version; fi;
+          curl -sf -o /dev/null "http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/$$probe";
           else
           case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}/)" in
           2??|3??|401) true ;; *) false ;; esac;

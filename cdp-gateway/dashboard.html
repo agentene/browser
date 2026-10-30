@@ -53,6 +53,9 @@
   }
   button:hover { border-color: var(--accent); color: var(--accent); }
   button.danger:hover { border-color: var(--danger); color: var(--danger); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { color: #fff; filter: brightness(1.1); }
+  button:disabled { opacity: .6; cursor: default; }
   ul { list-style: none; margin: 0; padding: 10px 14px 14px; display: grid; gap: 10px; }
   li { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: start; min-width: 0; }
   .thumb {
@@ -92,7 +95,27 @@
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   }
 
+  // An on-demand main browser (CHROMIUM_AUTOSTART=false) that is not running:
+  // a Start button instead of the tab list.
+  function stoppedMainCard(context) {
+    const starting = context.state === 'starting';
+    const start = el('button', { class: 'primary', title: 'Start the main browser on the desktop',
+      onclick: () => {
+        start.disabled = true;
+        start.textContent = 'Starting…';
+        call('POST', 'api/main/start').then(refresh, (err) => { showError(err); refresh(); });
+      } }, starting ? 'Starting…' : 'Start browser');
+    start.disabled = starting;
+    return el('section', { class: 'card', style: 'border-top: 4px solid var(--line)' },
+      el('div', { class: 'card-head' },
+        el('span', { class: 'name' }, 'Main browser'),
+        el('span', { class: 'chip' }, starting ? 'starting' : 'stopped'),
+        el('span', { class: 'spacer' }), start),
+      el('div', { class: 'empty' }, 'Not running. It starts on demand: with this button, or by itself when a CDP client connects.'));
+  }
+
   function card(context, isMain) {
+    if (isMain && context.state && context.state !== 'running') return stoppedMainCard(context);
     const base = `api/${encodeURIComponent(context.name)}`;
     const head = el('div', { class: 'card-head' },
       el('span', { class: 'name' }, isMain ? 'Main browser' : context.name),
@@ -100,6 +123,11 @@
       el('span', { class: 'spacer' }),
       el('button', { title: 'Bring this browser window to the front of the desktop',
         onclick: () => call('POST', `${base}/focus`).catch(showError) }, 'Show on desktop'));
+    if (isMain && context.onDemand) {
+      head.append(el('button', { class: 'danger', title: 'Close the main browser; the container keeps running',
+        onclick: () => confirm('Stop the main browser? Its CDP clients get disconnected.')
+          && call('POST', `${base}/stop`).then(refresh, showError) }, 'Stop'));
+    }
     if (!isMain) {
       head.append(el('button', { class: 'danger', title: 'Close the context and disconnect its client',
         onclick: () => confirm(`Delete ${context.name}? Its client gets disconnected.`)

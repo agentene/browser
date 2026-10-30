@@ -7,7 +7,9 @@
 # the main profile (logins included), destroyed again when the context is
 # disposed or the client disconnects. Details in
 # /usr/local/lib/cdp-gateway/gateway.mjs and the README ("CDP gateway").
-# Needs chromium.sh to have run first (flags, env, main browser pid).
+# Needs chromium.sh to have run first (flags, env, main browser pid). With
+# CHROMIUM_AUTOSTART=false the gateway also owns the main browser: it starts
+# it on demand from CHROMIUM_MAIN_FLAGS_FILE and outlives it.
 
 cdp_gateway_start() {
     # Isolated contexts live until their client leaves, so nothing survives a
@@ -42,7 +44,7 @@ cdp_gateway_start() {
         console_password="${SELKIES_BASIC_AUTH_PASSWORD:-${PASSWORD:-${PASSWD:-}}}"
     fi
 
-    log "starting CDP gateway on 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT} (max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR})"
+    log "starting CDP gateway on 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT} (main browser autostart=${CHROMIUM_AUTOSTART}, max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR})"
     start_service /tmp/cdp-gateway.log \
         env CHROME_BIN="${CHROME_BIN}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
         CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT}" CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" \
@@ -50,6 +52,7 @@ cdp_gateway_start() {
         CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX}" CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
         CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD="${console_password}" \
-        CDP_MAIN_CHROMIUM_PID="${CHROMIUM_PID}" "${CHROMIUM_ENV[@]}" \
+        CDP_MAIN_CHROMIUM_PID="${CHROMIUM_PID}" CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \
+        CDP_GATEWAY_MAIN_FLAGS_FILE="${CHROMIUM_MAIN_FLAGS_FILE}" "${CHROMIUM_ENV[@]}" \
         "${DROP[@]}" node /usr/local/lib/cdp-gateway/gateway.mjs
 }
