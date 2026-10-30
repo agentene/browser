@@ -65,6 +65,12 @@ selkies_media_defaults() {
     export SELKIES_WEBCAM_ON_START="${SELKIES_WEBCAM_ON_START:-false}"
     export SELKIES_GAMEPAD_ENABLED="${SELKIES_GAMEPAD_ENABLED:-true}"
     export SELKIES_GAMEPAD_ON_START="${SELKIES_GAMEPAD_ON_START:-false}"
+    # Tell selkies the browsers get the input interposer (chromium.sh), so
+    # uinput_gamepad=auto never also registers kernel pads where /dev/uinput
+    # happens to be writable: chromium would see every pad twice.
+    if [ "${CHROMIUM_DEVICE_INTERPOSERS}" = "true" ]; then
+        export SELKIES_INTERPOSER="${SELKIES_INTERPOSER:-/usr/local/lib/selkies-interposers/selkies_input_interposer.so}"
+    fi
 }
 
 # Display-backend specific selkies flags, into SELKIES_BACKEND_ARGS.

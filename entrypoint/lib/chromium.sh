@@ -215,6 +215,23 @@ GSKEYFILE
         CHROMIUM_ENV=(GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME=/tmp/chromium-config)
     fi
     CHROMIUM_ENV=(LANG="${CHROMIUM_LOCALE_POSIX}" LC_ALL="${CHROMIUM_LOCALE_POSIX}" "${CHROMIUM_ENV[@]}")
+    chromium_device_interposers
+}
+
+# The viewer's webcam and gamepads (Selkies' webcam_enabled/gamepad_enabled)
+# reach applications through Selkies' sockets in XDG_RUNTIME_DIR, which the
+# interposers built into the image (Dockerfile) turn into /dev/video0 and
+# /dev/input/js*/event1000+ for the processes they are preloaded into;
+# fake-udev lists those pads to chromium's libudev-based gamepad discovery.
+# The browsers alone get them: Selkies must keep seeing the real device nodes.
+chromium_device_interposers() {
+    local dir=/usr/local/lib/selkies-interposers
+    [ "${CHROMIUM_DEVICE_INTERPOSERS}" = "true" ] && [ "${ENABLE_SELKIES}" = "true" ] || return 0
+    # The input interposer adds its nodes to a /dev/input listing, so the
+    # directory has to exist; a container's /dev has none.
+    [ -d /dev/input ] || mkdir -m1777 /dev/input 2>/dev/null \
+        || log "WARNING: cannot create /dev/input; gamepads may not reach chromium"
+    CHROMIUM_ENV+=(LD_PRELOAD="${dir}/selkies_v4l2_interposer.so:${dir}/selkies_input_interposer.so:${dir}/libudev.so.1${LD_PRELOAD:+:${LD_PRELOAD}}")
 }
 
 # Screen follower (X11, headed only). The launch flags size the window for

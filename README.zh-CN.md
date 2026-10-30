@@ -246,7 +246,7 @@ location /desk/ {
 | --- | --- | --- |
 | `CHROME_VERSION` | `156.0.8078.47` | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) 版本(默认钉 Stable 通道;CfT known-good 列表中的任意版本均可) |
 | `NODE_VERSION` | `24` | Node.js 主版本(由 [`update-chrome-node.mjs`](#版本联动脚本) 保持同步) |
-| `SELKIES_VERSION` | `2.1.0` | Selkies 上游 release;其 wheel 及 pixelflux/pcmflux 依赖 wheel 从 GitHub release 下载(见 `Dockerfile`) |
+| `SELKIES_VERSION` | `2.1.0` | Selkies 上游 release;其 wheel 及 pixelflux/pcmflux 依赖 wheel 从 GitHub release 下载,摄像头/手柄 interposer 由同一 tag 的源码编译(见 `Dockerfile`) |
 | `TZ` | `UTC` | 容器时区,以 `ENV TZ` 暴露(运行时可覆盖) |
 
 ```bash
@@ -310,6 +310,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_START_URL`        | `about:blank`                                                                                       | 启动时打开的页面                                                                                                                                                                  |
 | `CHROMIUM_AUTOSTART`        | `true`                                                                                              | `false` = 容器启动时不启动主浏览器(需 `ENABLE_CDP_GATEWAY=true`):首个 CDP 客户端连接或在 CDP 控制台点 *Start browser* 时才启动,关闭它也不会让容器退出([详情](#cdp-网关带登录态的隔离-context)) |
 | `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 配合 `CHROMIUM_AUTOSTART=false`:主浏览器空闲(无 CDP 客户端、无隔离 context、无人观看串流)多少分钟后自动关闭;`0` = 不自动关闭 |
+| `CHROMIUM_DEVICE_INTERPOSERS` | `true` | 把 Selkies 的摄像头 + 手柄 interposer(以及 fake-udev,镜像构建时从 Selkies 源码编译)预加载进浏览器(含隔离 context):观看端摄像头显示为 *Selkies Virtual Camera*,手柄出现在 Gamepad API 中,无需 `/dev/video*`、`/dev/uinput` 或特权。仅在 `ENABLE_SELKIES=true` 时生效;`false` = 不预加载 |
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
 | `CHROMIUM_DISABLE_FEATURES` | `HttpsFirstBalancedModeAutoEnable,HttpsUpgrades,HttpsFirstModeV2`(compose 默认;不用 compose 时为空) | 逗号分隔的特性列表,以 `--disable-features=` 传给 chromium —— 关闭 HTTPS-First / HTTPS-Upgrade 实验;在 `.env` 里设为空可去掉该参数                                                 |

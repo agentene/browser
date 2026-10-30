@@ -165,6 +165,9 @@ services:
       # (no CDP client, no isolated context, nobody watching the stream)
       # before the gateway closes it again; 0 = never
       CHROMIUM_IDLE_TIMEOUT: "${CHROMIUM_IDLE_TIMEOUT:-0}"
+      # Preload Selkies' webcam + gamepad interposers into the browsers, so
+      # the viewer's camera and gamepads reach them (no device nodes needed)
+      CHROMIUM_DEVICE_INTERPOSERS: "${CHROMIUM_DEVICE_INTERPOSERS:-true}"
       # Extra chromium flags, e.g. "--proxy-server=http://host:3128"
       CHROMIUM_EXTRA_ARGS: "${CHROMIUM_EXTRA_ARGS:-}"
       # GPU/rendering policy (default owned by the entrypoint, so it also

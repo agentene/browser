@@ -111,6 +111,13 @@
 #                                idle = no CDP client connected, no isolated
 #                                context, nobody watching the Selkies stream.
 #                                0 = never
+#   CHROMIUM_DEVICE_INTERPOSERS=true  preload Selkies' webcam + gamepad
+#                                interposers (and fake-udev) into the
+#                                browsers, so the viewer's camera appears as
+#                                /dev/video0 and its gamepads as Gamepad API
+#                                pads with no device nodes or privileges.
+#                                Only with ENABLE_SELKIES=true (Selkies
+#                                serves their sockets); false = none
 #   CHROMIUM_USER_DATA_DIR=/browser/user-data  the persisted browser profile
 #   CHROMIUM_EXTRA_ARGS=""      extra chromium flags (word-split), appended
 #                               after the entrypoint's own so they win
@@ -290,6 +297,11 @@ config_chromium() {
     case "${CHROMIUM_AUTOSTART}" in
         true|false) : ;;
         *) die "CHROMIUM_AUTOSTART='${CHROMIUM_AUTOSTART}' must be true or false" ;;
+    esac
+    CHROMIUM_DEVICE_INTERPOSERS="${CHROMIUM_DEVICE_INTERPOSERS:-true}"
+    case "${CHROMIUM_DEVICE_INTERPOSERS}" in
+        true|false) : ;;
+        *) die "CHROMIUM_DEVICE_INTERPOSERS='${CHROMIUM_DEVICE_INTERPOSERS}' must be true or false" ;;
     esac
     # Minutes until the gateway closes an idle on-demand main browser; 0 = never.
     CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT:-0}"

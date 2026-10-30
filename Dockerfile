@@ -1,5 +1,39 @@
 ## agentene/browser
 
+# Selkies upstream release: the wheels installed in the image (Step 2) and the
+# device interposers built below come from the same tag.
+ARG SELKIES_VERSION=2.1.0
+
+# === BUILD the Selkies device interposers ===
+# LD_PRELOAD libraries that hand the viewer's webcam and gamepads to Chromium
+# in an unprivileged container, with no /dev/video* or /dev/uinput:
+# selkies_v4l2_interposer.so (a /dev/video0 fed over Selkies' webcam socket),
+# selkies_input_interposer.so (/dev/input/js*/event1000+ over its gamepad
+# sockets) and fake-udev's libudev.so.1 (lists those pads to Chromium, which
+# discovers gamepads through libudev; everything else passes through to the
+# real libudev). The release wheel carries none of them, so they are built
+# from the tag's source; the entrypoint preloads them into Chromium only
+# (CHROMIUM_DEVICE_INTERPOSERS) — never into Selkies, which needs the real
+# device nodes.
+FROM ubuntu:26.04 AS interposers
+ARG DEBIAN_FRONTEND=noninteractive
+ARG SELKIES_VERSION
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates gcc libc6-dev make && \
+    mkdir -p /src /out && \
+    curl -fsSL --retry 3 "https://github.com/selkies-project/selkies/archive/refs/tags/${SELKIES_VERSION}.tar.gz" \
+    | tar -xz -C /src --strip-components=1 && \
+    # no PipeWire frame source: the webcam frames come over Selkies' socket
+    make -C /src/addons/v4l2-interposer && \
+    make -C /src/addons/input-interposer && \
+    make -C /src/addons/fake-udev && \
+    cp /src/addons/v4l2-interposer/selkies_v4l2_interposer.so \
+       /src/addons/input-interposer/selkies_input_interposer.so /out/ && \
+    # private directory: the fake libudev.so.1 must not shadow the system one
+    # for everything else in the image
+    cp -L /src/addons/fake-udev/libudev.so.1 /out/libudev.so.1
+
 FROM ubuntu:26.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -157,7 +191,7 @@ RUN apt-get update && \
 # ubuntu:26.04 ships Python 3.14 -> SELKIES_PYTAG=cp314; if the base image's
 # Python ever moves, bump SELKIES_PYTAG (the selkies wheel itself is
 # py3-none-any). python3-pip is installed and purged within this step.
-ARG SELKIES_VERSION=2.1.0
+ARG SELKIES_VERSION
 ARG PIXELFLUX_VERSION=2.2.1
 ARG PCMFLUX_VERSION=2.2.0
 ARG SELKIES_PYTAG=cp314
@@ -186,6 +220,10 @@ RUN apt-get update && \
     selkies --version | grep -qx "selkies ${SELKIES_VERSION}" && \
     command -v selkies-resize selkies-gpu-probe >/dev/null && \
     python3 -c "import importlib.resources as r; assert (r.files('selkies.selkies_web') / 'index.html').is_file(), 'web client missing'"
+
+# The device interposers built in the first stage (see there); the entrypoint
+# preloads them into Chromium from this directory.
+COPY --from=interposers /out/ /usr/local/lib/selkies-interposers/
 
 # Step 3: Selkies attaches to an existing X display (or, with
 # DISPLAY_BACKEND=wayland, a headless labwc) and PulseAudio server.
