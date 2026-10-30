@@ -62,6 +62,7 @@ jobs:
           node --check update-chrome-node.mjs
           node --check cdp-gateway/gateway.mjs
           node --check cdp-gateway/panel.js
+          node --check entrypoint/helpers/chromium-close.mjs
           python3 -m py_compile entrypoint/helpers/*.py
 
       - name: docker build --check (Dockerfile lint, BuildKit)
@@ -97,8 +98,41 @@ jobs:
           done
           echo
           curl -sf http://127.0.0.1:9222/json/version \
-            | jq -e '.Browser and .webSocketDebuggerUrl' >/dev/null \
-            && echo "CDP smoke test OK"
+            | jq -e '.Browser and .webSocketDebuggerUrl' >/dev/null
+          # the stop hook closes chromium the orderly way: a cookie set right
+          # before `docker restart` is still there afterwards
+          docker exec -i -e MODE=set cdp-smoke node --input-type=module - <<'EOF'
+          // set (or check) a persistent cookie over raw CDP
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          const send = (method, params = {}) => new Promise((r) => { ws.onmessage = (e) => r(JSON.parse(e.data).result); ws.send(JSON.stringify({ id: 1, method, params })); });
+          if (process.env.MODE === 'set') {
+            await send('Storage.setCookies', { cookies: [{ name: 'ci_marker', value: '1', domain: 'example.com', path: '/', expires: Date.now() / 1000 + 3600 }] });
+          } else if (!(await send('Storage.getCookies')).cookies.some((c) => c.name === 'ci_marker')) {
+            throw new Error('cookie set right before the restart is gone');
+          }
+          ws.close();
+          EOF
+          docker restart cdp-smoke >/dev/null
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9222/json/version >/dev/null && break
+            sleep 1
+          done
+          docker exec -i -e MODE=check cdp-smoke node --input-type=module - <<'EOF'
+          // set (or check) a persistent cookie over raw CDP
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          const send = (method, params = {}) => new Promise((r) => { ws.onmessage = (e) => r(JSON.parse(e.data).result); ws.send(JSON.stringify({ id: 1, method, params })); });
+          if (process.env.MODE === 'set') {
+            await send('Storage.setCookies', { cookies: [{ name: 'ci_marker', value: '1', domain: 'example.com', path: '/', expires: Date.now() / 1000 + 3600 }] });
+          } else if (!(await send('Storage.getCookies')).cookies.some((c) => c.name === 'ci_marker')) {
+            throw new Error('cookie set right before the restart is gone');
+          }
+          ws.close();
+          EOF
+          echo "CDP smoke test OK"
 
       - name: Smoke test — Selkies web UI
         run: |

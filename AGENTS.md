@@ -19,7 +19,7 @@ image build + runtime smoke tests.
 | `Dockerfile` | Single-stage ubuntu:26.04 image: Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
 | `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages Xvfb → picom (or labwc) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
 | `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENCODER`/`SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`/`PIXELFLUX_HOST_CAPTURE`, `CDP_CONTEXTS_HEADLESS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module), `privileges` (RUN_USER → `DROP`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `audio`, `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
-| `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, chromium prefs seeding) — formerly heredocs in the entrypoint |
+| `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, chromium prefs seeding, the orderly Browser.close the supervisor's stop hook runs) — formerly heredocs in the entrypoint |
 | `.shellcheckrc` | Lets shellcheck follow the module `source` statements |
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
@@ -46,6 +46,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
 node --check update-chrome-node.mjs
 node --check cdp-gateway/gateway.mjs
 node --check cdp-gateway/panel.js
+node --check entrypoint/helpers/chromium-close.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .
 ```

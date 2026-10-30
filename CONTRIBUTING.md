@@ -21,6 +21,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 node --check update-chrome-node.mjs
 node --check cdp-gateway/gateway.mjs
+node --check entrypoint/helpers/chromium-close.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .                        # Dockerfile lint (BuildKit)
 
@@ -41,7 +42,7 @@ the Wayland desktop (see `.github/workflows/ci.yaml`).
 | `Dockerfile` | single-stage Ubuntu image: Node.js, Chrome for Testing, nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, the Selkies release wheels |
 | `docker-entrypoint.sh` | PID-1 supervisor: Xvfb + picom (or labwc), PulseAudio, Selkies, Chromium (+ CDP gateway), nginx — a thin `main()` over the modules below |
 | `entrypoint/lib/` | supervisor modules, one per concern (`config.sh` holds the env knob reference + defaults, `nginx.sh` generates the nginx config) |
-| `entrypoint/helpers/` | scripts the services run (labwc helpers, window lock, screen follower, profile seeding) |
+| `entrypoint/helpers/` | scripts the services run (labwc helpers, window lock, screen follower, profile seeding, orderly browser close on stop) |
 | `compose.yaml` | base compose file |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | opt-in overlays: HTTPS, Intel/AMD GPU, NVIDIA GPU, host networking |
 | `cdp-gateway/` | opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): Node service + `/console/` dashboard |

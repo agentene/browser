@@ -4,16 +4,23 @@
 # Every daemon goes through start_service, which records its pid in `pids`:
 # the cleanup trap stops exactly those, and supervisor_wait exits the
 # container as soon as any of them dies (so `restart: always` recovers it).
-# Never background a daemon any other way.
+# Never background a daemon any other way. A module whose service needs an
+# orderly shutdown beyond a signal adds a function to STOP_HOOKS; the
+# cleanup runs them, in order, before it signals anything.
 
 supervisor_init() {
     pids=()
+    STOP_HOOKS=()
     trap 'supervisor_cleanup; exit 0' TERM INT
     trap 'supervisor_cleanup' EXIT
 }
 
 supervisor_cleanup() {
     trap - TERM INT EXIT
+    local hook
+    for hook in "${STOP_HOOKS[@]}"; do
+        "${hook}"
+    done
     [ ${#pids[@]} -gt 0 ] && kill "${pids[@]}" 2>/dev/null
     # give services a moment to exit, then force-kill the survivors
     for _ in $(seq 1 20); do

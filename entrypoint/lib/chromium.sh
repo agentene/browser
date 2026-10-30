@@ -249,9 +249,20 @@ chromium_prepare_profile() {
         "${CHROMIUM_USER_DATA_DIR}/Default/Preferences" "${CHROMIUM_LANG}"
 }
 
+# STOP_HOOKS entry (supervisor.sh): close the main browser through CDP before
+# the services get their signals, so the cookies and the session it holds in
+# memory reach the profile (see the helper for why a signal is not enough).
+# Covers an on-demand browser too: the supervisor would SIGKILL the gateway
+# before it finished closing it. Bounded well inside docker stop's 10s.
+chromium_close() {
+    timeout 8 node "${ENTRYPOINT_HELPERS}/chromium-close.mjs" "${CDP_INTERNAL_PORT}" 6000 \
+        || log "WARNING: chromium did not close in time; stopping it with a signal (recent cookies may be lost)"
+}
+
 chromium_launch() {
     CHROMIUM_PID=""
     CHROMIUM_MAIN_FLAGS_FILE=/tmp/cdp-gateway-main-flags
+    STOP_HOOKS+=(chromium_close)
     if [ "${CHROMIUM_AUTOSTART}" = "false" ]; then
         # NUL-separated, read by the gateway; the log file is pre-created for
         # the (possibly dropped) gateway, which appends a run per start
