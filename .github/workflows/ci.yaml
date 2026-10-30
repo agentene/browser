@@ -169,13 +169,23 @@ jobs:
           let id = 0; const pending = new Map();
           ws.onmessage = (e) => { const m = JSON.parse(e.data); pending.get(m.id)?.(m); };
           const send = (method, params = {}, sessionId) => new Promise((r) => { pending.set(++id, r); ws.send(JSON.stringify({ id, method, params, sessionId })); });
-          const contexts = async () => (await (await fetch('http://127.0.0.1:9222/console/api')).json()).contexts;
+          // the console's live state: its first message is a full snapshot
+          const snapshot = () => new Promise((r, j) => {
+            const live = new WebSocket('ws://127.0.0.1:9222/console/ws');
+            live.onmessage = (e) => { live.close(); r(JSON.parse(e.data).ops[0]); };
+            live.onerror = j;
+          });
+          const contexts = async () => (await snapshot()).browsers.filter((b) => !b.main);
           await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
           const ctx = await send('Target.createBrowserContext', { disposeOnDetach: true });
           if (!ctx.result?.browserContextId?.startsWith('CONTEXT')) throw new Error(`no context: ${JSON.stringify(ctx)}`);
           const page = await send('Target.createTarget', { url: 'about:blank', browserContextId: ctx.result.browserContextId });
           if (!page.result?.targetId) throw new Error(`createTarget failed: ${JSON.stringify(page)}`);
           if ((await contexts()).length !== 1) throw new Error('context not listed');
+          // ... with the context's tab in front
+          const snap = await snapshot();
+          const listed = snap.browsers?.find((b) => b.name.startsWith('context-'));
+          if (snap.t !== 'snapshot' || listed?.current !== page.result.targetId) throw new Error(`console snapshot: ${JSON.stringify(snap).slice(0, 300)}`);
           // Playwright's newCDPSession: attach on a browser-target session
           const bs = (await send('Target.attachToBrowserTarget')).result.sessionId;
           const att = await send('Target.attachToTarget', { targetId: page.result.targetId, flatten: true }, bs);
@@ -204,16 +214,21 @@ jobs:
           # the entry page carries the sidebar script, served by the gateway
           curl -sf -u ubuntu:pw http://127.0.0.1:8082/ | grep -q 'cdp-console/panel.js'
           curl -sf -u ubuntu:pw http://127.0.0.1:8082/cdp-console/panel.js | grep -q '__cdpConsolePanel'
-          # its API takes the master password only, without a login prompt
-          curl -sf -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api | jq -e '.main' >/dev/null
-          [ "$(curl -s -o /dev/null -w '%{http_code}' -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/api)" = 401 ]
-          ! curl -sI -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/api | grep -qi '^www-authenticate'
+          # it takes the master password only, without a login prompt
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/panel.js)" = 401 ]
+          ! curl -sI -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/panel.js | grep -qi '^www-authenticate'
+          # so does its live state WebSocket, from same-origin pages only
+          ws_status() { curl -s -o /dev/null -m 2 -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" http://127.0.0.1:8082/cdp-console/ws || true; }
+          [ "$(ws_status -u ubuntu:pw)" = 101 ]
+          [ "$(ws_status -u ubuntu:wrong)" = 401 ]
+          [ "$(ws_status -u ubuntu:pw -H 'Origin: http://evil.example')" = 403 ]
           # writes need the X-CDP-Console header
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api/nope)" = 403 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'X-CDP-Console: 1' -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api/nope)" = 404 ]
           # the CDP port's console is unchanged (and cannot forge the marker)
-          curl -sf http://127.0.0.1:9225/console/api | jq -e '.main' >/dev/null
-          curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/api | jq -e '.main' >/dev/null
+          curl -sf http://127.0.0.1:9225/console/ | grep -qi '<html'
+          curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/ | grep -qi '<html'
           echo "CDP console sidebar smoke test OK"
 
       - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
@@ -223,11 +238,14 @@ jobs:
             -e ENABLE_CDP_GATEWAY=true -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec ondemand-smoke cat /tmp/cdp-gateway.log || true; docker logs ondemand-smoke || true; docker rm -f ondemand-smoke >/dev/null' EXIT
-          state() { curl -sf http://127.0.0.1:9226/console/api | jq -r .main.state; }
+          # the main browser's state, from the console's live state snapshot
+          state() { docker exec ondemand-smoke node -e "const ws = new WebSocket('ws://127.0.0.1:9222/console/ws');
+            ws.onmessage = (e) => { console.log(JSON.parse(e.data).ops[0].browsers.find((b) => b.main).state); process.exit(0); };
+            ws.onerror = () => process.exit(1);"; }
           nchrome() { docker exec ondemand-smoke sh -c 'pgrep -c -x chrome || true'; }
           up() { [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' ondemand-smoke)" = "true 0" ]; }
           for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:9226/console/api >/dev/null && break
+            curl -sf http://127.0.0.1:9226/json/list >/dev/null && break
             sleep 1
           done
           # no chromium until something asks for it; listings do not
@@ -281,7 +299,7 @@ jobs:
           EOF
           docker restart ondemand-smoke >/dev/null
           for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:9226/console/api >/dev/null && break
+            curl -sf http://127.0.0.1:9226/json/list >/dev/null && break
             sleep 1
           done
           [ "$(state)" = stopped ]

@@ -8,7 +8,7 @@
   :root {
     --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #667085;
     --line: #e3e6eb; --accent: #2f6fde; --danger: #c43d3d; --chip: #eef2f8;
-    --thumb: #dde2ea;
+    --thumb: #dde2ea; color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -37,16 +37,19 @@
     display: flex; flex-direction: column; min-width: 0;
   }
   .card-head {
-    display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 14px;
     border-bottom: 1px solid var(--line);
   }
-  .name { font-weight: 600; font-size: 15px; }
+  /* a narrow card wraps its buttons rather than squeezing the name */
+  .name { font-weight: 600; font-size: 15px; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chip {
     background: var(--chip); color: var(--muted); border-radius: 999px;
     padding: 1px 8px; font-size: 12px; white-space: nowrap;
   }
   .meta { color: var(--muted); font-size: 12px; padding: 8px 14px 0; }
   .spacer { flex: 1; }
+  .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .actions [hidden] { display: none; }
   button {
     font: inherit; font-size: 13px; border-radius: 6px; padding: 4px 10px; cursor: pointer;
     border: 1px solid var(--line); background: transparent; color: var(--text);
@@ -56,14 +59,53 @@
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.primary:hover { color: #fff; filter: brightness(1.1); }
   button:disabled { opacity: .6; cursor: default; }
-  ul { list-style: none; margin: 0; padding: 10px 14px 14px; display: grid; gap: 10px; }
-  li { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: start; min-width: 0; }
-  .thumb {
-    width: 120px; aspect-ratio: 16 / 10; object-fit: cover; object-position: top;
-    background: var(--thumb); border-radius: 6px; border: 1px solid var(--line); cursor: pointer;
+  /* current tab (thumbnail, title below) | all tabs, as tall as the thumbnail */
+  .tabview {
+    display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: 10px; padding: 10px 14px 14px;
   }
-  .tab-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tab-url { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tabview[hidden], .empty[hidden], .chip[hidden] { display: none; }
+  .shot {
+    position: relative; overflow: hidden; cursor: pointer;
+    background: var(--thumb); border-radius: 6px; border: 1px solid var(--line);
+  }
+  .thumb { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; }
+  /* the current tab's title, on a 70% gray banner across the thumbnail's bottom */
+  .cur-title {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 8px;
+    background: rgb(72 76 84 / 70%); color: #fff; font-size: 12px; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cur-title:empty { display: none; }
+  /* the browser in front on the desktop: a slow, soft glow */
+  .card.front {
+    border-color: var(--accent);
+    animation: glow 2.4s ease-in-out infinite alternate;
+  }
+  @keyframes glow {
+    from { box-shadow: 0 0 4px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+    to { box-shadow: 0 0 16px 4px color-mix(in srgb, var(--accent) 65%, transparent); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card.front { animation: none; box-shadow: 0 0 12px 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+  }
+  .chip.front { background: var(--accent); color: #fff; }
+  .tabs-box { position: relative; }
+  .tabs {
+    position: absolute; inset: 0; overflow: auto; list-style: none; margin: 0; padding: 4px;
+    display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 6px;
+  }
+  .tabs li { min-width: 0; flex: none; }
+  .tabs button {
+    display: block; width: 100%; text-align: left; font-size: 12px; padding: 3px 6px;
+    border: none; border-left: 3px solid transparent; border-radius: 4px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tabs button:hover { background: var(--chip); color: var(--text); }
+  .tabs button.current {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border-left-color: var(--accent); font-weight: 600;
+  }
   .empty { color: var(--muted); padding: 14px; }
   .error { color: var(--danger); padding: 0 16px; max-width: 1200px; margin: 0 auto; }
 </style>
@@ -76,9 +118,11 @@
 <div class="error" id="error"></div>
 <main id="cards"></main>
 <script>
-  const THUMB_REFRESH_MS = 4000;
   const cards = document.getElementById('cards');
-  let thumbStamp = Date.now();
+  // what the gateway pushed over the WebSocket: name -> { ...fields, tabs: Map, current, thumb }
+  const browsers = new Map();
+  const views = new Map(); // name -> the card's DOM parts, see liveCard()
+  let max = 0;
 
   function el(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);
@@ -95,92 +139,221 @@
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   }
 
+  // Switch the browser to a tab and raise its window; highlighted right
+  // away, the gateway's next 'current' confirms it.
+  function focusTab(name, id) {
+    const b = browsers.get(name);
+    const before = b?.current;
+    if (b?.tabs.has(id)) {
+      b.current = id;
+      update(name);
+    }
+    call('POST', `api/${encodeURIComponent(name)}/focus/${encodeURIComponent(id)}`).catch((err) => {
+      showError(err);
+      if (b && b.current === id) {
+        b.current = before;
+        update(name);
+      }
+    });
+  }
+
   // An on-demand main browser (CHROMIUM_AUTOSTART=false) that is not running:
-  // a Start button instead of the tab list.
+  // a Start button instead of the tabs.
   function stoppedMainCard(context) {
     const starting = context.state === 'starting';
     const start = el('button', { class: 'primary', title: 'Start the main browser on the desktop',
       onclick: () => {
         start.disabled = true;
         start.textContent = 'Starting…';
-        call('POST', 'api/main/start').then(refresh, (err) => { showError(err); refresh(); });
+        call('POST', 'api/main/start').catch(showError);
       } }, starting ? 'Starting…' : 'Start browser');
     start.disabled = starting;
-    return el('section', { class: 'card', style: 'border-top: 4px solid var(--line)' },
+    return { card: el('section', { class: 'card', style: 'border-top: 4px solid var(--line)' },
       el('div', { class: 'card-head' },
         el('span', { class: 'name' }, 'Main browser'),
         el('span', { class: 'chip' }, starting ? 'starting' : 'stopped'),
         el('span', { class: 'spacer' }), start),
-      el('div', { class: 'empty' }, 'Not running. It starts on demand: with this button, or by itself when a CDP client connects.'));
+      el('div', { class: 'empty' }, 'Not running. It starts on demand: with this button, or by itself when a CDP client connects.')) };
   }
 
-  function card(context, isMain) {
-    if (isMain && context.state && context.state !== 'running') return stoppedMainCard(context);
-    const base = `api/${encodeURIComponent(context.name)}`;
+  // The card's fixed parts; fillCard() keeps the changing ones up to date.
+  function liveCard(context) {
+    const isMain = !!context.main;
+    const name = context.name;
+    const base = `api/${encodeURIComponent(name)}`;
+    const v = { items: new Map(), src: '', shownCurrent: null };
+    v.chip = el('span', { class: 'chip' });
+    // the browser in front on the desktop shows "Showing" where its Show button was
+    v.frontChip = el('span', { class: 'chip front', title: 'This browser window is in front on the desktop' }, 'Showing');
+    v.show = el('button', { title: 'Bring this browser window to the front of the desktop',
+      onclick: () => call('POST', `${base}/focus`).catch(showError) }, 'Show');
+    // the buttons wrap as one group, right-aligned, when the card gets narrow
+    const actions = el('span', { class: 'actions' }, v.frontChip, v.show);
     const head = el('div', { class: 'card-head' },
-      el('span', { class: 'name' }, isMain ? 'Main browser' : context.name),
-      el('span', { class: 'chip' }, `${context.tabs.length} tab${context.tabs.length === 1 ? '' : 's'}`),
-      el('span', { class: 'spacer' }),
-      el('button', { title: 'Bring this browser window to the front of the desktop',
-        onclick: () => call('POST', `${base}/focus`).catch(showError) }, 'Show on desktop'));
+      el('span', { class: 'name' }, isMain ? 'Main browser' : name), v.chip,
+      actions);
     if (isMain && context.onDemand) {
-      head.append(el('button', { class: 'danger', title: 'Close the main browser; the container keeps running',
+      actions.append(el('button', { class: 'danger', title: 'Close the main browser; the container keeps running',
         onclick: () => confirm('Stop the main browser? Its CDP clients get disconnected.')
-          && call('POST', `${base}/stop`).then(refresh, showError) }, 'Stop'));
+          && call('POST', `${base}/stop`).catch(showError) }, 'Stop'));
     }
     if (!isMain) {
-      head.append(el('button', { class: 'danger', title: 'Close the context and disconnect its client',
-        onclick: () => confirm(`Delete ${context.name}? Its client gets disconnected.`)
-          && call('DELETE', base).then(refresh, showError) }, 'Delete'));
+      actions.append(el('button', { class: 'danger', title: 'Close the context and disconnect its client',
+        onclick: () => confirm(`Delete ${name}? Its client gets disconnected.`)
+          && call('DELETE', base).catch(showError) }, 'Delete'));
     }
+    v.meta = el('div', { class: 'meta' });
+    v.img = el('img', { class: 'thumb', alt: '' });
+    v.title = el('div', { class: 'cur-title' });
+    const shot = el('div', { class: 'shot', title: 'Show this tab on the desktop' }, v.img, v.title);
+    shot.onclick = () => {
+      const current = browsers.get(name)?.current;
+      if (current) focusTab(name, current);
+    };
+    v.list = el('ul', { class: 'tabs' });
+    v.tabview = el('div', { class: 'tabview' }, shot, el('div', { class: 'tabs-box' }, v.list));
+    v.empty = el('div', { class: 'empty' }, 'No open tabs.');
     // a context's color is also its browser frame color on the desktop
-    const node = el('section', { class: 'card', style: `border-top: 4px solid ${context.color || 'var(--line)'}` }, head);
-    node.append(el('div', { class: 'meta' }, isMain
+    v.card = el('section', { class: 'card', style: `border-top: 4px solid ${context.color || 'var(--line)'}` },
+      head, v.meta, v.tabview, v.empty);
+    return v;
+  }
+
+  // Bring a card in line with its state, touching only what changed (no
+  // flicker, focus and list scroll position stay).
+  function fillCard(context, v) {
+    const n = context.tabs.size;
+    v.chip.textContent = `${n} tab${n === 1 ? '' : 's'}`;
+    // the browser the desktop (and the Selkies stream) shows in front
+    v.card.classList.toggle('front', !!context.front);
+    v.frontChip.hidden = !context.front;
+    v.show.hidden = !!context.front;
+    v.meta.textContent = context.main
       ? 'The persistent profile every isolated context is cloned from. Isolated contexts show up on the desktop with their card color as browser frame color.'
-      : `client ${context.client} · since ${new Date(context.createdAt).toLocaleTimeString()} · pid ${context.pid ?? '—'}`));
-    if (!context.tabs.length) {
-      node.append(el('div', { class: 'empty' }, 'No open tabs.'));
-      return node;
+      : `client ${context.client} · since ${new Date(context.createdAt).toLocaleTimeString()} · pid ${context.pid ?? '—'}`;
+    v.tabview.hidden = !n;
+    v.empty.hidden = !!n;
+    for (const [id, li] of v.items) {
+      if (context.tabs.has(id)) continue;
+      li.remove();
+      v.items.delete(id);
     }
-    const list = el('ul');
-    for (const tab of context.tabs) {
-      const img = el('img', { class: 'thumb', alt: '', loading: 'lazy',
-        src: `${base}/thumb/${encodeURIComponent(tab.id)}?t=${thumbStamp}`,
-        title: 'Show this tab on the desktop' });
-      img.onerror = () => img.removeAttribute('src');
-      img.onclick = () => call('POST', `${base}/focus/${encodeURIComponent(tab.id)}`).catch(showError);
-      list.append(el('li', {}, img, el('div', { style: 'min-width:0' },
-        el('div', { class: 'tab-title', title: tab.title }, tab.title || '(untitled)'),
-        el('div', { class: 'tab-url', title: tab.url }, tab.url))));
+    for (const tab of context.tabs.values()) {
+      let li = v.items.get(tab.id);
+      if (!li) {
+        li = el('li', {}, el('button', { type: 'button', onclick: () => focusTab(context.name, tab.id) }));
+        v.items.set(tab.id, li);
+        v.list.append(li);
+      }
+      const button = li.firstChild;
+      const title = tab.title || '(untitled)';
+      if (button.textContent !== title) button.textContent = title;
+      button.title = tab.url;
+      button.classList.toggle('current', tab.id === context.current);
     }
-    node.append(list);
-    return node;
+    const current = context.tabs.get(context.current);
+    v.title.textContent = current ? current.title || '(untitled)' : '';
+    v.title.title = current?.url ?? '';
+    // the thumbnail of the tab before stays out until the new one's arrives
+    const thumb = context.thumb?.id === context.current ? `data:image/jpeg;base64,${context.thumb.jpeg}` : '';
+    if (thumb !== v.src) {
+      v.src = thumb;
+      if (thumb) v.img.src = thumb;
+      else v.img.removeAttribute('src');
+    }
+    if (context.current !== v.shownCurrent) {
+      v.shownCurrent = context.current;
+      const li = v.items.get(context.current);
+      const top = v.list.scrollTop;
+      if (li && (li.offsetTop < top || li.offsetTop + li.offsetHeight > top + v.list.clientHeight)) {
+        v.list.scrollTop = li.offsetTop - 4;
+      }
+    }
+  }
+
+  function update(name) {
+    const context = browsers.get(name);
+    let v = views.get(name);
+    if (!context) {
+      v?.card.remove();
+      views.delete(name);
+      return;
+    }
+    const kind = context.main && context.state !== 'running' ? `main-${context.state}` : 'live';
+    if (v?.kind !== kind) {
+      const fresh = kind === 'live' ? liveCard(context) : stoppedMainCard(context);
+      fresh.kind = kind;
+      if (v) v.card.replaceWith(fresh.card);
+      else if (context.main) cards.prepend(fresh.card);
+      else cards.append(fresh.card);
+      views.set(name, v = fresh);
+    }
+    if (kind === 'live') fillCard(context, v);
+  }
+
+  // Apply one op of the gateway's protocol (gateway.mjs, "console live
+  // state"); returns the names of the browsers it touched.
+  function apply(op) {
+    if (op.t === 'snapshot') {
+      max = op.max;
+      browsers.clear();
+      views.clear();
+      cards.replaceChildren();
+      for (const b of op.browsers) browsers.set(b.name, { ...b, tabs: new Map(b.tabs.map((t) => [t.id, t])) });
+      return [...browsers.keys()];
+    }
+    if (op.t === 'gone') {
+      browsers.delete(op.name);
+      return [op.name];
+    }
+    let b = browsers.get(op.name);
+    if (!b) browsers.set(op.name, b = { name: op.name, tabs: new Map(), current: null, thumb: null });
+    if (op.t === 'browser') {
+      const { t, ...fields } = op;
+      Object.assign(b, fields);
+    } else if (op.t === 'tabs') {
+      for (const tab of op.set) b.tabs.set(tab.id, tab);
+      for (const id of op.del) b.tabs.delete(id);
+    } else if (op.t === 'current') {
+      b.current = op.id;
+    } else if (op.t === 'thumb') {
+      b.thumb = { id: op.id, jpeg: op.jpeg };
+    }
+    return [op.name];
   }
 
   function showError(err) {
     document.getElementById('error').textContent = err ? String(err.message || err) : '';
   }
 
-  let lastRender = '';
-  async function refresh() {
-    try {
-      const state = await (await fetch('api', { cache: 'no-store' })).json();
+  // Live state over a WebSocket next to this page (/console/ws): a snapshot,
+  // then only changes. Reconnects with backoff.
+  let retry = 1000;
+  function connect() {
+    const url = new URL('ws', location.href);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(url);
+    ws.onopen = () => {
+      retry = 1000;
       showError(null);
-      document.getElementById('summary').textContent =
-        `${state.contexts.length} of ${state.max} contexts in use`;
-      if (Date.now() - thumbStamp > THUMB_REFRESH_MS) thumbStamp = Date.now();
-      // re-render only when something changed, so thumbnails do not flicker
-      const key = JSON.stringify(state) + thumbStamp;
-      if (key === lastRender) return;
-      lastRender = key;
-      cards.replaceChildren(card(state.main, true), ...state.contexts.map((s) => card(s, false)));
-    } catch (err) {
-      showError(err);
-    }
+    };
+    ws.onmessage = (e) => {
+      const touched = new Set();
+      for (const op of JSON.parse(e.data).ops) {
+        for (const name of apply(op)) touched.add(name);
+      }
+      touched.forEach(update);
+      const n = [...browsers.values()].filter((b) => !b.main).length;
+      document.getElementById('summary').textContent = `${n} of ${max} contexts in use`;
+    };
+    ws.onclose = () => {
+      showError(`Lost the connection to the CDP gateway, reconnecting in ${retry / 1000}s…`);
+      setTimeout(connect, retry);
+      retry = Math.min(retry * 2, 10000);
+    };
   }
 
-  refresh();
-  setInterval(refresh, 2000);
+  connect();
 </script>
 </body>
 </html>

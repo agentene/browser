@@ -270,7 +270,8 @@ EOF
 # console. Both paths are relative to the subfolder, like the page's own.
 # proxy_set_header is all-or-nothing per level, so each location repeats the
 # http-level forwarding headers (selkies checks WebSocket Origins against
-# Host; nothing here upgrades).
+# Host, the gateway its console's), Upgrade/Connection included where a
+# location upgrades (the console's live state WebSocket, cdp-console/ws).
 nginx_cdp_console_locations() {
     local prefix="${SELKIES_SUBFOLDER}" fwd_headers entry
     fwd_headers="            proxy_set_header Host \$http_host;
@@ -295,11 +296,14 @@ ${fwd_headers}
 EOF
     done
     cat <<EOF
-        # the sidebar's script + API, served by the CDP gateway's console; the
-        # marker header makes the gateway require Selkies' master password
+        # the sidebar's script, API and live state WebSocket, served by the
+        # CDP gateway's console; the marker header makes the gateway require
+        # Selkies' master password
         location ${prefix}/cdp-console/ {
 ${fwd_headers}
             proxy_set_header X-CDP-Console-Via web;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection \$connection_upgrade;
             proxy_pass http://127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT}/console/;
         }
 EOF

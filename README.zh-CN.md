@@ -184,21 +184,21 @@ ENABLE_CDP_GATEWAY=true
 * context 背后的浏览器与 context 同生共死。关闭 context 或客户端断开(`playwright-cli -s=… close`)即销毁它:结束进程、删除克隆。下一个 session 会得到全新的克隆,因此总是带着主浏览器当前的登录态。
 * 每个隔离 context 继承的是它启动那一刻 profile 里的全部内容(cookie、localStorage、IndexedDB、Service Worker、扩展……)。之后主浏览器的变化不会流入正在运行的隔离 context,隔离 context 里的改动也永远不会流回主浏览器。
 
-CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,处于同一信任边界。它列出主浏览器和每个隔离 context 打开的 tab(标题、URL、实时缩略图),并提供两个操作:
+CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,处于同一信任边界。主浏览器和每个隔离 context 各占一张卡片:左边是当前 tab 的实时缩略图,标题显示在缩略图底部的半透明横幅里;右边是一个与缩略图等高、可滚动的列表,列出所有打开的 tab,当前 tab 高亮。点列表里的 tab(或缩略图)会让浏览器切换到该 tab,并把窗口提到最前。窗口当前在桌面最前面(也就是 Selkies 画面里看到的)的那个浏览器,卡片会带一圈柔和的辉光,*Show* 按钮的位置换成 *Showing* 标记。卡片实时更新:页面与网关之间保持一条 WebSocket(`/console/ws`),网关只推送变化的部分 —— tab 打开、关闭或改名,当前 tab 切换,新的缩略图(只在有控制台打开时生成;桌面最前面的浏览器最多每 2 秒一张,其他浏览器最多每 20 秒一张)。每张卡片还提供两个操作:
 
-* 「Show on desktop」把对应浏览器窗口提到 Selkies 画面最前;
+* 「Show」把对应浏览器窗口提到 Selkies 画面最前;
 * 「Delete」强制关闭隔离 context 并断开它的客户端。
 
-每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。同样的数据也可以从 `/console/api` 以 JSON 获取。
+每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。控制台页面的状态只通过 `/console/ws` WebSocket 获取:连上时先收到一份全量快照,之后只收变化;页面上的操作则是 `/console/api/` 下的普通 HTTP 请求。
 
-同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。侧边栏提供与 `/console/` 相同的卡片和操作;*Show on desktop* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,该 API 要求**主密码**:用只读密码登录的用户看不到拉手。设 `ENABLE_CDP_CONSOLE_PANEL=false` 则完全不改动 Selkies 页面。
+同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API 和 WebSocket(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,两者都要求**主密码**(WebSocket 还只接受同源页面的连接):用只读密码登录的用户看不到拉手。设 `ENABLE_CDP_CONSOLE_PANEL=false` 则完全不改动 Selkies 页面。
 
 **按需启动主浏览器。** 设置 `CHROMIUM_AUTOSTART=false`(必须同时开启网关)后,容器启动时不启动主浏览器,闲置的容器里完全没有 Chromium 进程。由网关在以下时机启动它:
 
 * 有 CDP 客户端连接时(`/json/version`、`/json/new`、浏览器级 WebSocket)。客户端无需改动,第一次连接只是多等浏览器启动的一两秒;
 * 在 `/console/` 或 Selkies 侧边栏里点主浏览器卡片上的 **Start browser**。
 
-关闭主浏览器(关掉它的窗口,或点卡片上的 **Stop**)不会让容器退出,只会断开它的 CDP 客户端。**Stop** 的关闭方式与关窗口相同,cookie 和会话会先保存到 profile。列表类请求(`/json/list`、`/console/api`)不会启动它,所以 `ENABLE_SELKIES=false` 时 compose 的 healthcheck 改为探测 `/console/api`。隔离 context 无需额外处理:它的客户端经由主浏览器连接,会顺带把主浏览器启动起来。
+关闭主浏览器(关掉它的窗口,或点卡片上的 **Stop**)不会让容器退出,只会断开它的 CDP 客户端。**Stop** 的关闭方式与关窗口相同,cookie 和会话会先保存到 profile。列表类请求(`/json/list`)和控制台都不会启动它,所以 `ENABLE_SELKIES=false` 时 compose 的 healthcheck 改为探测 `/json/list`。隔离 context 无需额外处理:它的客户端经由主浏览器连接,会顺带把主浏览器启动起来。
 
 把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端连接、没有隔离 context、也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。
 
@@ -430,7 +430,7 @@ DISPLAY_BACKEND=wayland
 
 开启后的变化:
 
-* 浏览器窗口由 labwc 最大化,保留标签栏和地址栏,并且始终锁定:只显示关闭按钮,双击/中键标签栏空白处无效,拖动窗口或窗口边缘(包括 Alt+拖动)都无法移动或调整大小,标签栏右键菜单里的「最小化」/「恢复」会在不到一秒内被撤销(负责撤销的监视进程在没有窗口时休眠,空桌面不占 CPU);弹出窗口和右键菜单由合成器原生合成(不需要 picom)。Alt+Tab 切换窗口;CDP 控制台的 *Show on desktop* 通过 labwc 把窗口提到最前。
+* 浏览器窗口由 labwc 最大化,保留标签栏和地址栏,并且始终锁定:只显示关闭按钮,双击/中键标签栏空白处无效,拖动窗口或窗口边缘(包括 Alt+拖动)都无法移动或调整大小,标签栏右键菜单里的「最小化」/「恢复」会在不到一秒内被撤销(负责撤销的监视进程在没有窗口时休眠,空桌面不占 CPU);弹出窗口和右键菜单由合成器原生合成(不需要 picom)。Alt+Tab 切换窗口;CDP 控制台的 *Show* 通过 labwc 把窗口提到最前。
 * labwc 自己的 60 Hz 帧时钟驱动浏览器,不论是否有人在看串流;被其他窗口挡住的窗口也照常渲染,所以自动化的行为与 Xvfb 上一致。
 * 鼠标指针只由 Selkies 客户端在本地绘制,没有串流延迟(labwc 自己的指针不进入视频画面 —— 否则它会延迟跟随,形成第二个"重影"指针)。指针始终是箭头:screencopy 不携带光标形状,所以不像 `x11` 那样有文本/手形光标。
 * Selkies 按浏览器窗口调整分辨率(`SELKIES_ENABLE_RESIZE=true`)时调整的是 labwc 的输出;不开启时输出保持 `SCREEN_GEOMETRY`。

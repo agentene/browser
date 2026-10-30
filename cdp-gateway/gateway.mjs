@@ -29,7 +29,9 @@
 // idle minutes (watchIdle).
 //
 // Also serves /json/* (with URLs rewritten to the public host:port the
-// client dialed) and a small dashboard + API under /console/, plus the
+// client dialed) and a small dashboard under /console/: its state (a
+// snapshot, then changes) comes only over the /console/ws WebSocket (see
+// subscribe), its actions are POST/DELETE /console/api/<name>…; plus the
 // sidebar script nginx injects into the Selkies page (panel.js; nginx
 // proxies /cdp-console/ on the web port to /console/ here).
 
@@ -229,6 +231,7 @@ class MainBrowser {
 
   async launch() {
     this.state = 'starting';
+    consolePoke();
     const t0 = Date.now();
     let proc;
     try {
@@ -259,6 +262,7 @@ class MainBrowser {
         if (this.proc === proc) {
           this.proc = null;
           this.state = 'stopped';
+          consolePoke();
         }
       });
       for (let i = 0; i < 150; i++) {
@@ -266,6 +270,7 @@ class MainBrowser {
         if (await fetchJson(MAIN_PORT, '/json/version').then(() => true, () => false)) {
           this.state = 'running';
           this.lastActive = Date.now();
+          consolePoke();
           log(`main browser up on 127.0.0.1:${MAIN_PORT} (pid ${proc.pid}, ${Date.now() - t0}ms)`);
           return;
         }
@@ -276,6 +281,7 @@ class MainBrowser {
       log(`main browser start failed: ${err.message}`);
       if (proc) await this.stop();
       this.state = 'stopped';
+      consolePoke();
       throw err;
     }
   }
@@ -427,6 +433,7 @@ class Context {
     if (this.destroyed) return;
     this.destroyed = true;
     contexts.delete(this.name);
+    consolePoke();
     log(`${this.name}: destroying (${reason})`);
     // detach from the client first: its pages are gone from now on, and the
     // same connection may create its next isolated context right away
@@ -464,6 +471,7 @@ async function createContext(clientAddr) {
     creating--;
   }
   contexts.set(context.name, context);
+  consolePoke();
   context.onExit = () => context.destroy('chromium exited');
   return context;
 }
@@ -1030,59 +1038,275 @@ async function targetPort(targetId) {
   return MAIN_PORT;
 }
 
-async function apiState() {
-  const tabs = (list) => list.map((t) => ({ id: t.id, title: t.title, url: t.url }));
-  const result = {
-    max: MAX_CONTEXTS,
-    main: {
-      name: 'main', state: mainBrowser.state, onDemand: mainBrowser.onDemand,
-      tabs: mainBrowser.running ? tabs(await pageTargets(MAIN_PORT)) : [],
-    },
-    contexts: [],
-  };
-  for (const s of contexts.values()) {
-    result.contexts.push({
-      name: s.name, color: s.color, client: s.client, createdAt: s.createdAt, pid: s.proc?.pid ?? null,
-      tabs: tabs(await pageTargets(s.port)),
-    });
-  }
-  return result;
+// A browser's tabs and the one in front of its window: chromium lists
+// targets most recently activated first (switching tabs and /json/activate
+// both count), so that is the first page. Throws when chromium does not answer.
+async function browserTabs(port) {
+  const pages = (await fetchJson(port, '/json/list')).filter((t) => t.type === 'page');
+  return { tabs: pages.map((t) => ({ id: t.id, title: t.title, url: t.url })), current: pages[0]?.id ?? null };
 }
+
+const NO_TABS = { tabs: [], current: null };
 
 function portOf(name) {
   if (name === 'main') return MAIN_PORT;
   return contexts.get(name)?.port ?? 0;
 }
 
-const thumbCache = new Map(); // `${port}/${targetId}` -> { at, jpeg }
-const thumbInflight = new Map(); // `${port}/${targetId}` -> Promise<jpeg>
+// --- console live state (WebSocket /console/ws) ------------------------------
+// The console pages' only source of state. A new subscriber gets a snapshot, then only what changed, batched per tick as
+// {ops: [...]}:
+//   {t:'snapshot', max, browsers:[{name, ...fields, tabs, current, thumb}]}
+//   {t:'browser', name, ...fields}         a new browser (all fields) or changed fields
+//   {t:'gone', name}                       a context is gone
+//   {t:'tabs', name, set:[tab], del:[id]}  new or changed tabs, closed tabs
+//   {t:'current', name, id}                another tab is in front
+//   {t:'thumb', name, id, jpeg}            a new thumbnail of the current tab (base64)
+// Ticks read /json/list over loopback, only while a console is connected,
+// and never start an on-demand main browser. Thumbnails come from a
+// screencast of each browser's current tab: frames only arrive when the page
+// repaints, and they are downscaled without the viewport emulation a
+// captureScreenshot clip brings (overlapping clipped captures restore each
+// other's emulation and leave the live page laid out at thumbnail width).
+const TICK_MS = 1000;
+// At most one thumbnail per browser this often: the browser in front on
+// the desktop (the one the Selkies stream shows) refreshes fast, the ones
+// behind it slowly. With no desktop (or none in front) all refresh fast.
+const THUMB_FRONT_MS = 2000;
+const THUMB_BACK_MS = 20000;
+const subscribers = new Set();
+const views = new Map(); // name -> what subscribers were last told: { fields, tabs, current, thumb, cast }
+let tickTimer = null;
+let anyFront = false;
+let tickRunning = Promise.resolve();
+let tickQueued = null;
 
-function thumbnail(port, targetId) {
-  const key = `${port}/${targetId}`;
-  const hit = thumbCache.get(key);
-  if (hit && Date.now() - hit.at < 2500) return hit.jpeg;
-  // one capture per tab at a time: overlapping captures of a page time out
-  if (!thumbInflight.has(key)) {
-    thumbInflight.set(key, captureThumb(port, targetId, key).finally(() => thumbInflight.delete(key)));
+function broadcast(ops) {
+  if (!ops.length) return;
+  const msg = JSON.stringify({ ops });
+  for (const ws of subscribers) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
   }
-  return thumbInflight.get(key);
 }
 
-// Full-size and unclipped on purpose: a clip (or its scale) makes chromium
-// emulate a resized viewport for the capture, and overlapping captures
-// restore each other's emulation, leaving the live page laid out at the
-// thumbnail width inside a full-size window until it reloads. The dashboard
-// scales the image down instead.
-async function captureThumb(port, targetId, key) {
-  const cdp = await CdpClient.connect(`ws://127.0.0.1:${port}/devtools/page/${targetId}`);
+// One tick at a time; calls while one runs share the next one.
+function runTick() {
+  tickQueued ??= tickRunning.then(() => {
+    tickQueued = null;
+    return tick();
+  });
+  tickRunning = tickQueued.catch((err) => log(`console tick: ${err.message}`));
+  return tickRunning;
+}
+
+// Something changed (context created or gone, main browser state, a console
+// action): tell the consoles now instead of on the next tick.
+function consolePoke() {
+  if (subscribers.size) runTick();
+}
+
+function browserFields(name, front) {
+  if (name === 'main') return { main: true, state: mainBrowser.state, onDemand: mainBrowser.onDemand, front };
+  const s = contexts.get(name);
+  return { color: s.color, client: s.client, createdAt: s.createdAt, pid: s.proc?.pid ?? null, front };
+}
+
+// The browser whose window is in front on the desktop (what the Selkies
+// stream shows), or null. Wayland: the one labwc has focused — one wlrctl
+// call per browser until it matches. X11: the topmost browser window, which
+// front-window.py reports whenever it changes.
+let frontPid = 0;
+let frontWatch = null;
+
+async function frontBrowser(names) {
+  if (!WAYLAND) return names.find((name) => frontPid && browserPid(name) === frontPid) ?? null;
+  for (const name of names) {
+    if (name === 'main' ? !mainBrowser.running : env.CDP_CONTEXTS_HEADLESS === '1') continue;
+    if (await run('wlrctl', ['toplevel', 'find', `app_id:${appId(name)}`, 'state:focused']) === 0) return name;
+  }
+  return null;
+}
+
+function watchFront() {
+  if (WAYLAND || frontWatch) return;
+  const child = spawn('python3', [path.join(HERE, 'front-window.py')], { stdio: ['pipe', 'pipe', 'ignore'] });
+  frontWatch = child;
+  let buffered = '';
+  child.stdout.on('data', (chunk) => {
+    const lines = (buffered + chunk).split('\n');
+    buffered = lines.pop();
+    if (!lines.length) return;
+    frontPid = Number(lines.at(-1));
+    consolePoke();
+  });
+  child.stdin.on('error', () => { /* exited */ });
+  child.on('error', () => { /* no python3: no front marker */ });
+  child.on('exit', () => {
+    // no X display (headless desktop) ends it right away: no front marker
+    if (frontWatch === child) frontWatch = null;
+    frontPid = 0;
+  });
+}
+
+function unwatchFront() {
+  frontWatch?.stdin.end();
+  frontWatch = null;
+  frontPid = 0;
+}
+
+async function tick() {
+  const ops = [];
+  const names = ['main', ...contexts.keys()];
+  const front = await frontBrowser(names);
+  anyFront = !!front;
+  for (const [name, view] of views) {
+    if (names.includes(name)) continue;
+    stopCast(view);
+    views.delete(name);
+    ops.push({ t: 'gone', name });
+  }
+  for (const name of names) {
+    const port = portOf(name);
+    let listing = NO_TABS;
+    if (name !== 'main' || mainBrowser.running) {
+      try {
+        listing = await browserTabs(port);
+      } catch {
+        continue; // starting up or shutting down: keep what the consoles have
+      }
+    }
+    if (name !== 'main' && !contexts.has(name)) continue; // destroyed meanwhile
+    let view = views.get(name);
+    if (!view) views.set(name, view = { fields: {}, tabs: new Map(), current: null, thumb: null, cast: null });
+    const changed = {};
+    for (const [k, v] of Object.entries(browserFields(name, name === front))) {
+      if (view.fields[k] !== v) changed[k] = v;
+    }
+    if (Object.keys(changed).length) {
+      Object.assign(view.fields, changed);
+      ops.push({ t: 'browser', name, ...changed });
+    }
+    // tabs keep the order they were first seen in (least recently active
+    // first), so a console's list does not jump around on every tab switch
+    const set = [];
+    const seen = new Set();
+    for (const tab of listing.tabs.toReversed()) {
+      seen.add(tab.id);
+      const old = view.tabs.get(tab.id);
+      if (old && old.title === tab.title && old.url === tab.url) continue;
+      view.tabs.set(tab.id, tab);
+      set.push(tab);
+    }
+    const del = [...view.tabs.keys()].filter((id) => !seen.has(id));
+    for (const id of del) view.tabs.delete(id);
+    if (set.length || del.length) ops.push({ t: 'tabs', name, set, del });
+    if (view.thumb && !view.tabs.has(view.thumb.id)) view.thumb = null; // no dead weight in snapshots
+    if (listing.current !== view.current) {
+      view.current = listing.current;
+      ops.push({ t: 'current', name, id: view.current });
+    }
+    syncCast(name, view, port);
+    view.cast?.reschedule(); // it may have come to the front, or gone behind
+  }
+  broadcast(ops);
+}
+
+function snapshot() {
+  return {
+    t: 'snapshot',
+    max: MAX_CONTEXTS,
+    browsers: [...views].map(([name, v]) => ({
+      name, ...v.fields, tabs: [...v.tabs.values()], current: v.current, thumb: v.thumb,
+    })),
+  };
+}
+
+// Screencast the browser's current tab while a console is connected.
+function syncCast(name, view, port) {
+  const want = subscribers.size ? view.current : null;
+  if ((view.cast?.id ?? null) === want) return;
+  stopCast(view);
+  if (!want) return;
+  const cast = { id: want, cdp: null, closed: false, frame: null, sentAt: 0, timer: null, every: 0, reschedule: () => {} };
+  view.cast = cast;
+  startCast(name, view, cast, port);
+}
+
+async function startCast(name, view, cast, port) {
   try {
-    const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 50 }, { timeout: 4000 });
-    const jpeg = Buffer.from(data, 'base64');
-    thumbCache.set(key, { at: Date.now(), jpeg });
-    if (thumbCache.size > 200) thumbCache.delete(thumbCache.keys().next().value);
-    return jpeg;
-  } finally {
-    cdp.close();
+    const cdp = await CdpClient.connect(`ws://127.0.0.1:${port}/devtools/page/${cast.id}`);
+    if (cast.closed) return cdp.close();
+    cast.cdp = cdp;
+    cdp.ws.once('close', () => {
+      if (view.cast === cast) view.cast = null; // the next tick retries
+    });
+    // Late acks slow chromium down (a frame at most every ackMs, so a sent
+    // thumbnail is at most that old), but it keeps a few frames in flight,
+    // so the frames are throttled here too: the latest one goes out at most
+    // every cast.every.
+    const every = () => (view.fields.front || !anyFront ? THUMB_FRONT_MS : THUMB_BACK_MS);
+    const ackMs = () => Math.min(every() / 2, 5000);
+    const flush = () => {
+      cast.timer = null;
+      const data = cast.frame;
+      cast.frame = null;
+      if (cast.closed || !data || (view.thumb?.id === cast.id && view.thumb.jpeg === data)) return;
+      cast.sentAt = Date.now();
+      view.thumb = { id: cast.id, jpeg: data };
+      broadcast([{ t: 'thumb', name, id: cast.id, jpeg: data }]);
+    };
+    const schedule = () => {
+      cast.timer ??= setTimeout(flush, Math.max(0, cast.sentAt + cast.every - Date.now()));
+    };
+    cast.every = every();
+    cast.reschedule = () => {
+      if (cast.every === every()) return;
+      cast.every = every();
+      if (cast.timer === null) return;
+      clearTimeout(cast.timer);
+      cast.timer = null;
+      schedule();
+    };
+    cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
+      setTimeout(() => {
+        if (!cast.closed) cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => { /* tab gone */ });
+      }, ackMs());
+      cast.frame = data;
+      schedule();
+    });
+    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 640, maxHeight: 400 });
+  } catch {
+    // the tab closed in between; the next tick retries if it is still current
+    if (view.cast === cast) stopCast(view);
+  }
+}
+
+function stopCast(view) {
+  if (!view.cast) return;
+  view.cast.closed = true;
+  clearTimeout(view.cast.timer);
+  view.cast.cdp?.close();
+  view.cast = null;
+}
+
+async function subscribe(ws) {
+  ws.on('error', () => { /* close follows */ });
+  ws.on('close', () => {
+    subscribers.delete(ws);
+    if (subscribers.size) return;
+    clearInterval(tickTimer);
+    tickTimer = null;
+    unwatchFront();
+    for (const view of views.values()) stopCast(view);
+  });
+  await runTick(); // views may be stale while nobody watched
+  if (ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ ops: [snapshot()] }));
+  subscribers.add(ws);
+  if (!tickTimer) {
+    watchFront();
+    tickTimer = setInterval(runTick, TICK_MS);
+    runTick(); // starts the screencasts
   }
 }
 
@@ -1099,10 +1323,14 @@ async function focus(name, targetId) {
   if (WAYLAND) {
     await run('wlrctl', ['toplevel', 'focus', `app_id:${appId(name)}`]);
   } else {
-    const pid = name === 'main' ? mainBrowser.pid() : contexts.get(name)?.proc?.pid;
+    const pid = browserPid(name);
     if (pid) await run('python3', [path.join(HERE, 'raise-window.py'), String(pid)]);
   }
   return true;
+}
+
+function browserPid(name) {
+  return Number(name === 'main' ? mainBrowser.pid() : contexts.get(name)?.proc?.pid) || 0;
 }
 
 // The Wayland app_id of the main browser (set by the entrypoint) or a context.
@@ -1142,6 +1370,19 @@ function consoleDenied(req) {
   }
   if (req.method !== 'GET' && req.headers['x-cdp-console'] !== '1') return [403, 'missing X-CDP-Console header'];
   return null;
+}
+
+// WebSockets are not covered by CORS: any site the viewer has open could
+// subscribe to the console (with the cached Basic Auth, on the web port) and
+// read tab titles and thumbnails. Only pages served from the same host:port
+// may; clients without an Origin header are no browser page.
+function consoleOriginDenied(req) {
+  const origin = req.headers.origin;
+  if (!origin) return null;
+  try {
+    if (new URL(origin).host === req.headers.host) return null;
+  } catch { /* malformed: denied */ }
+  return [403, 'cross-origin console connection'];
 }
 
 async function handleHttp(req, res) {
@@ -1191,19 +1432,9 @@ async function handleHttp(req, res) {
     if (p === '/console/panel.js') {
       return send(res, 200, await fs.readFile(path.join(HERE, 'panel.js')), 'text/javascript; charset=UTF-8');
     }
-    if (p === '/console/api') return send(res, 200, await apiState());
-    const a = p.match(/^\/console\/api\/([\w.-]+)(?:\/(thumb|focus|start|stop)(?:\/([^/]+))?)?$/);
+    const a = p.match(/^\/console\/api\/([\w.-]+)(?:\/(focus|start|stop)(?:\/([^/]+))?)?$/);
     if (a) {
       const [, name, action, targetId] = a;
-      if (action === 'thumb' && req.method === 'GET') {
-        const port = portOf(name);
-        if (!port || !targetId) return send(res, 404, { error: 'no such context or tab' });
-        try {
-          return send(res, 200, await thumbnail(port, targetId), 'image/jpeg');
-        } catch (err) {
-          return send(res, 503, { error: err.message });
-        }
-      }
       if ((action === 'start' || action === 'stop') && req.method === 'POST' && !targetId) {
         if (name !== 'main') return send(res, 404, { error: 'only the main browser can be started or stopped' });
         if (!mainBrowser.onDemand) return send(res, 409, { error: 'the main browser is supervised by the container (CHROMIUM_AUTOSTART=true)' });
@@ -1212,7 +1443,9 @@ async function handleHttp(req, res) {
         return send(res, 200, { ok: true, state: mainBrowser.state });
       }
       if (action === 'focus' && req.method === 'POST') {
-        return (await focus(name, targetId)) ? send(res, 200, { ok: true }) : send(res, 404, { error: 'nothing to focus' });
+        if (!(await focus(name, targetId))) return send(res, 404, { error: 'nothing to focus' });
+        consolePoke(); // the new current tab
+        return send(res, 200, { ok: true });
       }
       if (!action && req.method === 'DELETE') {
         const context = contexts.get(name);
@@ -1274,12 +1507,20 @@ async function handleUpgrade(req, socket, head) {
     } else if (p.startsWith('/devtools/page/')) {
       const port = await targetPort(p.slice('/devtools/page/'.length));
       target = { kind: 'page', url: `ws://127.0.0.1:${port}${p}` };
+    } else if (p === '/console/ws') {
+      const denied = consoleDenied(req) ?? consoleOriginDenied(req);
+      if (denied) {
+        socket.end(`HTTP/1.1 ${denied[0]} ${http.STATUS_CODES[denied[0]]}\r\n\r\n`);
+        return;
+      }
+      target = { kind: 'console' };
     } else {
       socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
       return;
     }
     wss.handleUpgrade(req, socket, head, (client) => {
       if (target.kind === 'browser') new Mux(client, clientAddress(req), target.url);
+      else if (target.kind === 'console') subscribe(client);
       else relay(client, target.url);
     });
   } catch (err) {

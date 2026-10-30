@@ -250,7 +250,7 @@ services:
       # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
       # or 401 when the login screen is on (502 = Selkies not up). With
       # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
-      # probed instead — its console API with CHROMIUM_AUTOSTART=false, which
+      # probed instead — /json/list with CHROMIUM_AUTOSTART=false, which
       # (unlike /json/version) does not start the main browser. A dead service is caught by the entrypoint itself (it
       # exits and docker restarts the container). $$ = evaluated in the
       # container at check time, not by compose.
@@ -258,7 +258,7 @@ services:
         - CMD-SHELL
         - >-
           if [ "$${ENABLE_SELKIES:-true}" = false ]; then
-          if [ "$${CHROMIUM_AUTOSTART:-true}" = false ]; then probe=console/api; else probe=json/version; fi;
+          if [ "$${CHROMIUM_AUTOSTART:-true}" = false ]; then probe=json/list; else probe=json/version; fi;
           curl -sf -o /dev/null "http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/$$probe";
           else
           case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}/)" in
