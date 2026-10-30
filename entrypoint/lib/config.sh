@@ -101,6 +101,11 @@
 #                                logins without sharing state; destroyed when
 #                                the context closes. Dashboard: /console/ on
 #                                the CDP port. Clients need no changes.
+#   ENABLE_CDP_CONSOLE_PANEL=true  with the gateway and Selkies both on, add
+#                                the CDP console as a sidebar on the right of
+#                                the Selkies page (nginx injects
+#                                cdp-gateway/panel.js; its API needs Selkies'
+#                                master password when a login is set)
 #   CDP_CONTEXTS_MAX=4           most isolated contexts alive at once (each is
 #                                a whole browser); more get a CDP error
 #   CDP_CONTEXTS_HEADLESS        1 = context browsers run headless; default:
@@ -295,6 +300,18 @@ config_cdp_gateway() {
     CDP_GATEWAY_INTERNAL_PORT="${CDP_GATEWAY_INTERNAL_PORT:-9220}" # gateway loopback port (behind nginx)
     CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX:-4}"
     CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR:-/browser/contexts}"
+    ENABLE_CDP_CONSOLE_PANEL="${ENABLE_CDP_CONSOLE_PANEL:-true}"
+    case "${ENABLE_CDP_CONSOLE_PANEL}" in
+        true|false) : ;;
+        *) die "ENABLE_CDP_CONSOLE_PANEL='${ENABLE_CDP_CONSOLE_PANEL}' must be true or false" ;;
+    esac
+    # The sidebar needs the web UI to sit in and the gateway to talk to
+    # (nginx.sh, cdp-gateway.sh); silently off otherwise.
+    CDP_CONSOLE_PANEL_ACTIVE=false
+    if [ "${ENABLE_CDP_CONSOLE_PANEL}" = "true" ] && [ "${ENABLE_SELKIES}" = "true" ] \
+        && [ "${ENABLE_CDP}" = "true" ] && [ "${ENABLE_CDP_GATEWAY}" = "true" ]; then
+        CDP_CONSOLE_PANEL_ACTIVE=true
+    fi
     case "${CDP_CONTEXTS_MAX}" in
         ''|*[!0-9]*|0) die "CDP_CONTEXTS_MAX='${CDP_CONTEXTS_MAX}' must be a positive number" ;;
     esac

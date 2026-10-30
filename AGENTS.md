@@ -24,7 +24,7 @@ image build + runtime smoke tests.
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | Every runtime knob, documented |
-| `cdp-gateway/` | Opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): `gateway.mjs` (Node, sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image), `dashboard.html` (`/console/` on the CDP port), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland) |
+| `cdp-gateway/` | Opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): `gateway.mjs` (Node, sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page, `ENABLE_CDP_CONSOLE_PANEL`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + `.env.example` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
 | `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release |
@@ -45,6 +45,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 node --check update-chrome-node.mjs
 node --check cdp-gateway/gateway.mjs
+node --check cdp-gateway/panel.js
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .
 ```

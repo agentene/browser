@@ -61,6 +61,7 @@ jobs:
         run: |
           node --check update-chrome-node.mjs
           node --check cdp-gateway/gateway.mjs
+          node --check cdp-gateway/panel.js
           python3 -m py_compile entrypoint/helpers/*.py
 
       - name: docker build --check (Dockerfile lint, BuildKit)
@@ -153,6 +154,33 @@ jobs:
           ws.close();
           console.log('CDP gateway smoke test OK');
           EOF
+
+      - name: Smoke test — CDP console sidebar on the web UI
+        run: |
+          set -euo pipefail
+          docker run -d --name panel-smoke -p 9225:9222 -p 8082:80 \
+            -e ENABLE_CDP_GATEWAY=true -e SELKIES_BASIC_AUTH_PASSWORD=pw \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker exec panel-smoke cat /tmp/cdp-gateway.log /tmp/nginx/error.log || true; docker logs panel-smoke || true; docker rm -f panel-smoke >/dev/null' EXIT
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9225/json/version >/dev/null \
+              && curl -sf -u ubuntu:pw http://127.0.0.1:8082/ >/dev/null && break
+            sleep 1
+          done
+          # the entry page carries the sidebar script, served by the gateway
+          curl -sf -u ubuntu:pw http://127.0.0.1:8082/ | grep -q 'cdp-console/panel.js'
+          curl -sf -u ubuntu:pw http://127.0.0.1:8082/cdp-console/panel.js | grep -q '__cdpConsolePanel'
+          # its API takes the master password only, without a login prompt
+          curl -sf -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api | jq -e '.main' >/dev/null
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/api)" = 401 ]
+          ! curl -sI -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/api | grep -qi '^www-authenticate'
+          # writes need the X-CDP-Console header
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api/nope)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'X-CDP-Console: 1' -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api/nope)" = 404 ]
+          # the CDP port's console is unchanged (and cannot forge the marker)
+          curl -sf http://127.0.0.1:9225/console/api | jq -e '.main' >/dev/null
+          curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/api | jq -e '.main' >/dev/null
+          echo "CDP console sidebar smoke test OK"
 
       - name: Smoke test — Wayland desktop (DISPLAY_BACKEND=wayland)
         run: |

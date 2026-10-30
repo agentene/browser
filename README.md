@@ -191,6 +191,8 @@ The CDP console lives at **`http://localhost:9222/console/`**, on the CDP port, 
 
 Each isolated context gets its own browser frame color, matching its console card, so windows on the desktop are easy to tell apart. The same data is available as JSON at `/console/api`.
 
+The same console also sits **next to the live desktop**: move the pointer to the right edge of the Selkies page and click the handle that appears (on touch screens it always shows). The sidebar has the cards and actions of `/console/`; *Show on desktop* raises the window right in the stream you are watching. nginx injects the sidebar script (`cdp-gateway/panel.js`) into the Selkies page and proxies its API (`cdp-console/` next to the page, so `SELKIES_SUBFOLDER` works) to the gateway. With a Selkies login set, that API requires the **master** password: users signed in with a view-only password get no handle. Set `ENABLE_CDP_CONSOLE_PANEL=false` to leave the Selkies page untouched.
+
 Limits:
 
 * Each isolated context is a whole browser process, typically a few hundred MB of RAM. `CDP_CONTEXTS_MAX` caps how many run at once; past the cap, creating a context fails with a clear CDP error.
@@ -304,6 +306,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CDP_CONTEXTS_HEADLESS`     | same as `CHROMIUM_HEADLESS` | `1` = context browsers run headless; `0` = headed on the desktop (visible in the stream)                                                                                        |
 | `CDP_CONTEXTS_DIR`          | `/browser/contexts`         | one profile-cloned browser per isolated context; wiped at every start, must not be inside `CHROMIUM_USER_DATA_DIR`; keep it on the same mount as the profile so clones can be reflinks           |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | gateway loopback port (behind nginx)                                                                                                                                            |
+| `ENABLE_CDP_CONSOLE_PANEL`  | `true`                      | with the gateway and Selkies both on: the CDP console as a sidebar on the right edge of the Selkies page (master password required when a Selkies login is set); `false` = no sidebar |
 
 **Desktop / container**
 
@@ -531,7 +534,7 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 ## Security considerations
 
 * **The CDP endpoint has no authentication.** Full browser control is one TCP connect away — publish `9222` on localhost or a trusted network only, never on a public IP. With [host networking](#host-network-compose) there is no port mapping to restrict this; use `NGINX_LISTEN_ADDR=127.0.0.1`.
-* **CDP gateway contexts inherit your real logins.** With `ENABLE_CDP_GATEWAY=true`, every isolated client starts out signed in wherever the main browser is. That is the point of the feature, and it is also the risk: hand the CDP endpoint only to automation you would trust with those accounts. The `/console/` page and its API share the CDP port's (lack of) authentication.
+* **CDP gateway contexts inherit your real logins.** With `ENABLE_CDP_GATEWAY=true`, every isolated client starts out signed in wherever the main browser is. That is the point of the feature, and it is also the risk: hand the CDP endpoint only to automation you would trust with those accounts. The `/console/` page and its API share the CDP port's (lack of) authentication. The sidebar copy on the web UI port (`cdp-console/`) follows the Selkies login instead: master password only, open when the web UI has no login.
 * **The web UI is unauthenticated by default.** Set `SELKIES_BASIC_AUTH_PASSWORD` whenever the stream is reachable by anyone you don't trust; use HTTPS alongside it (plain HTTP + basic auth leaks the password).
 * Chromium runs with `--no-sandbox` (standard for containerized Chrome without a seccomp profile that allows userns); run the container as a dedicated user/VM you'd be comfortable exposing a browser to.
 * Generated TLS keys are self-signed — browsers will warn; that is expected. Bring a real certificate for anything public.

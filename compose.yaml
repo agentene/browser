@@ -176,6 +176,9 @@ services:
       # every start); keep it on the /browser mount next to the profile so
       # the clones can be reflinks
       CDP_CONTEXTS_DIR: "${CDP_CONTEXTS_DIR:-/browser/contexts}"
+      # With the gateway on: the CDP console also as a sidebar on the right of
+      # the Selkies page (needs the Selkies master password when one is set)
+      ENABLE_CDP_CONSOLE_PANEL: "${ENABLE_CDP_CONSOLE_PANEL:-true}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: x11 = Xvfb (+ picom); wayland =

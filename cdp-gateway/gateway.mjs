@@ -23,9 +23,12 @@
 //     destroys the context: process killed, cloned profile deleted.
 //
 // Also serves /json/* (with URLs rewritten to the public host:port the
-// client dialed) and a small dashboard + API under /console/.
+// client dialed) and a small dashboard + API under /console/, plus the
+// sidebar script nginx injects into the Selkies page (panel.js; nginx
+// proxies /cdp-console/ on the web port to /console/ here).
 
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import { constants as fsConstants, createWriteStream, readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -45,6 +48,9 @@ const FLAGS_FILE = env.CDP_GATEWAY_FLAGS_FILE || '/tmp/cdp-gateway-chromium-flag
 const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
+// Selkies' master password: console requests that came in through the web
+// port (nginx marks them, see consoleDenied) must carry it. Empty = no login.
+const WEB_PASSWORD = env.CDP_CONSOLE_WEB_PASSWORD || '';
 
 // Ids the gateway uses for its own commands on a client's upstreams; client
 // ids (small integers counted up by Playwright) never get there.
@@ -946,6 +952,28 @@ function run(cmd, args) {
   });
 }
 
+// Console requests through the Selkies web port (the sidebar) are marked by
+// nginx with X-CDP-Console-Via: web — the CDP listener strips that header, so
+// the CDP port keeps its unauthenticated console. Those need Selkies' master
+// password (the browser resends the Basic Auth of the Selkies page); a
+// view-only password gets 401, without WWW-Authenticate so no login prompt
+// pops up. Writes also need the X-CDP-Console header, which no cross-site
+// form or image can send. Returns the error to answer with, or null.
+function consoleDenied(req) {
+  if (req.headers['x-cdp-console-via'] !== 'web') return null;
+  if (WEB_PASSWORD) {
+    const [scheme, encoded = ''] = (req.headers.authorization || '').split(' ');
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const given = crypto.createHash('sha256').update(decoded.slice(decoded.indexOf(':') + 1)).digest();
+    const want = crypto.createHash('sha256').update(WEB_PASSWORD).digest();
+    if (scheme !== 'Basic' || !decoded.includes(':') || !crypto.timingSafeEqual(given, want)) {
+      return [401, 'unauthorized'];
+    }
+  }
+  if (req.method !== 'GET' && req.headers['x-cdp-console'] !== '1') return [403, 'missing X-CDP-Console header'];
+  return null;
+}
+
 async function handleHttp(req, res) {
   const url = new URL(req.url, 'http://gateway');
   const p = url.pathname;
@@ -980,8 +1008,15 @@ async function handleHttp(req, res) {
       res.writeHead(302, { Location: '/console/' });
       return res.end();
     }
+    if (p.startsWith('/console/')) {
+      const denied = consoleDenied(req);
+      if (denied) return send(res, denied[0], { error: denied[1] });
+    }
     if (p === '/console/') {
       return send(res, 200, await fs.readFile(path.join(HERE, 'dashboard.html')), 'text/html; charset=UTF-8');
+    }
+    if (p === '/console/panel.js') {
+      return send(res, 200, await fs.readFile(path.join(HERE, 'panel.js')), 'text/javascript; charset=UTF-8');
     }
     if (p === '/console/api') return send(res, 200, await apiState());
     const a = p.match(/^\/console\/api\/([\w.-]+)(?:\/(thumb|focus)(?:\/([^/]+))?)?$/);

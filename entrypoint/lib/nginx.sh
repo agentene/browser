@@ -7,6 +7,9 @@
 #   ${NGINX_LISTEN_HTTPS_PORT} -> 127.0.0.1:${SELKIES_INTERNAL_PORT}  web UI, TLS (optional)
 #   ${CDP_LISTEN_PORT} -> 127.0.0.1:${CDP_INTERNAL_PORT}     chromium CDP
 #                         (or the CDP gateway with ENABLE_CDP_GATEWAY)
+# With the CDP console panel (CDP_CONSOLE_PANEL_ACTIVE, config.sh) the web UI
+# also gets the sidebar script injected into its entry page and
+# <subfolder>/cdp-console/ proxied to the gateway's /console/.
 # plus one listener per PORT_FORWARDS entry (same-network peers, see
 # nginx_parse_port_forwards). Every proxy is WebSocket-capable (CDP and
 # Selkies signaling both need it).
@@ -224,6 +227,8 @@ nginx_web_servers() {
     local locations="        location / {
             proxy_pass http://127.0.0.1:${SELKIES_INTERNAL_PORT};
         }"
+    [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] && locations="${locations}
+$(nginx_cdp_console_locations)"
     if [ -n "${SELKIES_SUBFOLDER}" ]; then
         locations="${locations}
         location = / {
@@ -259,6 +264,47 @@ ${locations}
 EOF
 }
 
+# The CDP console sidebar on the web UI (ENABLE_CDP_CONSOLE_PANEL): inject
+# cdp-gateway/panel.js into the Selkies entry page only (the /api/files/
+# browser is HTML too), and proxy cdp-console/ next to it to the gateway's
+# console. Both paths are relative to the subfolder, like the page's own.
+# proxy_set_header is all-or-nothing per level, so each location repeats the
+# http-level forwarding headers (selkies checks WebSocket Origins against
+# Host; nothing here upgrades).
+nginx_cdp_console_locations() {
+    local prefix="${SELKIES_SUBFOLDER}" fwd_headers entry
+    fwd_headers="            proxy_set_header Host \$http_host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;"
+    # Selkies entry page + the sidebar script (sub_filter only sees
+    # uncompressed, complete pages: no gzip, no 304s from upstream)
+    for entry in "${prefix}/" "${prefix}/index.html"; do
+        cat <<EOF
+        location = ${entry} {
+${fwd_headers}
+            proxy_set_header Accept-Encoding "";
+            proxy_set_header If-None-Match "";
+            proxy_set_header If-Modified-Since "";
+            sub_filter_once on;
+            sub_filter_types text/html;
+            sub_filter '</head>' '<script src="cdp-console/panel.js" defer></script></head>';
+            add_header Cache-Control "no-cache" always;
+            proxy_pass http://127.0.0.1:${SELKIES_INTERNAL_PORT};
+        }
+EOF
+    done
+    cat <<EOF
+        # the sidebar's script + API, served by the CDP gateway's console; the
+        # marker header makes the gateway require Selkies' master password
+        location ${prefix}/cdp-console/ {
+${fwd_headers}
+            proxy_set_header X-CDP-Console-Via web;
+            proxy_pass http://127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT}/console/;
+        }
+EOF
+}
+
 # The CDP listener: straight to chromium, or through the CDP gateway.
 nginx_cdp_server() {
     if [ "${ENABLE_CDP_GATEWAY}" = "true" ]; then
@@ -271,8 +317,17 @@ nginx_cdp_server() {
             # The CDP gateway talks to the main chromium (and to every
             # context browser) itself: it rewrites the Host header to the
             # loopback upstream and the ws:// URLs in JSON bodies back to
-            # the Host the client dialed — so pass that Host through as-is
-            # (http-level default, together with Upgrade/Connection).
+            # the Host the client dialed — so pass that Host through as-is.
+            # The console marker of the web UI's cdp-console/ proxy must not
+            # be forgeable from here (the CDP port has no login anyway), and
+            # setting it drops the http-level headers, so repeat those.
+            proxy_set_header X-CDP-Console-Via "";
+            proxy_set_header Host \$http_host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection \$connection_upgrade;
             proxy_pass http://127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT};
         }
     }

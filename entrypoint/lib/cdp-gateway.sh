@@ -33,6 +33,15 @@ cdp_gateway_start() {
     printf '%s\0' "${CHROMIUM_COMMON_FLAGS[@]}" "${MODE_FLAGS[@]}" \
         "${CHROMIUM_TAIL_FLAGS[@]}" >"${flags_file}"
 
+    # The console sidebar on the Selkies page (nginx.sh) is guarded by
+    # Selkies' master password, resolved like selkies.sh does (empty = the
+    # web UI has no login, so neither has the sidebar). Only the master
+    # password: a view-only login must not manage contexts.
+    local console_password=""
+    if [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] && [ "${SELKIES_ENABLE_BASIC_AUTH:-}" != "false" ]; then
+        console_password="${SELKIES_BASIC_AUTH_PASSWORD:-${PASSWORD:-${PASSWD:-}}}"
+    fi
+
     log "starting CDP gateway on 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT} (max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR})"
     start_service /tmp/cdp-gateway.log \
         env CHROME_BIN="${CHROME_BIN}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
@@ -40,7 +49,7 @@ cdp_gateway_start() {
         CDP_GATEWAY_INTERNAL_PORT="${CDP_GATEWAY_INTERNAL_PORT}" \
         CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX}" CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
-        CDP_GATEWAY_FLAGS_FILE="${flags_file}" \
+        CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD="${console_password}" \
         CDP_MAIN_CHROMIUM_PID="${CHROMIUM_PID}" "${CHROMIUM_ENV[@]}" \
         "${DROP[@]}" node /usr/local/lib/cdp-gateway/gateway.mjs
 }

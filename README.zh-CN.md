@@ -191,6 +191,8 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。同样的数据也可以从 `/console/api` 以 JSON 获取。
 
+同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。侧边栏提供与 `/console/` 相同的卡片和操作;*Show on desktop* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,该 API 要求**主密码**:用只读密码登录的用户看不到拉手。设 `ENABLE_CDP_CONSOLE_PANEL=false` 则完全不改动 Selkies 页面。
+
 局限:
 
 * 每个隔离 context 是一个完整的浏览器进程,通常占几百 MB 内存。`CDP_CONTEXTS_MAX` 限制同时运行的数量;超出上限时,新建 context 会返回明确的 CDP 错误。
@@ -304,6 +306,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CDP_CONTEXTS_HEADLESS`     | 与 `CHROMIUM_HEADLESS` 相同 | `1` = context 浏览器无界面运行;`0` = 有界面,显示在桌面上(串流里可见)                                                                    |
 | `CDP_CONTEXTS_DIR`          | `/browser/contexts`         | 每个隔离 context 的浏览器(profile 克隆)存放目录;每次启动清空,不得位于 `CHROMIUM_USER_DATA_DIR` 之内;与 profile 放在同一挂载上,克隆才能用 reflink               |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | 网关回环端口(nginx 后面)                                                                                                                |
+| `ENABLE_CDP_CONSOLE_PANEL`  | `true`                      | 网关和 Selkies 都启用时:在 Selkies 页面右边缘加一个 CDP 控制台侧边栏(设置了 Selkies 登录时需要主密码);`false` = 不加侧边栏 |
 
 **桌面 / 容器**
 
@@ -531,7 +534,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 ## 安全注意事项
 
 * **CDP 端点没有认证。** 一次 TCP 连接即获得完整的浏览器控制权 —— `9222` 只发布到 localhost 或可信网络,绝不要暴露公网 IP。使用 [host 网络](#host-网络compose)时没有端口映射可以限制它,请设置 `NGINX_LISTEN_ADDR=127.0.0.1`。
-* **CDP 网关的隔离 context 继承你真实的登录态。** 设置 `ENABLE_CDP_GATEWAY=true` 后,每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 与 CDP 端口一样没有认证。
+* **CDP 网关的隔离 context 继承你真实的登录态。** 设置 `ENABLE_CDP_GATEWAY=true` 后,每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 与 CDP 端口一样没有认证。web UI 端口上的侧边栏副本(`cdp-console/`)则跟随 Selkies 登录:只认主密码,web UI 未设登录时则不鉴权。
 * **Web UI 默认无认证。** 只要串流可能被不信任的人访问,就设置 `SELKIES_BASIC_AUTH_PASSWORD`;同时配合 HTTPS(纯 HTTP + basic auth 会泄露密码)。
 * Chromium 以 `--no-sandbox` 运行(容器化 Chrome 在没有允许 userns 的 seccomp 配置时的标准做法);请把容器当作"暴露一个浏览器"来对待,放在专用的用户/VM 里。
 * 生成的 TLS 密钥是自签的 —— 浏览器会告警,属预期;对公网服务请换用正式证书。
