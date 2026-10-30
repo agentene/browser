@@ -148,17 +148,6 @@
 #                                resize). No window manager runs on Xvfb, so
 #                                without it the window keeps its startup
 #                                size; false = the window stays as launched
-#   CHROMIUM_LOCK_WINDOWS=true   keep the headed browser windows (main + CDP
-#                                contexts) maximized with their tab strip and
-#                                address bar: no minimize/maximize buttons,
-#                                no title bar double-click, no dragging the
-#                                window or its edges; Minimize/Restore from
-#                                the tab strip's context menu are undone
-#                                right away. Wayland only — on the
-#                                Xvfb display no window manager runs, so
-#                                none of that exists there anyway; false =
-#                                labwc's default bindings (a double-click or
-#                                a drag on the tab strip un-maximizes)
 #   PORT_FORWARDS=""             extra reverse proxies served by nginx, e.g.
 #                                "3080=peer:80 6080=other:6080" (space or
 #                                comma separated): each LISTEN=HOST:PORT entry
@@ -317,9 +306,6 @@ config_chromium() {
     # Screen follower for the headed chromium window (started next to
     # chromium, see chromium.sh); ignored when chromium runs headless.
     CHROMIUM_FOLLOW_SCREEN="${CHROMIUM_FOLLOW_SCREEN:-true}"
-    # Window lock for the Wayland desktop (labwc bindings/rules in
-    # display-wayland.sh, chromium's title bar settings in chromium.sh).
-    CHROMIUM_LOCK_WINDOWS="${CHROMIUM_LOCK_WINDOWS:-true}"
 }
 
 config_cdp_gateway() {

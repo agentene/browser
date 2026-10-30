@@ -330,7 +330,6 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `DISPLAY`           | `:0`           | *仅 X11。* Xvfb 的 display;若该编号在当前网络命名空间里已被占用(在跑着 X/Xwayland 的机器上使用 host 网络),自动换用下一个空闲编号并记录日志                                                                                      |
 | `ENABLE_COMPOSITOR` | `true`         | *仅 X11。* 在 Xvfb 显示器上运行合成器(picom),让 Chromium 的弹出菜单(右键菜单)保留投影 —— 没有合成器时菜单会渲染成看似无边框的白色贴片;`false` = 恢复旧的扁平外观                                                                |
 | `CHROMIUM_FOLLOW_SCREEN` | `true` | *仅 X11*(labwc 自己保持窗口最大化)。屏幕尺寸改变时(Selkies 按浏览器窗口动态调整分辨率,见 `SCREEN_GEOMETRY_MAX`)让有头 Chromium 窗口始终铺满整个显示器 —— Xvfb 上没有窗口管理器,否则窗口保持启动时的尺寸(屏幕变大时周围是黑边,变小时被裁切);只调整浏览器主窗口,弹出窗口和独立的 DevTools 窗口保持各自尺寸;`false` = 窗口保持启动时的样子 |
-| `CHROMIUM_LOCK_WINDOWS` | `true` | *仅 Wayland*(Xvfb 上没有窗口管理器,本来就没有可锁的东西)。让有头浏览器窗口(主浏览器和 CDP 隔离 context)保持最大化并保留标签栏和地址栏:只显示关闭按钮,双击/中键标签栏空白处无效,拖动窗口或窗口边缘(包括 Alt+拖动)都无法移动或调整大小,标签栏右键菜单里的「最小化」/「恢复」会在不到一秒内被撤销。`false` = labwc 默认绑定(双击或拖动标签栏会取消最大化) |
 | `PIXELFLUX_HOST_CAPTURE` | `zwlr` | *仅 Wayland*(pixelflux 原生设置)。Selkies 采集 labwc 的方式:`zwlr` = wlr-screencopy;其他任意值(如 `auto`)让 pixelflux 优先用 ext-image-copy-capture,而 labwc 无法导入它分配的 GPU 缓冲 —— 有 GPU 时串流根本起不来 |
 | `RUN_USER`          | *(空)*         | 桌面栈(Xvfb 或 labwc、picom、PulseAudio、selkies、chromium、CDP 网关)与 nginx *worker* 以该用户而非 root 运行 —— 已存在的用户名(如 `browser`)或 `uid[:gid]`;PID 1 与 nginx master 保持 root。见[权限降级(`RUN_USER`)](#权限降级run_user) |
 
@@ -420,7 +419,7 @@ DISPLAY_BACKEND=wayland
 
 开启后的变化:
 
-* 浏览器窗口由 labwc 最大化,保留标签栏和地址栏;`CHROMIUM_LOCK_WINDOWS=true`(默认)时无法在画面里最小化、取消最大化、移动或调整大小;弹出窗口和右键菜单由合成器原生合成(不需要 picom)。Alt+Tab 切换窗口;CDP 控制台的 *Show on desktop* 通过 labwc 把窗口提到最前。
+* 浏览器窗口由 labwc 最大化,保留标签栏和地址栏,并且始终锁定:只显示关闭按钮,双击/中键标签栏空白处无效,拖动窗口或窗口边缘(包括 Alt+拖动)都无法移动或调整大小,标签栏右键菜单里的「最小化」/「恢复」会在不到一秒内被撤销(负责撤销的监视进程在没有窗口时休眠,空桌面不占 CPU);弹出窗口和右键菜单由合成器原生合成(不需要 picom)。Alt+Tab 切换窗口;CDP 控制台的 *Show on desktop* 通过 labwc 把窗口提到最前。
 * labwc 自己的 60 Hz 帧时钟驱动浏览器,不论是否有人在看串流;被其他窗口挡住的窗口也照常渲染,所以自动化的行为与 Xvfb 上一致。
 * 鼠标指针只由 Selkies 客户端在本地绘制,没有串流延迟(labwc 自己的指针不进入视频画面 —— 否则它会延迟跟随,形成第二个"重影"指针)。指针始终是箭头:screencopy 不携带光标形状,所以不像 `x11` 那样有文本/手形光标。
 * Selkies 按浏览器窗口调整分辨率(`SELKIES_ENABLE_RESIZE=true`)时调整的是 labwc 的输出;不开启时输出保持 `SCREEN_GEOMETRY`。

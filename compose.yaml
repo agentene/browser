@@ -214,12 +214,6 @@ services:
       # screen is resized (Selkies' browser-driven resize); no window manager
       # runs on Xvfb to do it. false = the window keeps its startup size.
       CHROMIUM_FOLLOW_SCREEN: "${CHROMIUM_FOLLOW_SCREEN:-true}"
-      # Wayland only: keep the browser windows (main + CDP contexts) maximized
-      # with tab strip and address bar — no minimize/maximize buttons, no
-      # tab strip double-click, no dragging windows or their edges, and the
-      # context menu's Minimize/Restore are undone right away. false =
-      # labwc's default bindings (a double-click un-maximizes).
-      CHROMIUM_LOCK_WINDOWS: "${CHROMIUM_LOCK_WINDOWS:-true}"
 
       # --- Privilege drop ---
       # Run the desktop stack (Xvfb/labwc, picom, PulseAudio, selkies, chromium,

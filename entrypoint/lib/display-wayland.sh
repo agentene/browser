@@ -28,23 +28,20 @@ display_wayland_start() {
 # Its default keybinds are replaced on purpose — they would take e.g.
 # Alt+Left/Right (back/forward in chromium) for window snapping; Alt+Tab
 # still cycles windows.
-# CHROMIUM_LOCK_WINDOWS: the default mouse bindings are replaced by the
-# click-to-focus ones alone (defining any mousebind drops all defaults), so
+# The windows are locked, always: the default mouse bindings are replaced
+# by the click-to-focus ones alone (defining any mousebind drops all defaults), so
 # Alt+drag, border drags, title bar buttons and the root menu (whose Exit
 # would end labwc, and the container with it) do nothing; and fixedPosition
 # refuses the interactive move/resize chromium asks for when its tab strip
 # or edges are dragged — on a maximized window that move first restores it
 # to a small centered one.
 wayland_write_config() {
-    local labwc_mouse="" labwc_lock_rule="" button
-    if [ "${CHROMIUM_LOCK_WINDOWS}" = "true" ]; then
-        labwc_mouse='<mouse><context name="Client">'
-        for button in Left Middle Right; do
-            labwc_mouse+="<mousebind button=\"${button}\" action=\"Press\"><action name=\"Focus\"/><action name=\"Raise\"/></mousebind>"
-        done
-        labwc_mouse+='</context></mouse>'
-        labwc_lock_rule='<windowRule identifier="*" fixedPosition="yes"/>'
-    fi
+    local labwc_mouse button
+    labwc_mouse='<mouse><context name="Client">'
+    for button in Left Middle Right; do
+        labwc_mouse+="<mousebind button=\"${button}\" action=\"Press\"><action name=\"Focus\"/><action name=\"Raise\"/></mousebind>"
+    done
+    labwc_mouse+='</context></mouse>'
     mkdir -p /tmp/labwc
     cat >/tmp/labwc/rc.xml <<LABWCRC
 <?xml version="1.0"?>
@@ -56,7 +53,7 @@ wayland_write_config() {
   ${labwc_mouse}
   <windowRules>
     <windowRule identifier="*"><action name="Maximize"/></windowRule>
-    ${labwc_lock_rule}
+    <windowRule identifier="*" fixedPosition="yes"/>
   </windowRules>
 </labwc_config>
 LABWCRC
@@ -120,10 +117,9 @@ wayland_size_output() {
     fi
 }
 
-# CHROMIUM_LOCK_WINDOWS, the part labwc cannot refuse: undo Minimize/Restore
-# from chromium's tab strip context menu (see the helper).
+# The window lock's part labwc cannot refuse: undo Minimize/Restore from
+# chromium's tab strip context menu (see the helper).
 wayland_start_window_lock() {
-    [ "${CHROMIUM_LOCK_WINDOWS}" = "true" ] || return 0
     log "starting window lock (re-maximizes/unminimizes browser windows)"
     start_service /tmp/window-lock.log \
         "${DROP[@]}" bash "${ENTRYPOINT_HELPERS}/window-lock.sh"

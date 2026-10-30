@@ -200,7 +200,7 @@ chromium_build_env() {
     # menu (with Minimize/Restore) ignores these settings; the window lock
     # loop next to labwc (display-wayland.sh) undoes what it does.
     CHROMIUM_ENV=()
-    if [ "${DISPLAY_BACKEND}" = "wayland" ] && [ "${CHROMIUM_LOCK_WINDOWS}" = "true" ]; then
+    if [ "${DISPLAY_BACKEND}" = "wayland" ]; then
         mkdir -p /tmp/chromium-config/glib-2.0/settings
         cat >/tmp/chromium-config/glib-2.0/settings/keyfile <<'GSKEYFILE'
 [org/gnome/desktop/wm/preferences]
