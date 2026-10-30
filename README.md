@@ -289,6 +289,15 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `SELKIES_ENCODER`             | `h264enc` | `h264enc` \| `h264enc-striped` \| `openh264enc` \| `jpeg` |
 | `SELKIES_EXTRA_ARGS`          | *(empty)* | extra CLI flags appended to `selkies`                     |
 | `SELKIES_ENABLE_RESIZE`       | `false`   | `true` = browser-driven resize: the virtual display follows the viewer's browser window size (X11 headroom: `SCREEN_GEOMETRY_MAX`) |
+| `SELKIES_VIDEO_ON_START` | `true` | video stream starts with the session; `false` = off until the side menu toggle |
+| `SELKIES_AUDIO_ENABLED` | `true` | audio support; `false` tears audio down entirely, microphone included |
+| `SELKIES_AUDIO_ON_START` | `false` | audio stream (container → viewer) starts with the session; `false` = off until the side menu toggle |
+| `SELKIES_MICROPHONE_ENABLED` | `true` | accept the viewer's microphone (fed to Chromium as the `SelkiesVirtualMic` PulseAudio source) |
+| `SELKIES_MICROPHONE_ON_START` | `false` | `true` = ask for the microphone on connect, `false` = wait for the side menu toggle, `demand` = only while an app records |
+| `SELKIES_WEBCAM_ENABLED` | `true` | accept the viewer's webcam (forwarded to selkies' virtual V4L2 device) |
+| `SELKIES_WEBCAM_ON_START` | `false` | `true` \| `false` \| `demand`, like `SELKIES_MICROPHONE_ON_START` |
+| `SELKIES_GAMEPAD_ENABLED` | `true` | gamepad support |
+| `SELKIES_GAMEPAD_ON_START` | `false` | poll the viewer's gamepads from the start; `false` = off until the side menu toggle |
 | `SELKIES_SUBFOLDER`           | *(empty)* | URL path prefix of the web UI, e.g. `/desk` → `http://host:8080/desk/`; empty = site root (see [Serving under a subpath](#serving-under-a-subpath)) |
 | `SELKIES_INTERNAL_PORT`       | `8081`    | loopback port Selkies binds to (behind nginx)             |
 

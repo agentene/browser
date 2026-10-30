@@ -7,6 +7,7 @@ selkies_start() {
     local auth_flag extra_args=()
     auth_flag="$(selkies_auth_flag)"
     selkies_backend_args
+    selkies_media_defaults
     [ -n "${SELKIES_EXTRA_ARGS:-}" ] && read -r -a extra_args <<< "${SELKIES_EXTRA_ARGS}"
 
     log "starting selkies on ${SELKIES_ADDR}:${SELKIES_INTERNAL_PORT} (${DISPLAY_BACKEND}, encoder ${SELKIES_ENCODER:-h264enc}, path ${SELKIES_SUBFOLDER:-/}, fronted by nginx)"
@@ -47,6 +48,23 @@ selkies_auth_flag() {
         log "no SELKIES_BASIC_AUTH_PASSWORD set -> serving without login" >&2
         echo "--enable-basic-auth=false"
     fi
+}
+
+# Media defaults, as the native SELKIES_* env vars so a user value (including
+# a "|locked" suffix) wins. Every media path is available but only the video
+# stream starts with the session: audio, microphone, webcam and gamepads wait
+# for the side menu toggle (selkies itself starts audio and gamepads, and has
+# microphone and webcam off).
+selkies_media_defaults() {
+    export SELKIES_VIDEO_ON_START="${SELKIES_VIDEO_ON_START:-true}"
+    export SELKIES_AUDIO_ENABLED="${SELKIES_AUDIO_ENABLED:-true}"
+    export SELKIES_AUDIO_ON_START="${SELKIES_AUDIO_ON_START:-false}"
+    export SELKIES_MICROPHONE_ENABLED="${SELKIES_MICROPHONE_ENABLED:-true}"
+    export SELKIES_MICROPHONE_ON_START="${SELKIES_MICROPHONE_ON_START:-false}"
+    export SELKIES_WEBCAM_ENABLED="${SELKIES_WEBCAM_ENABLED:-true}"
+    export SELKIES_WEBCAM_ON_START="${SELKIES_WEBCAM_ON_START:-false}"
+    export SELKIES_GAMEPAD_ENABLED="${SELKIES_GAMEPAD_ENABLED:-true}"
+    export SELKIES_GAMEPAD_ON_START="${SELKIES_GAMEPAD_ON_START:-false}"
 }
 
 # Display-backend specific selkies flags, into SELKIES_BACKEND_ARGS.

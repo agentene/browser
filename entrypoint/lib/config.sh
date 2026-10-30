@@ -36,7 +36,16 @@
 #   SELKIES_ENCODER=h264enc      h264enc | h264enc-striped | openh264enc | jpeg
 #   SELKIES_ENABLE_RESIZE=false  browser-driven resize of the virtual display
 #   SELKIES_EXTRA_ARGS=""        extra selkies CLI flags (word-split)
-#                                (these three are defaulted in selkies.sh; other
+#   SELKIES_VIDEO_ON_START=true
+#   SELKIES_AUDIO_ENABLED=true         (false also disables the microphone)
+#   SELKIES_AUDIO_ON_START=false       media defaults (native selkies
+#   SELKIES_MICROPHONE_ENABLED=true    settings; "|locked" pins a value
+#   SELKIES_MICROPHONE_ON_START=false  against the client): everything is
+#   SELKIES_WEBCAM_ENABLED=true        available, only the video stream
+#   SELKIES_WEBCAM_ON_START=false      starts with the session — the rest
+#   SELKIES_GAMEPAD_ENABLED=true       waits for the side menu toggle
+#   SELKIES_GAMEPAD_ON_START=false
+#                                (these are defaulted in selkies.sh; other
 #                                native SELKIES_* settings pass through as-is)
 #   DISPLAY_BACKEND=x11          desktop the browser windows live on: x11 =
 #                                Xvfb (+ picom), captured by Selkies through

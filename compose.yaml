@@ -135,6 +135,19 @@ services:
       SELKIES_SUBFOLDER: "${SELKIES_SUBFOLDER:-}"
       # Extra CLI flags passed to `selkies`
       SELKIES_EXTRA_ARGS: "${SELKIES_EXTRA_ARGS:-}"
+      # Media: *_ENABLED = the server accepts it, *_ON_START = it starts with
+      # the session (else it waits for the side menu toggle); "|locked"
+      # stops viewers from changing a value
+      SELKIES_VIDEO_ON_START: "${SELKIES_VIDEO_ON_START:-true}"
+      # false = no audio at all, which also disables the microphone
+      SELKIES_AUDIO_ENABLED: "${SELKIES_AUDIO_ENABLED:-true}"
+      SELKIES_AUDIO_ON_START: "${SELKIES_AUDIO_ON_START:-false}"
+      SELKIES_MICROPHONE_ENABLED: "${SELKIES_MICROPHONE_ENABLED:-true}"
+      SELKIES_MICROPHONE_ON_START: "${SELKIES_MICROPHONE_ON_START:-false}"
+      SELKIES_WEBCAM_ENABLED: "${SELKIES_WEBCAM_ENABLED:-true}"
+      SELKIES_WEBCAM_ON_START: "${SELKIES_WEBCAM_ON_START:-false}"
+      SELKIES_GAMEPAD_ENABLED: "${SELKIES_GAMEPAD_ENABLED:-true}"
+      SELKIES_GAMEPAD_ON_START: "${SELKIES_GAMEPAD_ON_START:-false}"
 
       # --- Chromium / CDP ---
       # 0 (default) = headed on the desktop, visible in the Selkies stream;

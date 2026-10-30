@@ -289,6 +289,15 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `SELKIES_ENCODER`             | `h264enc` | `h264enc` \| `h264enc-striped` \| `openh264enc` \| `jpeg` |
 | `SELKIES_EXTRA_ARGS`          | *(空)*    | 追加到 `selkies` 的额外 CLI 参数                          |
 | `SELKIES_ENABLE_RESIZE`       | `false`   | `true` = 由浏览器驱动调整分辨率:虚拟显示器跟随观看端浏览器窗口大小(X11 下的余量见 `SCREEN_GEOMETRY_MAX`) |
+| `SELKIES_VIDEO_ON_START` | `true` | 会话开始时即推送视频;`false` = 需在侧边栏手动打开 |
+| `SELKIES_AUDIO_ENABLED` | `true` | 音频支持;`false` = 彻底关闭音频,麦克风也随之不可用 |
+| `SELKIES_AUDIO_ON_START` | `false` | 会话开始时即推送音频(容器 → 观看端);`false` = 需在侧边栏手动打开 |
+| `SELKIES_MICROPHONE_ENABLED` | `true` | 接受观看端麦克风(作为 PulseAudio 源 `SelkiesVirtualMic` 提供给 Chromium) |
+| `SELKIES_MICROPHONE_ON_START` | `false` | `true` = 连接即申请麦克风,`false` = 等侧边栏手动打开,`demand` = 仅在有应用录音时申请 |
+| `SELKIES_WEBCAM_ENABLED` | `true` | 接受观看端摄像头(转发到 selkies 的虚拟 V4L2 设备) |
+| `SELKIES_WEBCAM_ON_START` | `false` | `true` \| `false` \| `demand`,同 `SELKIES_MICROPHONE_ON_START` |
+| `SELKIES_GAMEPAD_ENABLED` | `true` | 游戏手柄支持 |
+| `SELKIES_GAMEPAD_ON_START` | `false` | 一开始就轮询观看端手柄;`false` = 需在侧边栏手动打开 |
 | `SELKIES_SUBFOLDER`           | *(空)*    | Web UI 的 URL 路径前缀,如 `/desk` → `http://host:8080/desk/`;空 = 站点根路径(见[挂载到子路径](#挂载到子路径)) |
 | `SELKIES_INTERNAL_PORT`       | `8081`    | Selkies 绑定的回环端口(nginx 后面)                        |
 
