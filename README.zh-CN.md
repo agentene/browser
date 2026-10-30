@@ -198,7 +198,9 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 * 有 CDP 客户端连接时(`/json/version`、`/json/new`、浏览器级 WebSocket)。客户端无需改动,第一次连接只是多等浏览器启动的一两秒;
 * 在 `/console/` 或 Selkies 侧边栏里点主浏览器卡片上的 **Start browser**。
 
-关闭主浏览器(关掉它的窗口,或点卡片上的 **Stop**)不会让容器退出,只会断开它的 CDP 客户端。**Stop** 的关闭方式与关窗口相同,cookie 和会话会先保存到 profile。列表类请求(`/json/list`、`/console/api`)不会启动它,所以 `ENABLE_SELKIES=false` 时 compose 的 healthcheck 改为探测 `/console/api`。隔离 context 无需额外处理:它的客户端经由主浏览器连接,会顺带把主浏览器启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。
+关闭主浏览器(关掉它的窗口,或点卡片上的 **Stop**)不会让容器退出,只会断开它的 CDP 客户端。**Stop** 的关闭方式与关窗口相同,cookie 和会话会先保存到 profile。列表类请求(`/json/list`、`/console/api`)不会启动它,所以 `ENABLE_SELKIES=false` 时 compose 的 healthcheck 改为探测 `/console/api`。隔离 context 无需额外处理:它的客户端经由主浏览器连接,会顺带把主浏览器启动起来。
+
+把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端连接、没有隔离 context、也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。
 
 局限:
 
@@ -298,6 +300,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_LANG`             | `en-US`                                                                                             | 浏览器 UI 语言 + `Accept-Language`(如 `zh-CN`)                                                                                                                                    |
 | `CHROMIUM_START_URL`        | `about:blank`                                                                                       | 启动时打开的页面                                                                                                                                                                  |
 | `CHROMIUM_AUTOSTART`        | `true`                                                                                              | `false` = 容器启动时不启动主浏览器(需 `ENABLE_CDP_GATEWAY=true`):首个 CDP 客户端连接或在 CDP 控制台点 *Start browser* 时才启动,关闭它也不会让容器退出([详情](#cdp-网关带登录态的隔离-context)) |
+| `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 配合 `CHROMIUM_AUTOSTART=false`:主浏览器空闲(无 CDP 客户端、无隔离 context、无人观看串流)多少分钟后自动关闭;`0` = 不自动关闭 |
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
 | `CHROMIUM_DISABLE_FEATURES` | `HttpsFirstBalancedModeAutoEnable,HttpsUpgrades,HttpsFirstModeV2`(compose 默认;不用 compose 时为空) | 逗号分隔的特性列表,以 `--disable-features=` 传给 chromium —— 关闭 HTTPS-First / HTTPS-Upgrade 实验;在 `.env` 里设为空可去掉该参数                                                 |

@@ -44,7 +44,12 @@ cdp_gateway_start() {
         console_password="${SELKIES_BASIC_AUTH_PASSWORD:-${PASSWORD:-${PASSWD:-}}}"
     fi
 
-    log "starting CDP gateway on 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT} (main browser autostart=${CHROMIUM_AUTOSTART}, max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR})"
+    # Selkies viewers keep the idle timer from closing the main browser
+    # (someone may be using it by hand); no stream, nobody to watch.
+    local viewer_port=""
+    [ "${ENABLE_SELKIES}" = "true" ] && viewer_port="${SELKIES_INTERNAL_PORT}"
+
+    log "starting CDP gateway on 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT} (main browser autostart=${CHROMIUM_AUTOSTART} idle-timeout=${CHROMIUM_IDLE_TIMEOUT}m, max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR})"
     start_service /tmp/cdp-gateway.log \
         env CHROME_BIN="${CHROME_BIN}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
         CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT}" CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" \
@@ -53,6 +58,7 @@ cdp_gateway_start() {
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
         CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD="${console_password}" \
         CDP_MAIN_CHROMIUM_PID="${CHROMIUM_PID}" CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \
+        CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT}" CDP_GATEWAY_VIEWER_PORT="${viewer_port}" \
         CDP_GATEWAY_MAIN_FLAGS_FILE="${CHROMIUM_MAIN_FLAGS_FILE}" "${CHROMIUM_ENV[@]}" \
         "${DROP[@]}" node /usr/local/lib/cdp-gateway/gateway.mjs
 }

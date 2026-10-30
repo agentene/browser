@@ -25,7 +25,8 @@
 // With CHROMIUM_AUTOSTART=false the gateway also owns the main browser
 // (MainBrowser): nothing runs until the first CDP client or the console's
 // "Start", and the browser may exit (window closed, "Stop") without taking
-// the container down.
+// the container down. CHROMIUM_IDLE_TIMEOUT closes it again after that many
+// idle minutes (watchIdle).
 //
 // Also serves /json/* (with URLs rewritten to the public host:port the
 // client dialed) and a small dashboard + API under /console/, plus the
@@ -52,6 +53,9 @@ const CHROME_BIN = env.CHROME_BIN;
 const FLAGS_FILE = env.CDP_GATEWAY_FLAGS_FILE || '/tmp/cdp-gateway-chromium-flags';
 const MAIN_FLAGS_FILE = env.CDP_GATEWAY_MAIN_FLAGS_FILE || '/tmp/cdp-gateway-main-flags';
 const MAIN_LOG = '/tmp/chromium.log';
+const IDLE_TIMEOUT_MS = intEnv('CHROMIUM_IDLE_TIMEOUT', 0) * 60_000;
+// Selkies' loopback port: an open connection there is someone watching
+const VIEWER_PORT = intEnv('CDP_GATEWAY_VIEWER_PORT', 0);
 const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
@@ -205,6 +209,7 @@ class MainBrowser {
     this.state = this.onDemand ? 'stopped' : 'running'; // | 'starting'
     this.proc = null;
     this.starting = null; // the launch in progress, shared by concurrent callers
+    this.lastActive = Date.now(); // last time watchIdle saw it in use
   }
 
   get running() {
@@ -260,6 +265,7 @@ class MainBrowser {
         if (this.proc !== proc) throw new Error(`main chromium exited during startup, see ${MAIN_LOG}`);
         if (await fetchJson(MAIN_PORT, '/json/version').then(() => true, () => false)) {
           this.state = 'running';
+          this.lastActive = Date.now();
           log(`main browser up on 127.0.0.1:${MAIN_PORT} (pid ${proc.pid}, ${Date.now() - t0}ms)`);
           return;
         }
@@ -303,6 +309,45 @@ class MainBrowser {
 }
 
 const mainBrowser = new MainBrowser();
+
+// Established TCP connections to a local port (both directions of a loopback
+// connection appear; any > 0 is what counts). nginx keeps no idle upstream
+// connections, so outside a request only a viewer's stream WebSocket is open.
+function connectionsTo(port) {
+  const hex = `:${port.toString(16).toUpperCase().padStart(4, '0')}`;
+  let n = 0;
+  for (const file of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let text = '';
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split('\n').slice(1)) {
+      const [, local, , state] = line.trim().split(/\s+/);
+      if (state === '01' && local?.endsWith(hex)) n++;
+    }
+  }
+  return n;
+}
+
+// Close an on-demand main browser nobody has used for IDLE_TIMEOUT_MS. In
+// use: a CDP client connected (browser or page WebSocket), an isolated
+// context alive or starting, a Selkies viewer connected.
+function watchIdle() {
+  if (!mainBrowser.onDemand || !IDLE_TIMEOUT_MS) return;
+  const busy = () => muxes.size > 0 || relays > 0 || contexts.size > 0 || creating > 0
+    || (VIEWER_PORT > 0 && connectionsTo(VIEWER_PORT) > 0);
+  setInterval(() => {
+    if (!mainBrowser.running) return;
+    if (busy()) {
+      mainBrowser.lastActive = Date.now();
+    } else if (Date.now() - mainBrowser.lastActive >= IDLE_TIMEOUT_MS) {
+      log(`main browser idle for ${IDLE_TIMEOUT_MS / 60_000} min (no CDP client, context or viewer): closing it`);
+      mainBrowser.stop();
+    }
+  }, Math.min(15_000, IDLE_TIMEOUT_MS / 4)).unref();
+}
 
 // --- contexts ---------------------------------------------------------------
 class Context {
@@ -1192,7 +1237,10 @@ function clientAddress(req) {
 }
 
 // /devtools/page/<id>: a plain relay to whichever chromium owns the target.
+let relays = 0; // open ones, for watchIdle
 function relay(client, upstreamUrl) {
+  relays++;
+  client.once('close', () => { relays--; });
   const upstream = new WebSocket(upstreamUrl, { perMessageDeflate: false, maxPayload: MAX_PAYLOAD });
   const queue = [];
   upstream.on('open', () => {
@@ -1249,11 +1297,13 @@ log(`profile clones: ${await probeReflink()}`);
 const server = http.createServer((req, res) => {
   handleHttp(req, res);
 });
+watchIdle();
 server.on('upgrade', (req, socket, head) => {
   handleUpgrade(req, socket, head);
 });
 server.listen(LISTEN_PORT, '127.0.0.1', () => {
-  log(`listening on 127.0.0.1:${LISTEN_PORT} (main chromium on :${MAIN_PORT}${mainBrowser.onDemand ? ', started on demand' : ''}, max ${MAX_CONTEXTS} contexts, data in ${CONTEXTS_DIR})`);
+  const idle = IDLE_TIMEOUT_MS ? `, closed after ${IDLE_TIMEOUT_MS / 60_000} idle min` : '';
+  log(`listening on 127.0.0.1:${LISTEN_PORT} (main chromium on :${MAIN_PORT}${mainBrowser.onDemand ? `, started on demand${idle}` : ''}, max ${MAX_CONTEXTS} contexts, data in ${CONTEXTS_DIR})`);
 });
 
 async function shutdown(signal) {

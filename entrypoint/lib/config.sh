@@ -96,6 +96,12 @@
 #                                browser WebSocket) or from the CDP console
 #                                ("Start"); closing it leaves the container
 #                                running instead of restarting it
+#   CHROMIUM_IDLE_TIMEOUT=0      (CHROMIUM_AUTOSTART=false only) minutes the
+#                                on-demand main browser may sit idle before
+#                                the gateway closes it (orderly, like Stop);
+#                                idle = no CDP client connected, no isolated
+#                                context, nobody watching the Selkies stream.
+#                                0 = never
 #   CHROMIUM_USER_DATA_DIR=/browser/user-data  the persisted browser profile
 #   CHROMIUM_EXTRA_ARGS=""      extra chromium flags (word-split), appended
 #                               after the entrypoint's own so they win
@@ -287,6 +293,14 @@ config_chromium() {
         true|false) : ;;
         *) die "CHROMIUM_AUTOSTART='${CHROMIUM_AUTOSTART}' must be true or false" ;;
     esac
+    # Minutes until the gateway closes an idle on-demand main browser; 0 = never.
+    CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT:-0}"
+    case "${CHROMIUM_IDLE_TIMEOUT}" in
+        ''|*[!0-9]*) die "CHROMIUM_IDLE_TIMEOUT='${CHROMIUM_IDLE_TIMEOUT}' must be a number of minutes (0 = never)" ;;
+    esac
+    if [ "${CHROMIUM_IDLE_TIMEOUT}" -gt 0 ] && [ "${CHROMIUM_AUTOSTART}" != "false" ]; then
+        die "CHROMIUM_IDLE_TIMEOUT needs CHROMIUM_AUTOSTART=false (only an on-demand main browser can be closed and started again)"
+    fi
     CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR:-/browser/user-data}"
     # Browser UI locale + Accept-Language; en-US by default (env override: any
     # other locale, e.g. zh-CN).
