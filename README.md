@@ -289,6 +289,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `SELKIES_ENCODER`             | `h264enc` | `h264enc` \| `h264enc-striped` \| `openh264enc` \| `jpeg` |
 | `SELKIES_EXTRA_ARGS`          | *(empty)* | extra CLI flags appended to `selkies`                     |
 | `SELKIES_ENABLE_RESIZE`       | `false`   | `true` = browser-driven resize: the virtual display follows the viewer's browser window size (X11 headroom: `SCREEN_GEOMETRY_MAX`) |
+| `SELKIES_VIDEO_STREAMING_MODE` | `false` | Turbo: `true` = encode every frame like a plain video encoder, a still desktop included (constant CPU while a viewer watches, ~2.5% of a core at 1080p); `false` = encode only frames that changed, so a still screen costs next to nothing. The side menu toggles it live for video or games |
 | `SELKIES_VIDEO_ON_START` | `true` | video stream starts with the session; `false` = off until the side menu toggle |
 | `SELKIES_AUDIO_ENABLED` | `true` | audio support; `false` tears audio down entirely, microphone included |
 | `SELKIES_AUDIO_ON_START` | `false` | audio stream (container → viewer) starts with the session; `false` = off until the side menu toggle |

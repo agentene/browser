@@ -55,7 +55,13 @@ selkies_auth_flag() {
 # stream starts with the session: audio, microphone, webcam and gamepads wait
 # for the side menu toggle (selkies itself starts audio and gamepads, and has
 # microphone and webcam off).
+# Turbo (video_streaming_mode) is off: selkies would encode every frame even
+# of a still desktop, ~2.5% of a core at 1080p for as long as a viewer
+# watches; damage-gated, a still screen costs next to nothing and changes
+# still stream at the full frame rate. The side menu turns it on for video
+# or games.
 selkies_media_defaults() {
+    export SELKIES_VIDEO_STREAMING_MODE="${SELKIES_VIDEO_STREAMING_MODE:-false}"
     export SELKIES_VIDEO_ON_START="${SELKIES_VIDEO_ON_START:-true}"
     export SELKIES_AUDIO_ENABLED="${SELKIES_AUDIO_ENABLED:-true}"
     export SELKIES_AUDIO_ON_START="${SELKIES_AUDIO_ON_START:-false}"

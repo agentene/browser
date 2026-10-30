@@ -36,6 +36,9 @@
 #   SELKIES_ENCODER=h264enc      h264enc | h264enc-striped | openh264enc | jpeg
 #   SELKIES_ENABLE_RESIZE=false  browser-driven resize of the virtual display
 #   SELKIES_EXTRA_ARGS=""        extra selkies CLI flags (word-split)
+#   SELKIES_VIDEO_STREAMING_MODE=false  Turbo: encode every frame, still
+#                                ones too (native selkies setting); false =
+#                                only frames that changed
 #   SELKIES_VIDEO_ON_START=true
 #   SELKIES_AUDIO_ENABLED=true         (false also disables the microphone)
 #   SELKIES_AUDIO_ON_START=false       media defaults (native selkies

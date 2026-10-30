@@ -289,6 +289,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `SELKIES_ENCODER`             | `h264enc` | `h264enc` \| `h264enc-striped` \| `openh264enc` \| `jpeg` |
 | `SELKIES_EXTRA_ARGS`          | *(空)*    | 追加到 `selkies` 的额外 CLI 参数                          |
 | `SELKIES_ENABLE_RESIZE`       | `false`   | `true` = 由浏览器驱动调整分辨率:虚拟显示器跟随观看端浏览器窗口大小(X11 下的余量见 `SCREEN_GEOMETRY_MAX`) |
+| `SELKIES_VIDEO_STREAMING_MODE` | `false` | Turbo 模式:`true` = 像普通视频编码器一样逐帧编码,静止桌面也不例外(有人观看时 CPU 恒定占用,1080p 下约单核 2.5%);`false` = 只编码有变化的帧,静止画面几乎不占 CPU。看视频或玩游戏时可在侧边栏实时打开 |
 | `SELKIES_VIDEO_ON_START` | `true` | 会话开始时即推送视频;`false` = 需在侧边栏手动打开 |
 | `SELKIES_AUDIO_ENABLED` | `true` | 音频支持;`false` = 彻底关闭音频,麦克风也随之不可用 |
 | `SELKIES_AUDIO_ON_START` | `false` | 会话开始时即推送音频(容器 → 观看端);`false` = 需在侧边栏手动打开 |
