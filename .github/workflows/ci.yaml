@@ -216,6 +216,96 @@ jobs:
           curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/api | jq -e '.main' >/dev/null
           echo "CDP console sidebar smoke test OK"
 
+      - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
+        run: |
+          set -euo pipefail
+          docker run -d --name ondemand-smoke -p 9226:9222 \
+            -e ENABLE_CDP_GATEWAY=true -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker exec ondemand-smoke cat /tmp/cdp-gateway.log || true; docker logs ondemand-smoke || true; docker rm -f ondemand-smoke >/dev/null' EXIT
+          state() { curl -sf http://127.0.0.1:9226/console/api | jq -r .main.state; }
+          nchrome() { docker exec ondemand-smoke sh -c 'pgrep -c -x chrome || true'; }
+          up() { [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' ondemand-smoke)" = "true 0" ]; }
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9226/console/api >/dev/null && break
+            sleep 1
+          done
+          # no chromium until something asks for it; listings do not
+          [ "$(state)" = stopped ]
+          [ "$(curl -sf http://127.0.0.1:9226/json/list)" = "[]" ]
+          [ "$(nchrome)" = 0 ]
+          # the console starts it; the browser closing itself (last window)
+          # leaves the container running
+          curl -sf -X POST http://127.0.0.1:9226/console/api/main/start | jq -e '.state == "running"' >/dev/null
+          docker exec -i ondemand-smoke node --input-type=module - <<'EOF'
+          const v = await (await fetch('http://127.0.0.1:9221/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+          EOF
+          for i in $(seq 1 20); do [ "$(state)" = stopped ] && break; sleep 0.5; done
+          [ "$(state)" = stopped ]
+          up
+          # a CDP client starts it by itself (the cookie is set through it);
+          # Stop leaves the container running too
+          docker exec -i -e MODE=set ondemand-smoke node --input-type=module - <<'EOF'
+          // set (or check) a persistent cookie over raw CDP
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          const send = (method, params = {}) => new Promise((r) => { ws.onmessage = (e) => r(JSON.parse(e.data).result); ws.send(JSON.stringify({ id: 1, method, params })); });
+          if (process.env.MODE === 'set') {
+            await send('Storage.setCookies', { cookies: [{ name: 'ci_marker', value: '1', domain: 'example.com', path: '/', expires: Date.now() / 1000 + 3600 }] });
+          } else if (!(await send('Storage.getCookies')).cookies.some((c) => c.name === 'ci_marker')) {
+            throw new Error('cookie set right before the restart is gone');
+          }
+          ws.close();
+          EOF
+          curl -sf -X POST http://127.0.0.1:9226/console/api/main/stop | jq -e '.state == "stopped"' >/dev/null
+          [ "$(nchrome)" = 0 ]
+          up
+          # the cookie survives Stop, and a restart (the stop hook closes an
+          # on-demand browser the orderly way as well)
+          docker exec -i -e MODE=check ondemand-smoke node --input-type=module - <<'EOF'
+          // set (or check) a persistent cookie over raw CDP
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          const send = (method, params = {}) => new Promise((r) => { ws.onmessage = (e) => r(JSON.parse(e.data).result); ws.send(JSON.stringify({ id: 1, method, params })); });
+          if (process.env.MODE === 'set') {
+            await send('Storage.setCookies', { cookies: [{ name: 'ci_marker', value: '1', domain: 'example.com', path: '/', expires: Date.now() / 1000 + 3600 }] });
+          } else if (!(await send('Storage.getCookies')).cookies.some((c) => c.name === 'ci_marker')) {
+            throw new Error('cookie set right before the restart is gone');
+          }
+          ws.close();
+          EOF
+          docker restart ondemand-smoke >/dev/null
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9226/console/api >/dev/null && break
+            sleep 1
+          done
+          [ "$(state)" = stopped ]
+          docker exec -i -e MODE=check ondemand-smoke node --input-type=module - <<'EOF'
+          // set (or check) a persistent cookie over raw CDP
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          const send = (method, params = {}) => new Promise((r) => { ws.onmessage = (e) => r(JSON.parse(e.data).result); ws.send(JSON.stringify({ id: 1, method, params })); });
+          if (process.env.MODE === 'set') {
+            await send('Storage.setCookies', { cookies: [{ name: 'ci_marker', value: '1', domain: 'example.com', path: '/', expires: Date.now() / 1000 + 3600 }] });
+          } else if (!(await send('Storage.getCookies')).cookies.some((c) => c.name === 'ci_marker')) {
+            throw new Error('cookie set right before the restart is gone');
+          }
+          ws.close();
+          EOF
+          # CHROMIUM_IDLE_TIMEOUT=1: no client, no context, no viewer -> closed
+          # again within about a minute
+          [ "$(state)" = running ]
+          for i in $(seq 1 100); do [ "$(state)" = stopped ] && break; sleep 1; done
+          [ "$(state)" = stopped ]
+          docker exec ondemand-smoke grep -q 'idle for 1 min' /tmp/cdp-gateway.log
+          echo "on-demand main browser smoke test OK"
+
       - name: Smoke test — Wayland desktop (DISPLAY_BACKEND=wayland)
         run: |
           set -euo pipefail
