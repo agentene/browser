@@ -189,7 +189,7 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 * 「Show」把对应浏览器窗口提到 Selkies 画面最前;
 * 「Delete」强制关闭隔离 context 并断开它的客户端。
 
-每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。控制台页面的状态只通过 `/console/ws` WebSocket 获取:连上时先收到一份全量快照,之后只收变化;页面上的操作则是 `/console/api/` 下的普通 HTTP 请求。
+每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。控制台页面的状态只通过 `/console/ws` WebSocket 获取:连上时先收到一份全量快照,之后只收变化;页面上的操作则是 `/console/api/` 下的普通 HTTP 请求。控制台(以及下面的侧边栏)支持英文和简体中文:默认跟随浏览器语言,标题栏的 *中文* / *EN* 按钮可以切换(按浏览器记住)。
 
 同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API 和 WebSocket(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,两者都要求**主密码**(WebSocket 还只接受同源页面的连接):用只读密码登录的用户看不到拉手。设 `ENABLE_CDP_CONSOLE_PANEL=false` 则完全不改动 Selkies 页面。
 

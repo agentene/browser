@@ -177,19 +177,123 @@
       }
       .empty { color:var(--muted); padding:12px; }
     </style>
-    <div class="handle" title="CDP console"></div>
-    <aside class="panel" role="dialog" aria-label="CDP console" inert>
-      <div class="resizer" title="Drag to resize"></div>
+    <div class="handle"></div>
+    <aside class="panel" role="dialog" inert>
+      <div class="resizer"></div>
       <header>
-        <h2>CDP Console</h2><span class="summary"></span>
+        <h2></h2><span class="summary"></span>
         <span class="spacer"></span>
-        <button class="close" aria-label="Close">×</button>
+        <button class="lang" type="button"></button>
+        <button class="close">×</button>
       </header>
       <div class="error"></div>
       <div class="body"></div>
     </aside>`;
   const $ = (sel) => root.querySelector(sel);
   const handle = $('.handle'), panel = $('.panel'), body = $('.body');
+
+  // --- language ---------------------------------------------------------------
+  // English and Simplified Chinese: the viewer's choice (the header's toggle,
+  // remembered per browser), else the browser's languages.
+  const STRINGS = {
+    en: {
+      title: 'CDP Console',
+      loading: 'loading…',
+      langLabel: '中文',
+      langTitle: '切换到中文',
+      mainBrowser: 'Main browser',
+      startTitle: 'Start the main browser on the desktop',
+      starting: 'Starting…',
+      startBrowser: 'Start browser',
+      stateStarting: 'starting',
+      stateStopped: 'stopped',
+      notRunning: 'Not running. It starts on demand: with this button, or by itself when a CDP client connects.',
+      frontTitle: 'This browser window is in front on the desktop',
+      showing: 'Showing',
+      showTitle: 'Bring this browser window to the front of the desktop',
+      show: 'Show',
+      stopTitle: 'Close the main browser; the container keeps running',
+      stopConfirm: 'Stop the main browser? Its CDP clients get disconnected.',
+      stop: 'Stop',
+      deleteTitle: 'Close the context and disconnect its client',
+      deleteConfirm: (name) => `Delete ${name}? Its client gets disconnected.`,
+      delete: 'Delete',
+      shotTitle: 'Show this tab on the desktop',
+      noTabs: 'No open tabs.',
+      untitled: '(untitled)',
+      tabs: (n) => `${n} tab${n === 1 ? '' : 's'}`,
+      mainMeta: 'The persistent profile every isolated context is cloned from.',
+      contextMeta: (client, since, pid) => `client ${client} · since ${since} · pid ${pid}`,
+      summary: (n, max) => `${n} of ${max} contexts`,
+      reconnecting: (s) => `Lost the connection to the CDP gateway, reconnecting in ${s}s…`,
+      resizeTitle: 'Drag to resize',
+      close: 'Close',
+    },
+    zh: {
+      title: 'CDP 控制台',
+      loading: '加载中…',
+      langLabel: 'EN',
+      langTitle: 'Switch to English',
+      mainBrowser: '主浏览器',
+      startTitle: '在桌面上启动主浏览器',
+      starting: '启动中…',
+      startBrowser: '启动浏览器',
+      stateStarting: '启动中',
+      stateStopped: '已停止',
+      notRunning: '未运行。按需启动：点击此按钮，或在有 CDP 客户端连接时自动启动。',
+      frontTitle: '此浏览器窗口位于桌面最前',
+      showing: '显示中',
+      showTitle: '将此浏览器窗口切到桌面最前',
+      show: '显示',
+      stopTitle: '关闭主浏览器，容器继续运行',
+      stopConfirm: '停止主浏览器？它的 CDP 客户端将断开连接。',
+      stop: '停止',
+      deleteTitle: '关闭此上下文并断开其客户端',
+      deleteConfirm: (name) => `删除 ${name}？它的客户端将断开连接。`,
+      delete: '删除',
+      shotTitle: '在桌面上显示此标签页',
+      noTabs: '没有打开的标签页。',
+      untitled: '（无标题）',
+      tabs: (n) => `${n} 个标签页`,
+      mainMeta: '持久化的浏览器配置，每个隔离上下文都从它克隆。',
+      contextMeta: (client, since, pid) => `客户端 ${client} · 创建于 ${since} · pid ${pid}`,
+      summary: (n, max) => `${n} / ${max} 个上下文`,
+      reconnecting: (s) => `与 CDP 网关的连接已断开，${s} 秒后重连…`,
+      resizeTitle: '拖动调整宽度',
+      close: '关闭',
+    },
+  };
+  const LANG_KEY = 'cdp-console-lang';
+  let lang = '';
+  try { lang = localStorage.getItem(LANG_KEY) || ''; } catch { /* storage blocked */ }
+  if (!STRINGS[lang]) lang = navigator.languages?.find((l) => /^(zh|en)\b/i.test(l))?.slice(0, 2).toLowerCase() || 'en';
+  const locale = () => (lang === 'zh' ? 'zh-CN' : 'en');
+
+  function t(key, ...args) {
+    const s = STRINGS[lang][key];
+    return typeof s === 'function' ? s(...args) : s;
+  }
+
+  // Static texts here; the cards are rebuilt in the new language.
+  function setLang(next, save) {
+    lang = next;
+    if (save) {
+      try { localStorage.setItem(LANG_KEY, lang); } catch { /* storage blocked */ }
+    }
+    $('.handle').title = t('title');
+    panel.setAttribute('aria-label', t('title'));
+    $('.resizer').title = t('resizeTitle');
+    $('h2').textContent = t('title');
+    $('.close').setAttribute('aria-label', t('close'));
+    const toggle = $('.lang');
+    toggle.textContent = t('langLabel');
+    toggle.title = t('langTitle');
+    for (const v of views.values()) v.card.remove();
+    views.clear();
+    browsers.forEach((b, name) => update(name));
+    renderSummary();
+  }
+  $('.lang').addEventListener('click', () => setLang(lang === 'zh' ? 'en' : 'zh', true));
 
   // --- open / close ----------------------------------------------------------
   // The live state streams in only while the panel is open.
@@ -258,6 +362,11 @@
   const views = new Map(); // name -> the card's DOM parts, see liveCard()
   let max = 0;
 
+  function renderSummary() {
+    const n = [...browsers.values()].filter((b) => !b.main).length;
+    $('.summary').textContent = views.size ? t('summary', n, max) : '';
+  }
+
   function showError(err) {
     $('.error').textContent = err ? String(err.message || err) : '';
   }
@@ -284,19 +393,19 @@
   // a Start button instead of the tabs.
   function stoppedMainCard(context) {
     const starting = context.state === 'starting';
-    const start = el('button', { class: 'primary', title: 'Start the main browser on the desktop',
+    const start = el('button', { class: 'primary', title: t('startTitle'),
       onclick: () => {
         start.disabled = true;
-        start.textContent = 'Starting…';
+        start.textContent = t('starting');
         call('POST', '/main/start').catch(showError);
-      } }, starting ? 'Starting…' : 'Start browser');
+      } }, starting ? t('starting') : t('startBrowser'));
     start.disabled = starting;
     return { card: el('section', { class: 'card', style: 'border-top: 4px solid var(--line)' },
       el('div', { class: 'card-head' },
-        el('span', { class: 'name' }, 'Main browser'),
-        el('span', { class: 'chip' }, starting ? 'starting' : 'stopped'),
+        el('span', { class: 'name' }, t('mainBrowser')),
+        el('span', { class: 'chip' }, starting ? t('stateStarting') : t('stateStopped')),
         el('span', { class: 'spacer' }), start),
-      el('div', { class: 'empty' }, 'Not running. It starts on demand: with this button, or by itself when a CDP client connects.')) };
+      el('div', { class: 'empty' }, t('notRunning'))) };
   }
 
   // The card's fixed parts; fillCard() keeps the changing ones up to date.
@@ -307,35 +416,35 @@
     const v = { items: new Map(), src: '', shownCurrent: null };
     v.chip = el('span', { class: 'chip' });
     // the browser in front on the desktop shows "Showing" where its Show button was
-    v.frontChip = el('span', { class: 'chip front', title: 'This browser window is in front on the desktop' }, 'Showing');
-    v.show = el('button', { title: 'Bring this browser window to the front of the desktop',
-      onclick: () => call('POST', `${base}/focus`).catch(showError) }, 'Show');
+    v.frontChip = el('span', { class: 'chip front', title: t('frontTitle') }, t('showing'));
+    v.show = el('button', { title: t('showTitle'),
+      onclick: () => call('POST', `${base}/focus`).catch(showError) }, t('show'));
     // the buttons wrap as one group, right-aligned, when the card gets narrow
     const actions = el('span', { class: 'actions' }, v.frontChip, v.show);
     const head = el('div', { class: 'card-head' },
-      el('span', { class: 'name', title: isMain ? 'Main browser' : name }, isMain ? 'Main browser' : name), v.chip,
+      el('span', { class: 'name', title: isMain ? t('mainBrowser') : name }, isMain ? t('mainBrowser') : name), v.chip,
       actions);
     if (isMain && context.onDemand) {
-      actions.append(el('button', { class: 'danger', title: 'Close the main browser; the container keeps running',
-        onclick: () => confirm('Stop the main browser? Its CDP clients get disconnected.')
-          && call('POST', `${base}/stop`).catch(showError) }, 'Stop'));
+      actions.append(el('button', { class: 'danger', title: t('stopTitle'),
+        onclick: () => confirm(t('stopConfirm'))
+          && call('POST', `${base}/stop`).catch(showError) }, t('stop')));
     }
     if (!isMain) {
-      actions.append(el('button', { class: 'danger', title: 'Close the context and disconnect its client',
-        onclick: () => confirm(`Delete ${name}? Its client gets disconnected.`)
-          && call('DELETE', base).catch(showError) }, 'Delete'));
+      actions.append(el('button', { class: 'danger', title: t('deleteTitle'),
+        onclick: () => confirm(t('deleteConfirm', name))
+          && call('DELETE', base).catch(showError) }, t('delete')));
     }
     v.meta = el('div', { class: 'meta' });
     v.img = el('img', { class: 'thumb', alt: '' });
     v.title = el('div', { class: 'cur-title' });
-    const shot = el('div', { class: 'shot', title: 'Show this tab on the desktop' }, v.img, v.title);
+    const shot = el('div', { class: 'shot', title: t('shotTitle') }, v.img, v.title);
     shot.onclick = () => {
       const current = browsers.get(name)?.current;
       if (current) focusTab(name, current);
     };
     v.list = el('ul', { class: 'tabs' });
     v.tabview = el('div', { class: 'tabview' }, shot, el('div', { class: 'tabs-box' }, v.list));
-    v.empty = el('div', { class: 'empty' }, 'No open tabs.');
+    v.empty = el('div', { class: 'empty' }, t('noTabs'));
     // a context's color is also its browser frame color on the desktop
     v.card = el('section', { class: 'card', style: `border-top: 4px solid ${context.color || 'var(--line)'}` },
       head, v.meta, v.tabview, v.empty);
@@ -347,14 +456,14 @@
   // with it.
   function fillCard(context, v) {
     const n = context.tabs.size;
-    v.chip.textContent = `${n} tab${n === 1 ? '' : 's'}`;
+    v.chip.textContent = t('tabs', n);
     // the browser the desktop (and the Selkies stream) shows in front
     v.card.classList.toggle('front', !!context.front);
     v.frontChip.hidden = !context.front;
     v.show.hidden = !!context.front;
     v.meta.textContent = context.main
-      ? 'The persistent profile every isolated context is cloned from.'
-      : `client ${context.client} · since ${new Date(context.createdAt).toLocaleTimeString()} · pid ${context.pid ?? '—'}`;
+      ? t('mainMeta')
+      : t('contextMeta', context.client, new Date(context.createdAt).toLocaleTimeString(locale()), context.pid ?? '—');
     v.tabview.hidden = !n;
     v.empty.hidden = !!n;
     for (const [id, li] of v.items) {
@@ -370,13 +479,13 @@
         v.list.append(li);
       }
       const button = li.firstChild;
-      const title = tab.title || '(untitled)';
+      const title = tab.title || t('untitled');
       if (button.textContent !== title) button.textContent = title;
       button.title = tab.url;
       button.classList.toggle('current', tab.id === context.current);
     }
     const current = context.tabs.get(context.current);
-    v.title.textContent = current ? current.title || '(untitled)' : '';
+    v.title.textContent = current ? current.title || t('untitled') : '';
     v.title.title = current?.url ?? '';
     // the thumbnail of the tab before stays out until the new one's arrives
     const thumb = context.thumb?.id === context.current ? `data:image/jpeg;base64,${context.thumb.jpeg}` : '';
@@ -465,12 +574,11 @@
         for (const name of apply(op)) touched.add(name);
       }
       touched.forEach(update);
-      const n = [...browsers.values()].filter((b) => !b.main).length;
-      $('.summary').textContent = `${n} of ${max} contexts`;
+      renderSummary();
     };
     ws.onclose = () => {
       ws = null;
-      showError(`Lost the connection to the CDP gateway, reconnecting in ${retry / 1000}s…`);
+      showError(t('reconnecting', retry / 1000));
       retryTimer = setTimeout(connect, retry);
       retry = Math.min(retry * 2, 10000);
     };
@@ -483,6 +591,8 @@
     ws.close();
     ws = null;
   }
+
+  setLang(lang, false);
 
   // Running at all means the gateway let this user in: it serves this script
   // uncached, behind the same master password as the console (a view-only
