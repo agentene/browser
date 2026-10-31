@@ -11,8 +11,9 @@ Chrome for Testing browser, a live-viewable Selkies remote desktop, and a
 public CDP endpoint behind one nginx front door. It is an infrastructure
 repo, not an application codebase: the deliverables are a Dockerfile, a bash
 PID-1 supervisor, compose files, a Node version-sync script, and mirrored
-bilingual docs. There is no unit-test suite — "testing" means static lint +
-image build + runtime smoke tests.
+bilingual docs. Apart from the CDP gateway's small `node --test` suite
+there are no unit tests — "testing" means static lint + image build +
+runtime smoke tests.
 
 | Path | Role |
 | --- | --- |
@@ -24,7 +25,7 @@ image build + runtime smoke tests.
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | Every runtime knob, documented |
-| `cdp-gateway/` | Opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): `gateway.mjs` (Node, sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page, `ENABLE_CDP_CONSOLE_PANEL`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
+| `cdp-gateway/` | Opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page, `ENABLE_CDP_CONSOLE_PANEL`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + `.env.example` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
 | `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release |
@@ -44,8 +45,8 @@ docker run --rm -i -e HADOLINT_CONFIG=/.hadolint.yaml \
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 node --check update-chrome-node.mjs
-node --check cdp-gateway/gateway.mjs
-node --check cdp-gateway/panel.js
+for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
+npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 node --check entrypoint/helpers/chromium-close.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .

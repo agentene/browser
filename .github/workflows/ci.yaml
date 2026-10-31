@@ -60,10 +60,14 @@ jobs:
       - name: syntax check (node scripts, entrypoint python helpers)
         run: |
           node --check update-chrome-node.mjs
-          node --check cdp-gateway/gateway.mjs
-          node --check cdp-gateway/panel.js
+          for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
           node --check entrypoint/helpers/chromium-close.mjs
           python3 -m py_compile entrypoint/helpers/*.py
+
+      - name: CDP gateway unit tests
+        run: |
+          npm ci --no-audit --no-fund --prefix cdp-gateway
+          npm test --prefix cdp-gateway
 
       - name: docker build --check (Dockerfile lint, BuildKit)
         run: docker build --check .

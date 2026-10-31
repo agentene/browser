@@ -20,7 +20,8 @@ docker run --rm -i -e HADOLINT_CONFIG=/.hadolint.yaml \
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 node --check update-chrome-node.mjs
-node --check cdp-gateway/gateway.mjs
+for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
+npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 node --check entrypoint/helpers/chromium-close.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .                        # Dockerfile lint (BuildKit)
@@ -45,7 +46,7 @@ the Wayland desktop (see `.github/workflows/ci.yaml`).
 | `entrypoint/helpers/` | scripts the services run (labwc helpers, window lock, screen follower, profile seeding, orderly browser close on stop) |
 | `compose.yaml` | base compose file |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | opt-in overlays: HTTPS, Intel/AMD GPU, NVIDIA GPU, host networking |
-| `cdp-gateway/` | opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): Node service + `/console/` dashboard |
+| `cdp-gateway/` | opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |
 | `.env.example` | documented runtime configuration template |
 | `update-chrome-node.mjs` | version-sync helper (Chrome for Testing ↔ Node) |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag → publish |

@@ -3,6 +3,12 @@
   "private": true,
   "description": "CDP gateway that turns isolated browser contexts into profile-cloned Chromium processes",
   "type": "module",
+  "main": "gateway.mjs",
+  "scripts": {
+    "start": "node gateway.mjs",
+    "check": "for f in gateway.mjs src/*.mjs test/*.mjs panel.js; do node --check \"$f\" || exit 1; done",
+    "test": "node --test 'test/*.test.mjs'"
+  },
   "dependencies": {
     "ws": "8.21.3"
   }

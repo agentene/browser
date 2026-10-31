@@ -257,6 +257,7 @@ COPY cdp-gateway/package.json cdp-gateway/package-lock.json /usr/local/lib/cdp-g
 RUN npm ci --omit=dev --no-audit --no-fund --prefix /usr/local/lib/cdp-gateway && \
     rm -rf ~/.npm/
 COPY cdp-gateway/gateway.mjs cdp-gateway/dashboard.html cdp-gateway/panel.js cdp-gateway/raise-window.py cdp-gateway/front-window.py /usr/local/lib/cdp-gateway/
+COPY cdp-gateway/src/ /usr/local/lib/cdp-gateway/src/
 
 # The supervisor: a thin docker-entrypoint.sh that sources its stage modules
 # (lib/*.sh) and runs the helper scripts (helpers/*) from

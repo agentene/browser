@@ -1,0 +1,153 @@
+// Carrying the main browser's live storage into a new context: what the
+// profile clone may miss because chromium has not written it to disk yet.
+
+import { CdpClient } from './cdp-client.mjs';
+import { MAIN_PORT } from './config.mjs';
+import { fetchJson, pageTargets } from './devtools-http.mjs';
+import { mainBrowser } from './main-browser.mjs';
+import { log, sleep } from './util.mjs';
+
+// Storage.getCookies' cookie as Storage.setCookies' parameter.
+export function cookieParam(c) {
+  const p = {
+    name: c.name, value: c.value, domain: c.domain, path: c.path,
+    secure: c.secure, httpOnly: c.httpOnly, priority: c.priority,
+    sourceScheme: c.sourceScheme, sourcePort: c.sourcePort,
+  };
+  if (c.sameSite) p.sameSite = c.sameSite;
+  if (!c.session) p.expires = c.expires;
+  if (c.partitionKey) p.partitionKey = c.partitionKey;
+  return p;
+}
+
+// What makes a cookie the same cookie in the store.
+export function cookieKey(c) {
+  return `${c.name}\0${c.domain}\0${c.path}\0${JSON.stringify(c.partitionKey ?? null)}`;
+}
+
+// The cookie database is copied while the main browser runs, so it may lag
+// behind the in-memory jar by a flush interval; overlay the live cookies
+// (HttpOnly included) from the main browser to close that gap. Clients
+// reach contexts through the main browser, which starts an on-demand one; if
+// it was stopped in between, its orderly exit left them all on disk.
+export async function copyCookies(contextWsUrl) {
+  if (!mainBrowser.running) return 0;
+  const version = await fetchJson(MAIN_PORT, '/json/version');
+  const main = await CdpClient.connect(version.webSocketDebuggerUrl);
+  let cookies;
+  try {
+    ({ cookies } = await main.send('Storage.getCookies'));
+  } finally {
+    main.close();
+  }
+  const params = cookies.map(cookieParam);
+  const context = await CdpClient.connect(contextWsUrl);
+  let missing = [];
+  try {
+    const set = async (batch) => {
+      try {
+        await context.send('Storage.setCookies', { cookies: batch });
+      } catch {
+        // one malformed cookie fails the whole batch; retry one by one
+        for (const p of batch) {
+          try { await context.send('Storage.setCookies', { cookies: [p] }); } catch { /* counted below */ }
+        }
+      }
+    };
+    const absent = async (batch) => {
+      const have = new Set((await context.send('Storage.getCookies')).cookies.map(cookieKey));
+      return batch.filter((p) => !have.has(cookieKey(p)));
+    };
+    await set(params);
+    // read back: anything chromium dropped after accepting it (startup
+    // cleanup, store loading) gets one more try
+    missing = await absent(params);
+    if (missing.length) {
+      await set(missing);
+      missing = await absent(missing);
+    }
+  } finally {
+    context.close();
+  }
+  if (missing.length) {
+    log(`cookie sync: ${missing.length}/${params.length} cookies missing in the context: ${missing.slice(0, 10).map((c) => `${c.name}@${c.domain}`).join(', ')}`);
+  }
+  return params.length - missing.length;
+}
+
+// localStorage reaches disk lazily too — chromium rate-limits its commits,
+// so a value written seconds (or, after a burst of writes, minutes) ago may
+// not be in the cloned files yet. The origins with such pending writes are
+// the ones open in the main browser, so read their live localStorage through
+// their own tabs (DOMStorage only serves a frame of the same storage key;
+// read-only, runs no page script).
+export async function snapshotLocalStorage() {
+  const snapshot = new Map(); // origin -> [[key, value], ...]
+  for (const target of await pageTargets(MAIN_PORT)) {
+    let origin;
+    try {
+      origin = new URL(target.url).origin;
+    } catch {
+      continue;
+    }
+    if (!/^https?:/.test(origin) || snapshot.has(origin)) continue;
+    let cdp;
+    try {
+      cdp = await CdpClient.connect(`ws://127.0.0.1:${MAIN_PORT}/devtools/page/${target.id}`);
+      const { entries } = await cdp.send('DOMStorage.getDOMStorageItems',
+        { storageId: { storageKey: `${origin}/`, isLocalStorage: true } }, { timeout: 3000 });
+      snapshot.set(origin, entries);
+    } catch (err) {
+      log(`localStorage snapshot of ${origin} skipped: ${err.message}`);
+    } finally {
+      cdp?.close();
+    }
+  }
+  return snapshot;
+}
+
+// Write the snapshot into the context through a temporary tab that "visits"
+// each origin: every request is answered with an empty page (Fetch) and
+// service workers are bypassed, so no site code runs.
+export async function restoreLocalStorage(contextWsUrl, snapshot) {
+  if (!snapshot.size) return 0;
+  const cdp = await CdpClient.connect(contextWsUrl);
+  let restored = 0;
+  try {
+    const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank', background: true });
+    const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+    const opts = { sessionId };
+    cdp.on('Fetch.requestPaused', ({ requestId }) => {
+      cdp.send('Fetch.fulfillRequest', {
+        requestId, responseCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'text/html' }],
+        body: Buffer.from('<html></html>').toString('base64'),
+      }, opts).catch(() => {});
+    });
+    let loaded = () => {};
+    cdp.on('Page.loadEventFired', () => loaded());
+    await cdp.send('Page.enable', {}, opts);
+    await cdp.send('Network.enable', {}, opts);
+    await cdp.send('Network.setBypassServiceWorker', { bypass: true }, opts);
+    await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] }, opts);
+    for (const [origin, entries] of snapshot) {
+      try {
+        const load = new Promise((resolve) => { loaded = resolve; });
+        await cdp.send('Page.navigate', { url: `${origin}/` }, opts);
+        await Promise.race([load, sleep(5000)]);
+        const storageId = { storageKey: `${origin}/`, isLocalStorage: true };
+        await cdp.send('DOMStorage.clear', { storageId }, opts);
+        for (const [key, value] of entries) {
+          await cdp.send('DOMStorage.setDOMStorageItem', { storageId, key, value }, opts);
+        }
+        restored++;
+      } catch (err) {
+        log(`localStorage restore of ${origin} failed: ${err.message}`);
+      }
+    }
+    await cdp.send('Target.closeTarget', { targetId });
+  } finally {
+    cdp.close();
+  }
+  return restored;
+}
