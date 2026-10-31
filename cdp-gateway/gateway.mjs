@@ -1311,22 +1311,28 @@ async function subscribe(ws) {
 }
 
 // Bring a context's (or the main browser's) window to the front of the desktop
-// so it shows up in the Selkies stream.
+// so it shows up in the Selkies stream. A browser whose tabs were all closed
+// (it keeps running without a window) gets a blank tab to show.
 async function focus(name, targetId) {
   const port = portOf(name);
   if (!port) return false;
-  const pages = await pageTargets(port);
-  const id = targetId || pages[0]?.id;
-  if (!id) return false;
+  let id = targetId || (await pageTargets(port))[0]?.id;
+  const opened = !id;
+  if (opened) id = (await fetchJson(port, '/json/new?about:blank', 'PUT')).id;
   await fetch(`http://127.0.0.1:${port}/json/activate/${id}`);
   if (name !== 'main' && env.CDP_CONTEXTS_HEADLESS === '1') return true;
-  if (WAYLAND) {
-    await run('wlrctl', ['toplevel', 'focus', `app_id:${appId(name)}`]);
-  } else {
-    const pid = browserPid(name);
-    if (pid) await run('python3', [path.join(HERE, 'raise-window.py'), String(pid)]);
+  // a freshly opened window may take a moment to map
+  for (let tries = opened ? 20 : 1; tries > 0; tries--) {
+    if (await raise(name) === 0) break;
+    if (tries > 1) await sleep(100);
   }
   return true;
+}
+
+function raise(name) {
+  if (WAYLAND) return run('wlrctl', ['toplevel', 'focus', `app_id:${appId(name)}`]);
+  const pid = browserPid(name);
+  return pid ? run('python3', [path.join(HERE, 'raise-window.py'), String(pid)]) : 1;
 }
 
 function browserPid(name) {
