@@ -46,7 +46,7 @@ the Wayland desktop (see `.github/workflows/ci.yaml`).
 | `entrypoint/helpers/` | scripts the services run (labwc helpers, window lock, screen follower, profile seeding, orderly browser close on stop) |
 | `compose.yaml` | base compose file |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | opt-in overlays: HTTPS, Intel/AMD GPU, NVIDIA GPU, host networking |
-| `cdp-gateway/` | opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |
+| `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |
 | `.env.example` | documented runtime configuration template |
 | `update-chrome-node.mjs` | version-sync helper (Chrome for Testing ↔ Node) |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag → publish |

@@ -5,8 +5,8 @@
 # (NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT / CDP_LISTEN_PORT):
 #   ${NGINX_LISTEN_HTTP_PORT}  -> 127.0.0.1:${SELKIES_INTERNAL_PORT}  web UI, HTTP (always)
 #   ${NGINX_LISTEN_HTTPS_PORT} -> 127.0.0.1:${SELKIES_INTERNAL_PORT}  web UI, TLS (optional)
-#   ${CDP_LISTEN_PORT} -> 127.0.0.1:${CDP_INTERNAL_PORT}     chromium CDP
-#                         (or the CDP gateway with ENABLE_CDP_GATEWAY)
+#   ${CDP_LISTEN_PORT} -> 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT}     CDP gateway
+#                         (which talks to chromium on ${CDP_INTERNAL_PORT})
 # With the CDP console panel (CDP_CONSOLE_PANEL_ACTIVE, config.sh) the web UI
 # also gets the sidebar script injected into its entry page and
 # <subfolder>/cdp-console/ proxied to the gateway's /console/.
@@ -63,8 +63,7 @@ nginx_plan_ports() {
     fi
     if [ "${ENABLE_CDP}" = "true" ]; then
         LISTEN_PORTS+=("${CDP_LISTEN_PORT}")
-        UPSTREAM_PORTS+=("${CDP_INTERNAL_PORT}")
-        [ "${ENABLE_CDP_GATEWAY}" = "true" ] && UPSTREAM_PORTS+=("${CDP_GATEWAY_INTERNAL_PORT}")
+        UPSTREAM_PORTS+=("${CDP_INTERNAL_PORT}" "${CDP_GATEWAY_INTERNAL_PORT}")
     fi
     return 0
 }
@@ -187,14 +186,6 @@ http {
         ''      close;
     }
 
-    # host:port the client dialed the CDP endpoint on (sub_filter target of
-    # the direct chromium proxy below); falls back to \$host
-    # when the client sent no port (or HTTP/1.0 without a Host at all)
-    map \$http_host \$cdp_public_host {
-        default \$http_host;
-        ''      \$host;
-    }
-
     # proxy defaults inherited by every server block below
     proxy_http_version 1.1;
     proxy_set_header Host \$http_host;
@@ -309,11 +300,10 @@ ${fwd_headers}
 EOF
 }
 
-# The CDP listener: straight to chromium, or through the CDP gateway.
+# The CDP listener, through the CDP gateway.
 nginx_cdp_server() {
-    if [ "${ENABLE_CDP_GATEWAY}" = "true" ]; then
-        cat <<EOF
-    # public CDP endpoint, via the CDP gateway (ENABLE_CDP_GATEWAY)
+    cat <<EOF
+    # public CDP endpoint, via the CDP gateway
     server {
         listen ${LISTEN_PREFIX}${CDP_LISTEN_PORT};
         server_name _;
@@ -333,37 +323,6 @@ nginx_cdp_server() {
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection \$connection_upgrade;
             proxy_pass http://127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT};
-        }
-    }
-EOF
-        return 0
-    fi
-    cat <<EOF
-    # public CDP endpoint (DevTools protocol over HTTP + WebSocket)
-    server {
-        listen ${LISTEN_PREFIX}${CDP_LISTEN_PORT};
-        server_name _;
-        location / {
-            # Chromium's DevTools endpoint rejects Host headers that are not
-            # an IP address or "localhost" (DNS-rebinding protection) with
-            # HTTP 500, and it embeds the request's Host into every
-            # webSocketDebuggerUrl it returns. So: rewrite the Host to the
-            # loopback upstream (always accepted) and swap the loopback
-            # host:port inside JSON bodies back to the host:port the client
-            # actually dialed (\$cdp_public_host, from the map above), so the
-            # returned ws:// URLs stay reachable through this proxy.
-            # proxy_set_header is all-or-nothing per level: defining Host
-            # here stops the http-level Upgrade/Connection headers from
-            # being inherited, so repeat them (a lost Upgrade header makes
-            # chromium answer the DevTools WS handshake with HTTP 200).
-            proxy_set_header Host 127.0.0.1:${CDP_INTERNAL_PORT};
-            proxy_set_header Upgrade \$http_upgrade;
-            proxy_set_header Connection \$connection_upgrade;
-            sub_filter_types application/json;
-            sub_filter_once off;
-            sub_filter '127.0.0.1:${CDP_INTERNAL_PORT}' '\$cdp_public_host';
-            proxy_buffering on;
-            proxy_pass http://127.0.0.1:${CDP_INTERNAL_PORT};
         }
     }
 EOF

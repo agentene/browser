@@ -117,7 +117,7 @@ Two independent sets of variables, both set in `.env`: the **container-side** po
 | Web UI (HTTPS, opt-in) | 443                      | `NGINX_LISTEN_HTTPS_PORT` | 8443                | `NGINX_HTTPS_PORT` + [HTTPS](#https) |
 | Chromium CDP           | 9222                     | `CDP_LISTEN_PORT`         | 9222                | `CDP_PORT`                           |
 
-Changing the container-side ports is mainly useful with `network_mode: host` / a shared network namespace, or when peers on the docker network expect specific ports; with plain port publishing the defaults are fine. They must not collide with each other, with `PORT_FORWARDS` listeners, or with the loopback-only `SELKIES_INTERNAL_PORT` / `CDP_INTERNAL_PORT` (and `CDP_GATEWAY_INTERNAL_PORT` with the [CDP gateway](#cdp-gateway-isolated-contexts-with-your-logins)) — the entrypoint fails fast on a clash. With `docker run`, pass them via `-e` and adjust `-p` to match (e.g. `-e CDP_LISTEN_PORT=9333 -p 9222:9333`).
+Changing the container-side ports is mainly useful with `network_mode: host` / a shared network namespace, or when peers on the docker network expect specific ports; with plain port publishing the defaults are fine. They must not collide with each other, with `PORT_FORWARDS` listeners, or with the loopback-only `SELKIES_INTERNAL_PORT` / `CDP_INTERNAL_PORT` / `CDP_GATEWAY_INTERNAL_PORT` (the [CDP gateway](#cdp-gateway-isolated-contexts-with-your-logins)) — the entrypoint fails fast on a clash. With `docker run`, pass them via `-e` and adjust `-p` to match (e.g. `-e CDP_LISTEN_PORT=9333 -p 9222:9333`).
 
 On top of these ports, `PORT_FORWARDS` adds extra listeners that are reverse-proxied to sibling containers on the docker network — see [Docker network (compose)](#docker-network-compose). With host networking there is no publishing at all and the container-side ports are bound on the host directly — see [Host network (compose)](#host-network-compose).
 
@@ -155,12 +155,7 @@ Notes:
 
 ## CDP gateway (isolated contexts with your logins)
 
-An *isolated* CDP client — `browser.newContext()` in Playwright, or a [playwright-cli](https://github.com/microsoft/playwright-cli) session with `"isolated": true` — normally gets a blank in-memory context: none of the logins in the persisted profile. With `ENABLE_CDP_GATEWAY=true` a gateway in front of the CDP port backs every such context with **its own browser** instead: a separate Chromium running on a clone of the main profile. Each isolated context starts out logged in wherever the main browser is, yet nothing it does reaches the main browser or any other isolated context.
-
-```bash
-# .env
-ENABLE_CDP_GATEWAY=true
-```
+An *isolated* CDP client — `browser.newContext()` in Playwright, or a [playwright-cli](https://github.com/microsoft/playwright-cli) session with `"isolated": true` — normally gets a blank in-memory context: none of the logins in the persisted profile. Here a gateway that always sits in front of the CDP port backs every such context with **its own browser** instead: a separate Chromium running on a clone of the main profile. Each isolated context starts out logged in wherever the main browser is, yet nothing it does reaches the main browser or any other isolated context.
 
 Clients need **no changes**: they keep connecting to `http://localhost:9222`. For example, this playwright-cli config gives every `-s=<session>` its own logged-in isolated context:
 
@@ -173,7 +168,7 @@ Clients need **no changes**: they keep connecting to `http://localhost:9222`. Fo
 
 How it works:
 
-* With the gateway enabled, nginx forwards the CDP port to a small gateway (`/usr/local/lib/cdp-gateway/gateway.mjs`).
+* nginx forwards the CDP port to a small gateway (`/usr/local/lib/cdp-gateway/gateway.mjs`).
 * Clients that use the default context (`browser.contexts()[0]`) pass straight through to the main browser, unchanged.
 * When a client creates a new context, the gateway answers `Target.createBrowserContext` itself:
   * it copies the profile, minus caches and the open tabs — an isolated context starts with no pages, like any new context. The copy is a reflink (instant, copy-on-write) when the profile and `CDP_CONTEXTS_DIR` share one mount of an XFS or btrfs filesystem, which the default `/browser` layout provides on such a host; otherwise it is a full copy. The gateway log (`/tmp/cdp-gateway.log`) says which one at startup;
@@ -193,7 +188,7 @@ Each isolated context gets its own browser frame color, matching its console car
 
 The same console also sits **next to the live desktop**: move the pointer to the right edge of the Selkies page and click the handle that appears (on touch screens it always shows). Drag the sidebar's left edge to resize it, up to half the page or 1000px, whichever is less (remembered per browser); its cards follow the width, side by side once there is room. The sidebar has the cards and actions of `/console/`; *Show* raises the window right in the stream you are watching. nginx injects the sidebar script (`cdp-gateway/panel.js`) into the Selkies page and proxies its API and WebSocket (`cdp-console/` next to the page, so `SELKIES_SUBFOLDER` works) to the gateway. With a Selkies login set, both require the **master** password (the WebSocket also only accepts pages of the same origin): users signed in with a view-only password get no handle. Set `ENABLE_CDP_CONSOLE_PANEL=false` to leave the Selkies page untouched.
 
-**Main browser on demand.** With `CHROMIUM_AUTOSTART=false` (the gateway must be on) the container starts without the main browser, so an idle container runs no Chromium at all. The gateway starts it:
+**Main browser on demand.** With `CHROMIUM_AUTOSTART=false` the container starts without the main browser, so an idle container runs no Chromium at all. The gateway starts it:
 
 * when a CDP client connects (`/json/version`, `/json/new`, a browser WebSocket). Clients need no changes; the first connection just waits the second or two the browser needs to start;
 * with **Start browser** on the main browser's card in `/console/` or the Selkies sidebar.
@@ -309,26 +304,25 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_HEADLESS`         | `0`                                                                                                | `0` = headed on the desktop (Xvfb or labwc, visible in the stream); `1` = headless                                                                                                                                                                   |
 | `CHROMIUM_LANG`             | `en-US`                                                                                            | browser UI locale + `Accept-Language` (e.g. `zh-CN`)                                                                                                                                                                                                 |
 | `CHROMIUM_START_URL`        | `about:blank`                                                                                      | page opened at startup                                                                                                                                                                                                                               |
-| `CHROMIUM_AUTOSTART`        | `true`                                                                                             | `false` = no main browser at container start (needs `ENABLE_CDP_GATEWAY=true`): it starts on the first CDP client or with *Start browser* in the CDP console, and closing it keeps the container running ([details](#cdp-gateway-isolated-contexts-with-your-logins)) |
+| `CHROMIUM_AUTOSTART`        | `true`                                                                                             | `false` = no main browser at container start: the CDP gateway starts it on the first CDP client or with *Start browser* in the CDP console, and closing it keeps the container running ([details](#cdp-gateway-isolated-contexts-with-your-logins)) |
 | `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                | with `CHROMIUM_AUTOSTART=false`: minutes the main browser may sit idle (no CDP client, no isolated context, nobody watching the stream) before it is closed again; `0` = never |
 | `CHROMIUM_DEVICE_INTERPOSERS` | `true` | preload Selkies' webcam + gamepad interposers (and fake-udev, built into the image from the Selkies source) into the browsers, isolated contexts included: the viewer's camera shows up as *Selkies Virtual Camera* and its gamepads in the Gamepad API, with no `/dev/video*`, `/dev/uinput` or privileges. Only with `ENABLE_SELKIES=true`; `false` = no preload |
 | `CHROMIUM_EXTRA_ARGS`       | *(empty)*                                                                                          | extra chromium flags, e.g. `--proxy-server=http://host:3128`                                                                                                                                                                                         |
 | `CHROMIUM_GPU`              | `auto`                                                                                             | `auto` = render on a passed-through GPU when one is visible ([GPU passthrough](#gpu-passthrough-optional)), else SwiftShader software — WebGL always works; `off` = force software; `strict` = never allow SwiftShader (WebGL then requires the GPU) |
 | `CHROMIUM_DISABLE_FEATURES` | `HttpsFirstBalancedModeAutoEnable,HttpsUpgrades,HttpsFirstModeV2` (compose; empty without compose) | comma-separated features passed as `--disable-features=` — turns off the HTTPS-First / HTTPS-Upgrade experiments; set empty in `.env` to drop the flag                                                                                               |
 | `CHROMIUM_USER_DATA_DIR`    | `/browser/user-data`                                                                               | browser profile directory (inside the `/browser` mount, see [Persistence](#persistence)); keep it inside the mount when overriding it in `.env`                                                                                                                                                                                               |
-| `CDP_LISTEN_PORT`           | `9222`                                                                                             | container port of the public CDP endpoint (nginx → chromium, or → the CDP gateway; see [Ports](#ports))                                                                                                                                              |
+| `CDP_LISTEN_PORT`           | `9222`                                                                                             | container port of the public CDP endpoint (nginx → the CDP gateway → chromium; see [Ports](#ports))                                                                                                                                                  |
 | `CDP_INTERNAL_PORT`         | `9221`                                                                                             | chromium loopback DevTools port (behind nginx)                                                                                                                                                                                                       |
 
 **CDP gateway** (see [CDP gateway](#cdp-gateway-isolated-contexts-with-your-logins))
 
 | Variable                    | Default                     | Description                                                                                                                                                                     |
 | --------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ENABLE_CDP_GATEWAY`        | `false`                     | `true` = every isolated CDP context gets its own Chromium on a clone of the main profile (inherits its logins, shares nothing back); CDP console at `/console/` on the CDP port |
 | `CDP_CONTEXTS_MAX`          | `4`                         | most isolated contexts alive at once (each is a whole browser); further ones fail with a CDP error                                                                              |
 | `CDP_CONTEXTS_HEADLESS`     | same as `CHROMIUM_HEADLESS` | `1` = context browsers run headless; `0` = headed on the desktop (visible in the stream)                                                                                        |
 | `CDP_CONTEXTS_DIR`          | `/browser/contexts`         | one profile-cloned browser per isolated context; wiped at every start, must not be inside `CHROMIUM_USER_DATA_DIR`; keep it on the same mount as the profile so clones can be reflinks           |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | gateway loopback port (behind nginx)                                                                                                                                            |
-| `ENABLE_CDP_CONSOLE_PANEL`  | `true`                      | with the gateway and Selkies both on: the CDP console as a sidebar on the right edge of the Selkies page (master password required when a Selkies login is set); `false` = no sidebar |
+| `ENABLE_CDP_CONSOLE_PANEL`  | `true`                      | with Selkies and the CDP endpoint both on: the CDP console as a sidebar on the right edge of the Selkies page (master password required when a Selkies login is set); `false` = no sidebar |
 
 **Desktop / container**
 
@@ -473,7 +467,7 @@ PORT_FORWARDS=3080=web:80
 #PORT_FORWARDS=3080=web:80 6080=onlyoffice-documentserver:80
 ```
 
-The forwards are served by the same nginx front door (no extra process): WebSocket-capable, per-request DNS resolution via the container's DNS server (docker's embedded DNS on compose networks) — this container starts fine while a peer is still down (requests 502 until the peer answers) and follows a recreated peer's new IP. A forward listen port must not collide with `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` (80/443/9222 by default), the loopback internals (`SELKIES_INTERNAL_PORT` 8081, `CDP_INTERNAL_PORT` 9221, `CDP_GATEWAY_INTERNAL_PORT` 9220 with the gateway) or any other forward — the entrypoint refuses to start on a clash.
+The forwards are served by the same nginx front door (no extra process): WebSocket-capable, per-request DNS resolution via the container's DNS server (docker's embedded DNS on compose networks) — this container starts fine while a peer is still down (requests 502 until the peer answers) and follows a recreated peer's new IP. A forward listen port must not collide with `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` (80/443/9222 by default), the loopback internals (`SELKIES_INTERNAL_PORT` 8081, `CDP_INTERNAL_PORT` 9221, `CDP_GATEWAY_INTERNAL_PORT` 9220) or any other forward — the entrypoint refuses to start on a clash.
 
 ### Host network (compose)
 
@@ -489,7 +483,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # recommended: keep CDP + web UI off the network
 What changes in this mode:
 
 * Nothing is published; nginx binds its ports on the host directly. `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` default to `NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` / `CDP_PORT` (8080 / 8443 / 9222), so the URLs stay the same as in bridge mode; set them explicitly to override. HTTPS needs only `ENABLE_HTTPS=true` (`compose.https.yaml` is not needed; its port mapping is dropped).
-* The loopback-only internals — `SELKIES_INTERNAL_PORT` (8081), `CDP_INTERNAL_PORT` (9221) and, with `ENABLE_CDP_GATEWAY=true`, `CDP_GATEWAY_INTERNAL_PORT` (9220) — sit on the host's loopback as well (context browsers pick free ports themselves). Move them in `.env` if your own apps use those ports; a bind failure stops the container.
+* The loopback-only internals — `SELKIES_INTERNAL_PORT` (8081), `CDP_INTERNAL_PORT` (9221) and `CDP_GATEWAY_INTERNAL_PORT` (9220) — sit on the host's loopback as well (context browsers pick free ports themselves). Move them in `.env` if your own apps use those ports; a bind failure stops the container.
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` and `hostname` do not apply. `PORT_FORWARDS` still works but resolves names through the host's DNS (container names do not resolve) — usually you just point the browser at `localhost:<port>` directly.
 * If the host runs its own X server on `:0`, the entrypoint picks the next free display automatically. Xvfb listens on its filesystem socket only, so host processes cannot attach to the unauthenticated container display.
 
@@ -555,7 +549,7 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 ## Security considerations
 
 * **The CDP endpoint has no authentication.** Full browser control is one TCP connect away — publish `9222` on localhost or a trusted network only, never on a public IP. With [host networking](#host-network-compose) there is no port mapping to restrict this; use `NGINX_LISTEN_ADDR=127.0.0.1`.
-* **CDP gateway contexts inherit your real logins.** With `ENABLE_CDP_GATEWAY=true`, every isolated client starts out signed in wherever the main browser is. That is the point of the feature, and it is also the risk: hand the CDP endpoint only to automation you would trust with those accounts. The `/console/` page and its API share the CDP port's (lack of) authentication. The sidebar copy on the web UI port (`cdp-console/`) follows the Selkies login instead: master password only, open when the web UI has no login.
+* **CDP gateway contexts inherit your real logins.** Every isolated client starts out signed in wherever the main browser is. That is the point of the feature, and it is also the risk: hand the CDP endpoint only to automation you would trust with those accounts. The `/console/` page and its API share the CDP port's (lack of) authentication. The sidebar copy on the web UI port (`cdp-console/`) follows the Selkies login instead: master password only, open when the web UI has no login.
 * **The web UI is unauthenticated by default.** Set `SELKIES_BASIC_AUTH_PASSWORD` whenever the stream is reachable by anyone you don't trust; use HTTPS alongside it (plain HTTP + basic auth leaks the password).
 * Chromium runs with `--no-sandbox` (standard for containerized Chrome without a seccomp profile that allows userns); run the container as a dedicated user/VM you'd be comfortable exposing a browser to.
 * Generated TLS keys are self-signed — browsers will warn; that is expected. Bring a real certificate for anything public.

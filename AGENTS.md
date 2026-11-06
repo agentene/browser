@@ -25,7 +25,7 @@ runtime smoke tests.
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | Every runtime knob, documented |
-| `cdp-gateway/` | Opt-in CDP gateway (`ENABLE_CDP_GATEWAY`): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page, `ENABLE_CDP_CONSOLE_PANEL`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
+| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page, `ENABLE_CDP_CONSOLE_PANEL`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + `.env.example` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
 | `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release |
@@ -163,15 +163,12 @@ node update-chrome-node.mjs --node 22        # force the Node major
 * **TLS policy:** reuse any parseable cert/key pair that belongs together
   (self-signed counts as valid); self-sign ONLY when no usable pair exists;
   a broken pair fails fast, never gets silently replaced.
-* **CDP proxy details (nginx → chromium, gateway off):** the DevTools Host header is rewritten to the
-  loopback upstream (DNS-rebinding protection) and `webSocketDebuggerUrl`
-  hosts inside JSON responses are `sub_filter`'ed back to the public
-  host:port the client dialed. Changing either side breaks
-  `connectOverCDP` from outside the container.
-* **CDP gateway (`ENABLE_CDP_GATEWAY=true`) takes over the CDP
-  port.** nginx then proxies the whole CDP listener to the gateway
-  without `sub_filter`; the gateway itself rewrites the Host header to the
-  loopback upstream and the ws:// URLs back to the dialed host. Clients must
+* **The CDP gateway always owns the CDP port** (not a knob — there is
+  no direct nginx → chromium path). nginx proxies the whole CDP listener
+  to the gateway without `sub_filter`; the gateway itself rewrites the
+  Host header to the loopback upstream (DevTools' DNS-rebinding
+  protection) and the ws:// URLs in JSON bodies back to the dialed host —
+  changing either breaks `connectOverCDP` from outside. Clients must
   never need changes: default-context traffic passes through verbatim, and
   only an isolated `Target.createBrowserContext` gets its own browser (a
   separate chromium on a profile clone, killed with its context). Context

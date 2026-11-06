@@ -117,7 +117,7 @@ docker run -d --name agentene-browser \
 | Web UI(HTTPS,可选) | 443            | `NGINX_LISTEN_HTTPS_PORT` | 8443           | `NGINX_HTTPS_PORT` + [HTTPS](#https-1) |
 | Chromium CDP       | 9222           | `CDP_LISTEN_PORT`         | 9222           | `CDP_PORT`                             |
 
-修改容器侧端口主要用于 `network_mode: host` / 共享网络命名空间,或 docker 网络里的对端需要特定端口的场景;普通端口发布用默认值即可。它们彼此之间、与 `PORT_FORWARDS` 监听端口、与仅回环的 `SELKIES_INTERNAL_PORT` / `CDP_INTERNAL_PORT`(启用 [CDP 网关](#cdp-网关带登录态的隔离-context)时还有 `CDP_GATEWAY_INTERNAL_PORT`)都不得冲突 —— 冲突时入口脚本直接报错退出。用 `docker run` 时通过 `-e` 传入,并相应调整 `-p`(例如 `-e CDP_LISTEN_PORT=9333 -p 9222:9333`)。
+修改容器侧端口主要用于 `network_mode: host` / 共享网络命名空间,或 docker 网络里的对端需要特定端口的场景;普通端口发布用默认值即可。它们彼此之间、与 `PORT_FORWARDS` 监听端口、与仅回环的 `SELKIES_INTERNAL_PORT` / `CDP_INTERNAL_PORT` / `CDP_GATEWAY_INTERNAL_PORT`([CDP 网关](#cdp-网关带登录态的隔离-context))都不得冲突 —— 冲突时入口脚本直接报错退出。用 `docker run` 时通过 `-e` 传入,并相应调整 `-p`(例如 `-e CDP_LISTEN_PORT=9333 -p 9222:9333`)。
 
 除这些端口外,`PORT_FORWARDS` 可以追加额外的监听端口,反向代理到 docker 网络里的兄弟容器 —— 见 [Docker 网络(compose)](#docker-网络compose)。使用 host 网络时完全没有端口发布,容器侧端口直接绑定在宿主机上 —— 见 [Host 网络(compose)](#host-网络compose)。
 
@@ -155,12 +155,7 @@ await browser.close();  // 只关闭 CDP 会话,不关浏览器
 
 ## CDP 网关(带登录态的隔离 context)
 
-*隔离*的 CDP 客户端,包括 Playwright 里的 `browser.newContext()`,以及配置了 `"isolated": true` 的 [playwright-cli](https://github.com/microsoft/playwright-cli) session,通常拿到的是一个空白、只存在于内存里的 context,持久化 profile 里的登录态一个都没有。设置 `ENABLE_CDP_GATEWAY=true` 后,CDP 端口前的网关会为每个这样的 context 提供**一个独立的浏览器**:一个运行在主 profile 克隆上的独立 Chromium。每个隔离 context 一开始就带着主浏览器的全部登录态,而它做的任何操作都不会影响主浏览器,也不会影响其它隔离 context。
-
-```bash
-# .env
-ENABLE_CDP_GATEWAY=true
-```
+*隔离*的 CDP 客户端,包括 Playwright 里的 `browser.newContext()`,以及配置了 `"isolated": true` 的 [playwright-cli](https://github.com/microsoft/playwright-cli) session,通常拿到的是一个空白、只存在于内存里的 context,持久化 profile 里的登录态一个都没有。本镜像在 CDP 端口前始终运行一个网关,它会为每个这样的 context 提供**一个独立的浏览器**:一个运行在主 profile 克隆上的独立 Chromium。每个隔离 context 一开始就带着主浏览器的全部登录态,而它做的任何操作都不会影响主浏览器,也不会影响其它隔离 context。
 
 客户端**无需任何改动**,照常连接 `http://localhost:9222`。例如下面这份 playwright-cli 配置会让每个 `-s=<session>` 都得到一个自己的、带登录态的隔离 context:
 
@@ -173,7 +168,7 @@ ENABLE_CDP_GATEWAY=true
 
 工作原理:
 
-* 开启后,nginx 把 CDP 端口转发给一个小网关(`/usr/local/lib/cdp-gateway/gateway.mjs`)。
+* nginx 把 CDP 端口转发给一个小网关(`/usr/local/lib/cdp-gateway/gateway.mjs`)。
 * 使用默认 context(`browser.contexts()[0]`)的客户端原样直通到主浏览器,行为不变。
 * 客户端新建 context 时,网关自己处理 `Target.createBrowserContext`:
   * 复制 profile,跳过缓存和已打开的标签页(隔离 context 和任何新建 context 一样从零个页面开始)。当 profile 与 `CDP_CONTEXTS_DIR` 位于同一个 XFS 或 btrfs 挂载上时(默认的 `/browser` 布局在这类宿主机上即满足),复制是 reflink(瞬间完成、写时复制),否则是完整复制。网关日志(`/tmp/cdp-gateway.log`)启动时会写明是哪一种;
@@ -193,7 +188,7 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API 和 WebSocket(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,两者都要求**主密码**(WebSocket 还只接受同源页面的连接):用只读密码登录的用户看不到拉手。设 `ENABLE_CDP_CONSOLE_PANEL=false` 则完全不改动 Selkies 页面。
 
-**按需启动主浏览器。** 设置 `CHROMIUM_AUTOSTART=false`(必须同时开启网关)后,容器启动时不启动主浏览器,闲置的容器里完全没有 Chromium 进程。由网关在以下时机启动它:
+**按需启动主浏览器。** 设置 `CHROMIUM_AUTOSTART=false` 后,容器启动时不启动主浏览器,闲置的容器里完全没有 Chromium 进程。由网关在以下时机启动它:
 
 * 有 CDP 客户端连接时(`/json/version`、`/json/new`、浏览器级 WebSocket)。客户端无需改动,第一次连接只是多等浏览器启动的一两秒;
 * 在 `/console/` 或 Selkies 侧边栏里点主浏览器卡片上的 **Start browser**。
@@ -309,26 +304,25 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_HEADLESS`         | `0`                                                                                                 | `0` = 有头,显示在桌面上(Xvfb 或 labwc,串流可见);`1` = 无头                                                                                                                                  |
 | `CHROMIUM_LANG`             | `en-US`                                                                                             | 浏览器 UI 语言 + `Accept-Language`(如 `zh-CN`)                                                                                                                                    |
 | `CHROMIUM_START_URL`        | `about:blank`                                                                                       | 启动时打开的页面                                                                                                                                                                  |
-| `CHROMIUM_AUTOSTART`        | `true`                                                                                              | `false` = 容器启动时不启动主浏览器(需 `ENABLE_CDP_GATEWAY=true`):首个 CDP 客户端连接或在 CDP 控制台点 *Start browser* 时才启动,关闭它也不会让容器退出([详情](#cdp-网关带登录态的隔离-context)) |
+| `CHROMIUM_AUTOSTART`        | `true`                                                                                              | `false` = 容器启动时不启动主浏览器,由 CDP 网关在首个 CDP 客户端连接或在 CDP 控制台点 *Start browser* 时才启动,关闭它也不会让容器退出([详情](#cdp-网关带登录态的隔离-context)) |
 | `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 配合 `CHROMIUM_AUTOSTART=false`:主浏览器空闲(无 CDP 客户端、无隔离 context、无人观看串流)多少分钟后自动关闭;`0` = 不自动关闭 |
 | `CHROMIUM_DEVICE_INTERPOSERS` | `true` | 把 Selkies 的摄像头 + 手柄 interposer(以及 fake-udev,镜像构建时从 Selkies 源码编译)预加载进浏览器(含隔离 context):观看端摄像头显示为 *Selkies Virtual Camera*,手柄出现在 Gamepad API 中,无需 `/dev/video*`、`/dev/uinput` 或特权。仅在 `ENABLE_SELKIES=true` 时生效;`false` = 不预加载 |
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
 | `CHROMIUM_DISABLE_FEATURES` | `HttpsFirstBalancedModeAutoEnable,HttpsUpgrades,HttpsFirstModeV2`(compose 默认;不用 compose 时为空) | 逗号分隔的特性列表,以 `--disable-features=` 传给 chromium —— 关闭 HTTPS-First / HTTPS-Upgrade 实验;在 `.env` 里设为空可去掉该参数                                                 |
 | `CHROMIUM_USER_DATA_DIR`    | `/browser/user-data`                                                                                | 浏览器配置目录(位于 `/browser` 挂载内,见[持久化](#持久化));在 `.env` 中覆盖时请保持在该挂载内                                                                                                                                                         |
-| `CDP_LISTEN_PORT`           | `9222`                                                                                              | 公开 CDP 端点在容器内的端口(nginx → chromium,或 → CDP 网关;见[端口](#端口))                                                                                                                     |
+| `CDP_LISTEN_PORT`           | `9222`                                                                                              | 公开 CDP 端点在容器内的端口(nginx → CDP 网关 → chromium;见[端口](#端口))                                                                                                                   |
 | `CDP_INTERNAL_PORT`         | `9221`                                                                                              | Chromium 回环 DevTools 端口(nginx 后面)                                                                                                                                           |
 
 **CDP 网关**(见 [CDP 网关](#cdp-网关带登录态的隔离-context))
 
 | 变量                        | 默认值                      | 说明                                                                                                                                    |
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `ENABLE_CDP_GATEWAY`        | `false`                     | `true` = 每个隔离的 CDP context 都获得一个运行在主 profile 克隆上的独立 Chromium(继承登录态,不回写);CDP 控制台在 CDP 端口的 `/console/` |
 | `CDP_CONTEXTS_MAX`          | `4`                         | 同时存在的隔离 context 上限(每个都是完整浏览器);超出后新建 context 返回 CDP 错误                                                        |
 | `CDP_CONTEXTS_HEADLESS`     | 与 `CHROMIUM_HEADLESS` 相同 | `1` = context 浏览器无界面运行;`0` = 有界面,显示在桌面上(串流里可见)                                                                    |
 | `CDP_CONTEXTS_DIR`          | `/browser/contexts`         | 每个隔离 context 的浏览器(profile 克隆)存放目录;每次启动清空,不得位于 `CHROMIUM_USER_DATA_DIR` 之内;与 profile 放在同一挂载上,克隆才能用 reflink               |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | 网关回环端口(nginx 后面)                                                                                                                |
-| `ENABLE_CDP_CONSOLE_PANEL`  | `true`                      | 网关和 Selkies 都启用时:在 Selkies 页面右边缘加一个 CDP 控制台侧边栏(设置了 Selkies 登录时需要主密码);`false` = 不加侧边栏 |
+| `ENABLE_CDP_CONSOLE_PANEL`  | `true`                      | Selkies 和 CDP 端点都启用时:在 Selkies 页面右边缘加一个 CDP 控制台侧边栏(设置了 Selkies 登录时需要主密码);`false` = 不加侧边栏 |
 
 **桌面 / 容器**
 
@@ -473,7 +467,7 @@ PORT_FORWARDS=3080=web:80
 #PORT_FORWARDS=3080=web:80 6080=onlyoffice-documentserver:80
 ```
 
-转发由同一个 nginx 前门提供(无额外进程):支持 WebSocket;经容器的 DNS 服务器(compose 网络下即 docker 内嵌 DNS)按请求解析对端 —— 对端容器还没起来时本容器照常启动(对端上线前请求返回 502),对端重建换 IP 后也能自动跟上。转发监听端口不得与 `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT`(默认 80/443/9222)、仅回环的内部端口(`SELKIES_INTERNAL_PORT` 8081、`CDP_INTERNAL_PORT` 9221、启用网关时的 `CDP_GATEWAY_INTERNAL_PORT` 9220)或其他转发端口冲突 —— 冲突时入口脚本拒绝启动。
+转发由同一个 nginx 前门提供(无额外进程):支持 WebSocket;经容器的 DNS 服务器(compose 网络下即 docker 内嵌 DNS)按请求解析对端 —— 对端容器还没起来时本容器照常启动(对端上线前请求返回 502),对端重建换 IP 后也能自动跟上。转发监听端口不得与 `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT`(默认 80/443/9222)、仅回环的内部端口(`SELKIES_INTERNAL_PORT` 8081、`CDP_INTERNAL_PORT` 9221、`CDP_GATEWAY_INTERNAL_PORT` 9220)或其他转发端口冲突 —— 冲突时入口脚本拒绝启动。
 
 ### Host 网络(compose)
 
@@ -489,7 +483,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # 建议:CDP 与 Web UI 不暴露到网络
 该模式下的变化:
 
 * 不发布任何端口,nginx 直接在宿主机上绑定端口。`NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` 默认取 `NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` / `CDP_PORT`(8080 / 8443 / 9222),访问地址与 bridge 模式保持一致;显式设置即可覆盖。HTTPS 只需 `ENABLE_HTTPS=true`(不需要 `compose.https.yaml`,它的端口映射会被丢弃)。
-* 仅回环的内部端口 —— `SELKIES_INTERNAL_PORT`(8081)、`CDP_INTERNAL_PORT`(9221),以及开启 `ENABLE_CDP_GATEWAY=true` 时的 `CDP_GATEWAY_INTERNAL_PORT`(9220)—— 同样占用宿主机回环(context 浏览器自行选择空闲端口)。若与你自己的应用冲突,在 `.env` 里换掉;端口绑定失败会导致容器退出。
+* 仅回环的内部端口 —— `SELKIES_INTERNAL_PORT`(8081)、`CDP_INTERNAL_PORT`(9221)和 `CDP_GATEWAY_INTERNAL_PORT`(9220)—— 同样占用宿主机回环(context 浏览器自行选择空闲端口)。若与你自己的应用冲突,在 `.env` 里换掉;端口绑定失败会导致容器退出。
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` 与 `hostname` 不再生效。`PORT_FORWARDS` 仍可用,但通过宿主机的 DNS 解析(容器名无法解析)—— 通常直接让浏览器访问 `localhost:<端口>` 即可。
 * 若宿主机自己在 `:0` 上跑着 X server,入口脚本会自动换用下一个空闲 display。Xvfb 只监听文件系统 socket,宿主机进程无法接入容器里无认证的 display。
 
@@ -555,7 +549,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 ## 安全注意事项
 
 * **CDP 端点没有认证。** 一次 TCP 连接即获得完整的浏览器控制权 —— `9222` 只发布到 localhost 或可信网络,绝不要暴露公网 IP。使用 [host 网络](#host-网络compose)时没有端口映射可以限制它,请设置 `NGINX_LISTEN_ADDR=127.0.0.1`。
-* **CDP 网关的隔离 context 继承你真实的登录态。** 设置 `ENABLE_CDP_GATEWAY=true` 后,每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 与 CDP 端口一样没有认证。web UI 端口上的侧边栏副本(`cdp-console/`)则跟随 Selkies 登录:只认主密码,web UI 未设登录时则不鉴权。
+* **CDP 网关的隔离 context 继承你真实的登录态。** 每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 与 CDP 端口一样没有认证。web UI 端口上的侧边栏副本(`cdp-console/`)则跟随 Selkies 登录:只认主密码,web UI 未设登录时则不鉴权。
 * **Web UI 默认无认证。** 只要串流可能被不信任的人访问,就设置 `SELKIES_BASIC_AUTH_PASSWORD`;同时配合 HTTPS(纯 HTTP + basic auth 会泄露密码)。
 * Chromium 以 `--no-sandbox` 运行(容器化 Chrome 在没有允许 userns 的 seccomp 配置时的标准做法);请把容器当作"暴露一个浏览器"来对待,放在专用的用户/VM 里。
 * 生成的 TLS 密钥是自签的 —— 浏览器会告警,属预期;对公网服务请换用正式证书。

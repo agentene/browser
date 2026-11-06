@@ -4,8 +4,8 @@
 // logins (cookies, localStorage, IndexedDB, service workers, ...) while
 // staying isolated from the main browser and from each other.
 //
-// Started by docker-entrypoint.sh when ENABLE_CDP_GATEWAY=true; nginx then
-// proxies the whole public CDP port here instead of to chromium directly.
+// Started by docker-entrypoint.sh whenever the CDP endpoint is on; nginx
+// proxies the whole public CDP port here, never to chromium directly.
 //
 // How it works (clients need no changes — see README "CDP gateway"):
 //   * every browser-level DevTools WebSocket gets a Mux that speaks to the

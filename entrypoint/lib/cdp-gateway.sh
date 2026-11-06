@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# cdp-gateway.sh — the CDP gateway (ENABLE_CDP_GATEWAY).
+# cdp-gateway.sh — the CDP gateway (always on with ENABLE_CDP).
 #
 # A Node gateway between nginx and chromium. Default-context clients pass
 # through to the main browser untouched; an isolated client's

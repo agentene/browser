@@ -155,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name gateway-smoke -p 9223:9222 \
-            -e ENABLE_SELKIES=false -e ENABLE_CDP_GATEWAY=true \
+            -e ENABLE_SELKIES=false \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec gateway-smoke cat /tmp/cdp-gateway.log || true; docker logs gateway-smoke || true; docker rm -f gateway-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
@@ -207,7 +207,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name panel-smoke -p 9225:9222 -p 8082:80 \
-            -e ENABLE_CDP_GATEWAY=true -e SELKIES_BASIC_AUTH_PASSWORD=pw \
+            -e SELKIES_BASIC_AUTH_PASSWORD=pw \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec panel-smoke cat /tmp/cdp-gateway.log /tmp/nginx/error.log || true; docker logs panel-smoke || true; docker rm -f panel-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
@@ -239,7 +239,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name ondemand-smoke -p 9226:9222 \
-            -e ENABLE_CDP_GATEWAY=true -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 \
+            -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec ondemand-smoke cat /tmp/cdp-gateway.log || true; docker logs ondemand-smoke || true; docker rm -f ondemand-smoke >/dev/null' EXIT
           # the main browser's state, from the console's live state snapshot

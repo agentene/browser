@@ -249,7 +249,7 @@ ENV PULSE_SERVER="unix:/tmp/pulse/native"
 # docker run -p / compose ports.
 EXPOSE 80 443 9222
 
-# CDP gateway (opt-in, ENABLE_CDP_GATEWAY): a Node service between
+# CDP gateway (always on with the CDP endpoint): a Node service between
 # nginx and chromium that gives every isolated CDP context its own browser on
 # a clone of the main profile. Its single dependency (ws) is pinned in
 # package-lock.json and installed reproducibly with npm ci.

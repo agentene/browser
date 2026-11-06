@@ -19,8 +19,8 @@
 #       CDP_LISTEN_PORT <- CDP_PORT         <- 9222  (CDP endpoint)
 #     Setting NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT / CDP_LISTEN_PORT in .env wins.
 #   * the loopback-only internals bind on the host's loopback too:
-#     SELKIES_INTERNAL_PORT (8081), CDP_INTERNAL_PORT (9221) and, with
-#     ENABLE_CDP_GATEWAY=true, CDP_GATEWAY_INTERNAL_PORT (9220). Move them in
+#     SELKIES_INTERNAL_PORT (8081), CDP_INTERNAL_PORT (9221) and
+#     CDP_GATEWAY_INTERNAL_PORT (9220). Move them in
 #     .env if your own apps use those ports — a bind failure stops the
 #     container.
 #   * nginx listens on ALL host interfaces unless NGINX_LISTEN_ADDR is set;

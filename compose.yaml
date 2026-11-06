@@ -160,8 +160,7 @@ services:
       CHROMIUM_LANG: "${CHROMIUM_LANG:-en-US}"
       # Page opened at startup, e.g. "https://example.com"
       CHROMIUM_START_URL: "${CHROMIUM_START_URL:-about:blank}"
-      # false = no main browser at container start (needs ENABLE_CDP_GATEWAY=
-      # true): the gateway starts it on the first CDP client or from the CDP
+      # false = no main browser at container start: the CDP gateway starts it on the first CDP client or from the CDP
       # console ("Start browser"), and closing it keeps the container running
       CHROMIUM_AUTOSTART: "${CHROMIUM_AUTOSTART:-true}"
       # With CHROMIUM_AUTOSTART=false: minutes the main browser may sit idle
@@ -190,11 +189,10 @@ services:
       CHROMIUM_USER_DATA_DIR: "${CHROMIUM_USER_DATA_DIR:-/browser/user-data}"
 
       # --- CDP gateway ---
-      # true = every isolated CDP context (browser.newContext(), playwright-cli
+      # Every isolated CDP context (browser.newContext(), playwright-cli
       # "isolated": true) gets its own chromium on a clone of the profile above:
       # inherits its logins, shares nothing back; destroyed when the context
       # closes. Dashboard: http://host:${CDP_PORT}/console/
-      ENABLE_CDP_GATEWAY: "${ENABLE_CDP_GATEWAY:-false}"
       # Most isolated contexts alive at once (each is a whole browser)
       CDP_CONTEXTS_MAX: "${CDP_CONTEXTS_MAX:-4}"
       # 1 = context browsers run headless; empty = same as CHROMIUM_HEADLESS
@@ -203,7 +201,7 @@ services:
       # every start); keep it on the /browser mount next to the profile so
       # the clones can be reflinks
       CDP_CONTEXTS_DIR: "${CDP_CONTEXTS_DIR:-/browser/contexts}"
-      # With the gateway on: the CDP console also as a sidebar on the right of
+      # The CDP console also as a sidebar on the right of
       # the Selkies page (needs the Selkies master password when one is set)
       ENABLE_CDP_CONSOLE_PANEL: "${ENABLE_CDP_CONSOLE_PANEL:-true}"
 

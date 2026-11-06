@@ -101,8 +101,8 @@
 #                               unavailable without a GPU
 #   CHROMIUM_START_URL=about:blank  page the main browser opens at startup
 #   CHROMIUM_AUTOSTART=true      false = do not start the main browser with
-#                                the container (needs ENABLE_CDP_GATEWAY=true,
-#                                which then owns it): an idle container runs
+#                                the container (the CDP gateway then owns
+#                                it): an idle container runs
 #                                no chromium at all. The gateway starts it on
 #                                the first CDP client (/json/version, a
 #                                browser WebSocket) or from the CDP console
@@ -125,16 +125,13 @@
 #   CHROMIUM_EXTRA_ARGS=""      extra chromium flags (word-split), appended
 #                               after the entrypoint's own so they win
 #   CDP_INTERNAL_PORT=9221      chromium loopback DevTools port (behind nginx)
-#   ENABLE_CDP_GATEWAY=false     true = put the CDP gateway between nginx and
-#                                chromium: every isolated CDP context
-#                                (Target.createBrowserContext, e.g. a
-#                                playwright-cli session with isolated: true)
-#                                gets its own chromium on a clone of the main
-#                                profile, so it inherits the main browser's
-#                                logins without sharing state; destroyed when
-#                                the context closes. Dashboard: /console/ on
-#                                the CDP port. Clients need no changes.
-#   ENABLE_CDP_CONSOLE_PANEL=true  with the gateway and Selkies both on, add
+#   (the CDP gateway always sits between nginx and chromium: every isolated
+#   CDP context — Target.createBrowserContext, e.g. a playwright-cli session
+#   with isolated: true — gets its own chromium on a clone of the main
+#   profile, so it inherits the main browser's logins without sharing state;
+#   destroyed when the context closes. Dashboard: /console/ on the CDP port.
+#   Clients need no changes.)
+#   ENABLE_CDP_CONSOLE_PANEL=true  with Selkies and the CDP endpoint both on, add
 #                                the CDP console as a sidebar on the right of
 #                                the Selkies page (nginx injects
 #                                cdp-gateway/panel.js; its API needs Selkies'
@@ -295,7 +292,7 @@ config_chromium() {
     CHROMIUM_HEADLESS="${CHROMIUM_HEADLESS:-0}"
     CHROMIUM_START_URL="${CHROMIUM_START_URL:-about:blank}"
     # Main browser at container start (true) or on demand through the CDP
-    # gateway (false; checked against ENABLE_CDP_GATEWAY in config_cdp_gateway).
+    # gateway (false).
     CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART:-true}"
     case "${CHROMIUM_AUTOSTART}" in
         true|false) : ;;
@@ -335,7 +332,6 @@ config_chromium() {
 config_cdp_gateway() {
     # CDP gateway: isolated CDP contexts become profile-cloned browsers
     # (cdp-gateway.sh).
-    ENABLE_CDP_GATEWAY="${ENABLE_CDP_GATEWAY:-false}"
     CDP_GATEWAY_INTERNAL_PORT="${CDP_GATEWAY_INTERNAL_PORT:-9220}" # gateway loopback port (behind nginx)
     CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX:-4}"
     CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR:-/browser/contexts}"
@@ -348,14 +344,8 @@ config_cdp_gateway() {
     # (nginx.sh, cdp-gateway.sh); silently off otherwise.
     CDP_CONSOLE_PANEL_ACTIVE=false
     if [ "${ENABLE_CDP_CONSOLE_PANEL}" = "true" ] && [ "${ENABLE_SELKIES}" = "true" ] \
-        && [ "${ENABLE_CDP}" = "true" ] && [ "${ENABLE_CDP_GATEWAY}" = "true" ]; then
+        && [ "${ENABLE_CDP}" = "true" ]; then
         CDP_CONSOLE_PANEL_ACTIVE=true
-    fi
-    # An on-demand main browser is started, watched and stopped by the gateway;
-    # without it nothing could ever start the browser.
-    if [ "${CHROMIUM_AUTOSTART}" = "false" ] && [ "${ENABLE_CDP}" = "true" ] \
-        && [ "${ENABLE_CDP_GATEWAY}" != "true" ]; then
-        die "CHROMIUM_AUTOSTART=false needs ENABLE_CDP_GATEWAY=true (the gateway starts the main browser on demand)"
     fi
     case "${CDP_CONTEXTS_MAX}" in
         ''|*[!0-9]*|0) die "CDP_CONTEXTS_MAX='${CDP_CONTEXTS_MAX}' must be a positive number" ;;
