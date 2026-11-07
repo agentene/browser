@@ -50,7 +50,7 @@ the Wayland desktop (see `.github/workflows/ci.yaml`).
 | `.env.example` | documented runtime configuration template |
 | `update-chrome-node.mjs` | version-sync helper (Chrome for Testing ↔ Node) |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag → publish |
-| `.github/workflows/chrome-update.yaml` | daily Chrome for Testing (Stable) watch → bump PR → auto-merge → release |
+| `.github/workflows/chrome-update.yaml` | daily Chrome for Testing (Stable) watch → bump PR → auto-merge → release → `chore/chrome-update` branch cleanup (in `ci.yaml`) |
 | `examples/` | CDP client examples |
 
 ## Guidelines
