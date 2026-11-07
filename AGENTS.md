@@ -28,7 +28,7 @@ runtime smoke tests.
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page, `ENABLE_CDP_CONSOLE_PANEL`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + `.env.example` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
-| `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release |
+| `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release (ci.yaml's `cleanup-update-branch` then deletes `chore/chrome-update`) |
 | `examples/` | CDP client examples (`connect-playwright.mjs`, `webgl-renderer-probe.mjs`) |
 | `README.md` / `README.zh-CN.md` | Mirrored EN / zh-CN user docs |
 
@@ -213,8 +213,9 @@ semver). Merging to main a change of the `ARG CHROME_VERSION` pin makes the
 re-release),
 which triggers the `publish` job (GHCR always; Docker Hub when the
 `DOCKERHUB_*` secrets exist). The daily `chrome-update.yaml` cron opens
-the bump PR and auto-merges it once CI is green. Manual `v*` tags still
-work.
+the bump PR and auto-merges it once CI is green; the `cleanup-update-branch`
+job in `ci.yaml` then deletes the merged `chore/chrome-update` branch.
+Manual `v*` tags still work.
 
 ## Commit style
 
