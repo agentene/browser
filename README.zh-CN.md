@@ -535,7 +535,8 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 3. `ci.yaml` 在该 PR 上运行(lint + 完整构建 + 冒烟测试);
 4. CI 全绿后 PR 以 squash 方式自动合并;
 5. `ci.yaml` 中的 `release-tag` job 推送标签 `v<chrome 版本>`;
-6. 标签事件触发 `publish` job → 镜像发布到 GHCR / Docker Hub。
+6. 标签事件触发 `publish` job → 镜像发布到 GHCR / Docker Hub;
+7. `ci.yaml` 中的 `cleanup-update-branch` job 删除已合并的 `chore/chrome-update` 分支(若新一轮 bump 已复用该分支则保留)。
 
 若 `v150.0.7871.100` 已被占用(同一 Chrome 版本重新发布),标签自动递增为 `v150.0.7871.100-r2`、`-r3`、……
 
