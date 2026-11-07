@@ -135,6 +135,9 @@ services:
       SELKIES_SUBFOLDER: "${SELKIES_SUBFOLDER:-}"
       # Extra CLI flags passed to `selkies`
       SELKIES_EXTRA_ARGS: "${SELKIES_EXTRA_ARGS:-}"
+      # Browser-driven resize: the virtual display follows the viewer's
+      # browser window size; false = it stays at SCREEN_GEOMETRY
+      SELKIES_ENABLE_RESIZE: "${SELKIES_ENABLE_RESIZE:-true}"
       # Turbo: encode every frame, a still desktop too; false = only changed
       # frames (the side menu turns it on for video or games)
       SELKIES_VIDEO_STREAMING_MODE: "${SELKIES_VIDEO_STREAMING_MODE:-false}"

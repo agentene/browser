@@ -34,7 +34,8 @@
 #                                additionally redirects / and /desk to /desk/
 #   SELKIES_BASIC_AUTH_PASSWORD  set it to enable the login screen
 #   SELKIES_ENCODER=h264enc      h264enc | h264enc-striped | openh264enc | jpeg
-#   SELKIES_ENABLE_RESIZE=false  browser-driven resize of the virtual display
+#   SELKIES_ENABLE_RESIZE=true   browser-driven resize of the virtual display;
+#                                false = fixed at SCREEN_GEOMETRY
 #   SELKIES_EXTRA_ARGS=""        extra selkies CLI flags (word-split)
 #   SELKIES_VIDEO_STREAMING_MODE=false  Turbo: encode every frame, still
 #                                ones too (native selkies setting); false =

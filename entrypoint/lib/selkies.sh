@@ -19,7 +19,7 @@ selkies_start() {
         --port="${SELKIES_INTERNAL_PORT}" \
         --subfolder="${SELKIES_SUBFOLDER}" \
         --encoder="${SELKIES_ENCODER:-h264enc}" \
-        --enable-resize="${SELKIES_ENABLE_RESIZE:-false}" \
+        --enable-resize="${SELKIES_ENABLE_RESIZE:-true}" \
         "${SELKIES_BACKEND_ARGS[@]}" \
         "${auth_flag}" \
         "${extra_args[@]}"
@@ -104,7 +104,7 @@ selkies_backend_args() {
     # own default (1024x768) when a stream starts; pin it to the
     # SCREEN_GEOMETRY labwc was started at instead, like the fixed Xvfb
     # screen (an explicit SELKIES_MANUAL_* setting still wins).
-    if [ "${SELKIES_ENABLE_RESIZE:-false}" != "true" ] \
+    if [ "${SELKIES_ENABLE_RESIZE:-true}" != "true" ] \
         && [ -z "${SELKIES_MANUAL_WIDTH:-}${SELKIES_MANUAL_HEIGHT:-}${SELKIES_MANUAL_RESOLUTION:-}" ]; then
         SELKIES_BACKEND_ARGS+=(--manual-resolution=true
             --manual-width="${SCREEN_WIDTH}"
