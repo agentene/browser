@@ -7,13 +7,15 @@
 #   release-tag : on merges to main that change the CHROME_VERSION pin —
 #                 pushes tag v<chrome-version> (or ...-r2, -r3, ... if taken),
 #                 which re-triggers this workflow's publish job
+#   cleanup-update-branch : on the merge of chrome-update.yaml's bump PR —
+#                 deletes its head branch chore/chrome-update
 #   publish     : on `v*` tags and manual dispatch — pushes to GHCR (always) and
 #                 Docker Hub (when DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are set; same
 #                 <owner>/<repo> path as GHCR)
 #
 # Together with chrome-update.yaml (daily Chrome for Testing watch) this
 # closes the loop: upstream release -> re-pin PR -> CI here -> auto-merge ->
-# tag -> publish. See README "Automatic upstream updates".
+# tag -> publish (+ delete the bump branch). See README "Automatic upstream updates".
 #
 # Required secrets for Docker Hub publishing (GHCR needs none, it uses the
 # built-in GITHUB_TOKEN): DOCKERHUB_USERNAME, DOCKERHUB_TOKEN.
@@ -405,6 +407,58 @@ jobs:
           if [ "${HAS_PAT}" != "true" ]; then
             echo "::warning::CHROME_UPDATE_TOKEN is not set, so this tag was pushed with GITHUB_TOKEN and the publish job will NOT auto-trigger. Re-push the tag from a machine (git push origin :refs/tags/${TAG} && git tag -f ... && git push origin ${TAG}) or run ci.yaml manually."
           fi
+
+  cleanup-update-branch:
+    # Once chrome-update.yaml's bump PR is merged, delete its head branch
+    # (chore/chrome-update). create-pull-request's delete-branch only removes
+    # it on a later run that finds no diff, and the repo's "Automatically
+    # delete head branches" setting may be off. Independent of verify: the PR
+    # is merged either way, and the next bump recreates the branch from main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # delete the branch ref
+      pull-requests: read # map the pushed commit to its merged PR
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: chore/chrome-update
+    steps:
+      - name: Delete the merged chore/chrome-update branch
+        run: |
+          set -euo pipefail
+          # Only act when this push IS the merge of a PR from that branch
+          # (same repo); print the PR's head sha so we can compare below.
+          # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
+          PR_HEAD="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '.[] | select(.merged_at != null
+                             and .head.ref == $ENV.BRANCH
+                             and .head.repo.full_name == $ENV.GITHUB_REPOSITORY)
+                      | .head.sha' | head -n1)"
+          if [ -z "$PR_HEAD" ]; then
+            echo "${GITHUB_SHA} is not a merged ${BRANCH} PR — nothing to clean up"
+            exit 0
+          fi
+          TIP="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" \
+            --jq '.object.sha' 2>/dev/null || true)"
+          if [ -z "$TIP" ]; then
+            echo "${BRANCH} is already gone"
+            exit 0
+          fi
+          # A newer chrome-update run may already have re-pushed the branch
+          # (and opened a fresh PR) — deleting it then would close that PR.
+          if [ "$TIP" != "$PR_HEAD" ]; then
+            echo "${BRANCH} moved on (${TIP} != merged head ${PR_HEAD}) — keeping it"
+            exit 0
+          fi
+          OPEN="$(gh pr list -R "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
+            --json number --jq length)"
+          if [ "$OPEN" != "0" ]; then
+            echo "${BRANCH} still has an open PR — keeping it"
+            exit 0
+          fi
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}"
+          echo "deleted ${BRANCH} (merged at ${GITHUB_SHA})"
 
   publish:
     runs-on: ubuntu-latest

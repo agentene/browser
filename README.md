@@ -535,7 +535,8 @@ Tag scheme (tags follow the Chrome version): `v150.0.7871.100` → `150.0.7871.1
 3. `ci.yaml` runs on the PR (lint + full build + smoke tests),
 4. the PR squashes via auto-merge once CI is green,
 5. the `release-tag` job in `ci.yaml` pushes tag `v<chrome-version>`,
-6. the tag event runs the `publish` job → the image lands on GHCR / Docker Hub.
+6. the tag event runs the `publish` job → the image lands on GHCR / Docker Hub,
+7. the `cleanup-update-branch` job in `ci.yaml` deletes the merged `chore/chrome-update` branch (kept if a newer bump already reuses it).
 
 If `v150.0.7871.100` is already taken (re-release of the same Chrome version), the tag increments to `v150.0.7871.100-r2`, `-r3`, …
 

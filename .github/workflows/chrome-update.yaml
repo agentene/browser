@@ -10,7 +10,8 @@
 #      with the default GITHUB_TOKEN never fire `on: pull_request` workflows,
 #   4. the PR is marked auto-merge and is squashed once CI is green,
 #   5. the release-tag job in ci.yaml tags v<chrome-version> for the merged
-#      pin, which re-triggers ci.yaml's publish job (GHCR + Docker Hub).
+#      pin, which re-triggers ci.yaml's publish job (GHCR + Docker Hub);
+#      ci.yaml's cleanup-update-branch job deletes chore/chrome-update.
 #
 # Required repo settings for the fully automatic path:
 #   - secret CHROME_UPDATE_TOKEN: a PAT with repo scope (classic) or a
