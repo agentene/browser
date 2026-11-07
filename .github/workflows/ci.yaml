@@ -148,7 +148,7 @@ jobs:
             curl -sf http://127.0.0.1:8080/ >/dev/null && break
             sleep 1
           done
-          curl -sf http://127.0.0.1:8080/ | grep -qi '<html' \
+          curl -sf http://127.0.0.1:8080/ | grep -ci '<html' >/dev/null \
             && echo "web UI smoke test OK"
 
       - name: Smoke test — CDP gateway
@@ -216,11 +216,11 @@ jobs:
             sleep 1
           done
           # the entry page carries the sidebar script, served by the gateway
-          curl -sf -u ubuntu:pw http://127.0.0.1:8082/ | grep -q 'cdp-console/panel.js'
-          curl -sf -u ubuntu:pw http://127.0.0.1:8082/cdp-console/panel.js | grep -q '__cdpConsolePanel'
+          curl -sf -u ubuntu:pw http://127.0.0.1:8082/ | grep -c 'cdp-console/panel.js' >/dev/null
+          curl -sf -u ubuntu:pw http://127.0.0.1:8082/cdp-console/panel.js | grep -c '__cdpConsolePanel' >/dev/null
           # it takes the master password only, without a login prompt
           [ "$(curl -s -o /dev/null -w '%{http_code}' -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/panel.js)" = 401 ]
-          ! curl -sI -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/panel.js | grep -qi '^www-authenticate'
+          ! curl -sI -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/panel.js | grep -ci '^www-authenticate' >/dev/null
           # so does its live state WebSocket, from same-origin pages only
           ws_status() { curl -s -o /dev/null -m 2 -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
             -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" http://127.0.0.1:8082/cdp-console/ws || true; }
@@ -231,8 +231,8 @@ jobs:
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api/nope)" = 403 ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'X-CDP-Console: 1' -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api/nope)" = 404 ]
           # the CDP port's console is unchanged (and cannot forge the marker)
-          curl -sf http://127.0.0.1:9225/console/ | grep -qi '<html'
-          curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/ | grep -qi '<html'
+          curl -sf http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
+          curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
           echo "CDP console sidebar smoke test OK"
 
       - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
@@ -340,7 +340,7 @@ jobs:
             sleep 1
           done
           curl -sf http://127.0.0.1:9224/json/version | jq -e '.Browser' >/dev/null
-          curl -sf http://127.0.0.1:8081/ | grep -qi '<html'
+          curl -sf http://127.0.0.1:8081/ | grep -ci '<html' >/dev/null
           # the headed main browser must be a window of labwc (no X server)
           docker exec wayland-smoke sh -c \
             'XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY="$(cat /tmp/labwc-display)" wlrctl toplevel list' \
