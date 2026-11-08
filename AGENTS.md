@@ -19,14 +19,14 @@ runtime smoke tests.
 | --- | --- |
 | `Dockerfile` | Single-stage ubuntu:26.04 image: Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
 | `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages Xvfb → picom (or labwc) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
-| `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENCODER`/`SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`/`PIXELFLUX_HOST_CAPTURE`, `CDP_CONTEXTS_HEADLESS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module), `privileges` (RUN_USER → `DROP`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `audio`, `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
+| `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `audio`, `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
 | `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, chromium prefs seeding, the orderly Browser.close the supervisor's stop hook runs) — formerly heredocs in the entrypoint |
 | `.shellcheckrc` | Lets shellcheck follow the module `source` statements |
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
-| `.env.example` | Every runtime knob, documented |
-| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page, `ENABLE_CDP_CONSOLE_PANEL`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
-| `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + `.env.example` + the README build-arg tables together |
+| `.env.example` | The commonly changed runtime knobs, documented (the full reference is the READMEs' Configuration section + `entrypoint/lib/config.sh`) |
+| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies and CDP are both on), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
+| `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
 | `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release (ci.yaml's `cleanup-update-branch` then deletes `chore/chrome-update`) |
 | `examples/` | CDP client examples (`connect-playwright.mjs`, `webgl-renderer-probe.mjs`) |
@@ -91,8 +91,8 @@ node update-chrome-node.mjs --node 22        # force the Node major
 
 ## Hard rules
 
-1. **Never hand-edit the Chrome/Node pins.** They live in three files
-   (`Dockerfile`, `compose.yaml`, `.env.example`) plus the mirrored
+1. **Never hand-edit the Chrome/Node pins.** They live in two files
+   (`Dockerfile`, `compose.yaml`) plus the mirrored
    build-arg default tables in both READMEs; only
    `update-chrome-node.mjs` keeps them all in sync (the README tables
    used to drift before the script covered them). Beyond those tables,
@@ -113,8 +113,9 @@ node update-chrome-node.mjs --node 22        # force the Node major
    must reference the container-side variables, never a literal port.
 5. **New behavior needs an env knob** with a default that is safe for the
    majority, plus matching entries in `entrypoint/lib/config.sh` (default,
-   validation, reference comment), `.env.example`,
-   `compose.yaml` and BOTH READMEs — same PR.
+   validation, reference comment), `compose.yaml` and BOTH READMEs —
+   same PR; also `.env.example` when it is a knob most users will want to
+   change (it lists only those).
 6. **Docs are a deliverable.** `README.md` and `README.zh-CN.md` mirror each
    other; update both or the change is incomplete.
 7. **Lint gates are hard:** shellcheck-clean (keep the existing
@@ -189,12 +190,12 @@ node update-chrome-node.mjs --node 22        # force the Node major
   client-drawn one), maximizes every window by rule, and the CDP console
   raises windows with `wlrctl` by app_id (`cdp-main`, `cdp-<context>`).
   Selkies captures labwc through wlr-screencopy (`PIXELFLUX_HOST_CAPTURE=zwlr`,
-  exported in `entrypoint/lib/selkies.sh`): pixelflux's preferred
+  forced in `entrypoint/lib/selkies.sh`): pixelflux's preferred
   ext-image-copy-capture path breaks on labwc 0.9 with a GPU (labwc rejects
   the dmabufs, no stream) — re-test before dropping it.
   Chromium's Vulkan flags are X11-only (Chromium rejects Vulkan with
-  Wayland). X11-only knobs: `DISPLAY`, `SCREEN_GEOMETRY_MAX`,
-  `ENABLE_COMPOSITOR`, `CHROMIUM_FOLLOW_SCREEN`.
+  Wayland). X11-only, always on: picom, the chromium screen follower, the
+  8192x4096 RandR ceiling and the free-display probe from `:0`.
 * **GPU policy is one knob:** `CHROMIUM_GPU=auto|off|strict`. Hardware GL
   goes through Vulkan/ANGLE (`--use-angle=vulkan --enable-features=Vulkan`)
   because native GL cannot work on the Xvfb display; SwiftShader stays

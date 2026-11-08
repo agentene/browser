@@ -4,7 +4,7 @@
 # Starts, in order:
 #   1. Xvfb            virtual X11 display (Selkies captures it)
 #      picom           compositing manager for that display (keeps popup
-#                       menu shadows visible; see ENABLE_COMPOSITOR)
+#                       menu shadows visible)
 #      or, with DISPLAY_BACKEND=wayland:
 #      labwc           headless Wayland compositor + window manager
 #                       (Selkies captures it by screencopy)

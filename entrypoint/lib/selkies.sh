@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # selkies.sh — the Selkies HTML5 remote desktop, on loopback behind nginx.
 #
-# Extra settings ride the native SELKIES_* env vars (CLI > env > default).
+# Extra settings ride the native SELKIES_* env vars (CLI > env > default),
+# e.g. SELKIES_ENCODER (selkies' own default: h264enc).
 
 selkies_start() {
     local auth_flag extra_args=()
@@ -10,7 +11,7 @@ selkies_start() {
     selkies_media_defaults
     [ -n "${SELKIES_EXTRA_ARGS:-}" ] && read -r -a extra_args <<< "${SELKIES_EXTRA_ARGS}"
 
-    log "starting selkies on ${SELKIES_ADDR}:${SELKIES_INTERNAL_PORT} (${DISPLAY_BACKEND}, encoder ${SELKIES_ENCODER:-h264enc}, path ${SELKIES_SUBFOLDER:-/}, fronted by nginx)"
+    log "starting selkies on ${SELKIES_ADDR}:${SELKIES_INTERNAL_PORT} (${DISPLAY_BACKEND}, path ${SELKIES_SUBFOLDER:-/}, fronted by nginx)"
     # TLS terminates at nginx, so selkies itself always serves plain HTTP on
     # the loopback port nginx proxies to.
     start_service - \
@@ -18,7 +19,6 @@ selkies_start() {
         --addr="${SELKIES_ADDR}" \
         --port="${SELKIES_INTERNAL_PORT}" \
         --subfolder="${SELKIES_SUBFOLDER}" \
-        --encoder="${SELKIES_ENCODER:-h264enc}" \
         --enable-resize="${SELKIES_ENABLE_RESIZE:-true}" \
         "${SELKIES_BACKEND_ARGS[@]}" \
         "${auth_flag}" \
@@ -74,9 +74,7 @@ selkies_media_defaults() {
     # Tell selkies the browsers get the input interposer (chromium.sh), so
     # uinput_gamepad=auto never also registers kernel pads where /dev/uinput
     # happens to be writable: chromium would see every pad twice.
-    if [ "${CHROMIUM_DEVICE_INTERPOSERS}" = "true" ]; then
-        export SELKIES_INTERPOSER="${SELKIES_INTERPOSER:-/usr/local/lib/selkies-interposers/selkies_input_interposer.so}"
-    fi
+    export SELKIES_INTERPOSER="${SELKIES_INTERPOSER:-/usr/local/lib/selkies-interposers/selkies_input_interposer.so}"
 }
 
 # Display-backend specific selkies flags, into SELKIES_BACKEND_ARGS.
@@ -97,9 +95,8 @@ selkies_backend_args() {
     # ext-image-copy-capture, which pixelflux prefers, but labwc fails to
     # import the GPU buffers pixelflux allocates for it (EGL_BAD_MATCH every
     # frame, the stream never starts) — verified with pixelflux 2.2.1 on an
-    # AMD GPU. Any other value set by the user (e.g. auto) lets pixelflux
-    # pick again.
-    export PIXELFLUX_HOST_CAPTURE="${PIXELFLUX_HOST_CAPTURE-zwlr}"
+    # AMD GPU.
+    export PIXELFLUX_HOST_CAPTURE=zwlr
     # Without the browser-driven resize selkies sizes a captured host to its
     # own default (1024x768) when a stream starts; pin it to the
     # SCREEN_GEOMETRY labwc was started at instead, like the fixed Xvfb

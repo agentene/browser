@@ -19,10 +19,6 @@ display_x11_start() {
 x11_pick_display() {
     local disp_num disp_wanted
     disp_num="${DISPLAY#*:}"
-    disp_num="${disp_num%%.*}"
-    case "${disp_num}" in
-        ''|*[!0-9]*) die "DISPLAY='${DISPLAY}' must look like :<number>" ;;
-    esac
     disp_wanted="${disp_num}"
     while grep -q "[[:space:]]@/tmp/\.X11-unix/X${disp_num}\$" /proc/net/unix 2>/dev/null; do
         disp_num=$((disp_num + 1))
@@ -42,8 +38,7 @@ x11_pick_display() {
 # (x11_preset_size) — the same shape the official selkies-session brings its
 # display up in (XVFB_ARGS 8192x4096 + a RandR preset).
 x11_start_xvfb() {
-    XVFB_SCREEN="${SCREEN_GEOMETRY}"
-    [ -n "${SCREEN_GEOMETRY_MAX}" ] && XVFB_SCREEN="${SCREEN_GEOMETRY_MAX}"
+    XVFB_SCREEN="${SCREEN_GEOMETRY_MAX}"
 
     log "starting Xvfb on display ${DISPLAY} (screen ${XVFB_SCREEN}, working ${SCREEN_GEOMETRY})"
     # -nolisten local: no abstract socket, only /tmp/.X11-unix/X<n> inside
@@ -83,7 +78,6 @@ x11_preset_size() {
 # fails to start only warns; once running it is supervised like every
 # service (its exit later stops the container).
 x11_start_compositor() {
-    [ "${ENABLE_COMPOSITOR}" = "true" ] || return 0
     printf 'shadow = false\nfading = false\nbackend = "xrender"\n' >/tmp/picom.conf
     log "starting picom compositor on display ${DISPLAY}"
     start_service /tmp/picom.log "${DROP[@]}" picom --config /tmp/picom.conf

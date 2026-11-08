@@ -2,8 +2,9 @@
 # shellcheck disable=SC2034 # the knobs set here are read by the other modules
 # config.sh — runtime knobs: defaults + validation (config_load).
 #
-# Every knob is an environment variable; .env.example documents them all for
-# compose users. The reference below is the entrypoint's view of them.
+# Every knob is an environment variable; .env.example lists the commonly
+# changed ones for compose users, the READMEs document them all. The
+# reference below is the entrypoint's view of them.
 #
 #   NGINX_LISTEN_HTTP_PORT=80            container port nginx serves the web UI on (HTTP)
 #   NGINX_LISTEN_HTTPS_PORT=443          container port nginx serves the web UI on (TLS)
@@ -21,36 +22,18 @@
 #                               earlier start — self-signed counts as valid);
 #                               only when no usable pair is found is a fresh
 #                               self-signed one generated.
-#   TLS_CERT_DIR=/etc/nginx/tls where certificates are looked up and, when the
-#                               directory is writable, generated into (so a
-#                               generated pair persists across restarts when
-#                               the directory is a bind mount)
-#   TLS_CERT_FILE/TLS_KEY_FILE  explicit cert/key paths (default inside TLS_CERT_DIR)
-#   TLS_SELF_SIGNED_CN=localhost CN of the generated self-signed certificate
 #   SELKIES_INTERNAL_PORT=8081  loopback port Selkies binds to (behind nginx)
 #   SELKIES_SUBFOLDER=""         URL path prefix the web UI is served under
 #                                (e.g. /desk -> http://host:port/desk/); empty
 #                                = the site root. Selkies' native setting; nginx
 #                                additionally redirects / and /desk to /desk/
 #   SELKIES_BASIC_AUTH_PASSWORD  set it to enable the login screen
-#   SELKIES_ENCODER=h264enc      h264enc | h264enc-striped | openh264enc | jpeg
 #   SELKIES_ENABLE_RESIZE=true   browser-driven resize of the virtual display;
 #                                false = fixed at SCREEN_GEOMETRY
 #   SELKIES_EXTRA_ARGS=""        extra selkies CLI flags (word-split)
-#   SELKIES_VIDEO_STREAMING_MODE=false  Turbo: encode every frame, still
-#                                ones too (native selkies setting); false =
-#                                only frames that changed
-#   SELKIES_VIDEO_ON_START=true
-#   SELKIES_AUDIO_ENABLED=true         (false also disables the microphone)
-#   SELKIES_AUDIO_ON_START=false       media defaults (native selkies
-#   SELKIES_MICROPHONE_ENABLED=true    settings; "|locked" pins a value
-#   SELKIES_MICROPHONE_ON_START=false  against the client): everything is
-#   SELKIES_WEBCAM_ENABLED=true        available, only the video stream
-#   SELKIES_WEBCAM_ON_START=false      starts with the session — the rest
-#   SELKIES_GAMEPAD_ENABLED=true       waits for the side menu toggle
-#   SELKIES_GAMEPAD_ON_START=false
-#                                (these are defaulted in selkies.sh; other
-#                                native SELKIES_* settings pass through as-is)
+#   (selkies.sh exports the image's media defaults as native SELKIES_* env
+#   vars — only video starts with the session, Turbo is off; every other
+#   native SELKIES_* setting, e.g. SELKIES_ENCODER, passes through as-is)
 #   DISPLAY_BACKEND=x11          desktop the browser windows live on: x11 =
 #                                Xvfb (+ picom), captured by Selkies through
 #                                XShm; wayland = labwc, a headless Wayland
@@ -61,35 +44,13 @@
 #                                being copied through the software X server
 #                                every frame, which cuts the CPU cost of
 #                                animated pages several times over.
-#                                DISPLAY, SCREEN_GEOMETRY_MAX,
-#                                ENABLE_COMPOSITOR and CHROMIUM_FOLLOW_SCREEN
-#                                are X11-only (labwc keeps the windows
-#                                maximized itself)
-#   PIXELFLUX_HOST_CAPTURE=zwlr  (wayland, native pixelflux setting) capture
-#                                labwc through wlr-screencopy; any other value
-#                                (e.g. auto) lets pixelflux prefer
-#                                ext-image-copy-capture, whose GPU buffers
-#                                labwc fails to import (no stream with a GPU)
 #   SCREEN_GEOMETRY=1920x1080x24 Xvfb screen size (the working size; also
 #                                sizes the Selkies stream); the initial
 #                                output size with DISPLAY_BACKEND=wayland
-#   SCREEN_GEOMETRY_MAX=8192x4096x24 RandR ceiling the Xvfb screen is created
-#                                at so Selkies' browser-driven resize can grow
-#                                past SCREEN_GEOMETRY; empty = the fixed screen
-#                                of SCREEN_GEOMETRY and no resize headroom
-#   DISPLAY=:0                   Xvfb display. When it is already taken in the
-#                                network namespace (network_mode: host on a
-#                                desktop host running X/Xwayland), the next
-#                                free display number is used instead.
 #   TZ=UTC                      container timezone (default UTC; -e TZ=...
 #                               overrides at runtime, no rebuild needed)
 #   CHROMIUM_LANG=en-US         browser UI locale + Accept-Language (default
 #                               system English; e.g. zh-CN for Chinese)
-#   CHROMIUM_DISABLE_FEATURES   comma-separated chromium feature names passed
-#                               as --disable-features=... (empty/unset = no
-#                               flag; the compose file ships a default that
-#                               turns off the HTTPS-First/HTTPS-Upgrade
-#                               experiments so plain-http pages stay as-is)
 #   CHROMIUM_GPU=auto            GPU/rendering policy (device detection in
 #                               gpu.sh): auto = hardware GL
 #                               when a GPU is passed into the container
@@ -115,14 +76,6 @@
 #                                idle = no CDP client connected, no isolated
 #                                context, nobody watching the Selkies stream.
 #                                0 = never
-#   CHROMIUM_DEVICE_INTERPOSERS=true  preload Selkies' webcam + gamepad
-#                                interposers (and fake-udev) into the
-#                                browsers, so the viewer's camera appears as
-#                                /dev/video0 and its gamepads as Gamepad API
-#                                pads with no device nodes or privileges.
-#                                Only with ENABLE_SELKIES=true (Selkies
-#                                serves their sockets); false = none
-#   CHROMIUM_USER_DATA_DIR=/browser/user-data  the persisted browser profile
 #   CHROMIUM_EXTRA_ARGS=""      extra chromium flags (word-split), appended
 #                               after the entrypoint's own so they win
 #   CDP_INTERNAL_PORT=9221      chromium loopback DevTools port (behind nginx)
@@ -132,39 +85,14 @@
 #   profile, so it inherits the main browser's logins without sharing state;
 #   destroyed when the context closes. Dashboard: /console/ on the CDP port.
 #   Clients need no changes.)
-#   ENABLE_CDP_CONSOLE_PANEL=true  with Selkies and the CDP endpoint both on, add
-#                                the CDP console as a sidebar on the right of
-#                                the Selkies page (nginx injects
-#                                cdp-gateway/panel.js; its API needs Selkies'
-#                                master password when a login is set)
 #   CDP_CONTEXTS_MAX=4           most isolated contexts alive at once (each is
 #                                a whole browser); more get a CDP error
-#   CDP_CONTEXTS_HEADLESS        1 = context browsers run headless; default:
-#                                same as CHROMIUM_HEADLESS (resolved in
-#                                cdp-gateway.sh)
-#   CDP_CONTEXTS_DIR=/browser/contexts
-#                                where the cloned profiles live (wiped on
-#                                start); next to the profile on one mount so
-#                                clones are reflinks where the fs supports it
 #   CDP_GATEWAY_INTERNAL_PORT=9220 gateway loopback port (behind nginx)
 #   CHROMIUM_HEADLESS=1          run the browser headless instead (default 0:
 #                                the browser window opens on the desktop
 #                                and is visible live in the Selkies stream)
 #   ENABLE_SELKIES=true          set false to skip Selkies + display + audio
 #   ENABLE_CDP=true              set false to skip Chromium + the CDP gateway
-#   ENABLE_COMPOSITOR=true       run a compositing manager (picom) on the
-#                                Xvfb display. Without one chromium drops
-#                                the alpha-blended shadows of its popup
-#                                windows, so the right-click context menu
-#                                floats around as a seemingly borderless
-#                                white sheet; false = no compositor (the
-#                                historical flat look)
-#   CHROMIUM_FOLLOW_SCREEN=true  keep the headed chromium browser window
-#                                covering the whole display when the screen
-#                                size changes (Selkies' browser-driven
-#                                resize). No window manager runs on Xvfb, so
-#                                without it the window keeps its startup
-#                                size; false = the window stays as launched
 #   PORT_FORWARDS=""             extra reverse proxies served by nginx, e.g.
 #                                "3080=peer:80 6080=other:6080" (space or
 #                                comma separated): each LISTEN=HOST:PORT entry
@@ -188,6 +116,17 @@
 #                                TLS key, and the supervisor keeps preparing
 #                                the browser profile (chowned to the user on
 #                                every start).
+#
+# Fixed by the image (no knobs; an env value is ignored): the browser data
+# paths (profile /browser/user-data, isolated-context clones
+# /browser/contexts), the TLS pair /etc/nginx/tls/{fullchain,privkey}.pem
+# (self-signed CN=localhost), the first X display tried (:0), the Xvfb RandR
+# ceiling (8192x4096x24), picom + the chromium screen follower on X11, the
+# wlr-screencopy capture of labwc, the Selkies device interposers in the
+# browsers, the CDP console sidebar, headless isolated contexts exactly when
+# the main browser is headless, and the HTTPS-First/-Upgrade features
+# disabled in chromium (CHROMIUM_EXTRA_ARGS can still pass its own
+# --disable-features=..., the last occurrence wins).
 
 config_load() {
     config_display
@@ -201,20 +140,16 @@ config_load() {
 }
 
 config_display() {
-    DISPLAY="${DISPLAY:-:0}"
+    # First X display tried; x11_pick_display moves on to a free one.
+    DISPLAY=":0"
     SCREEN_GEOMETRY="${SCREEN_GEOMETRY:-1920x1080x24}"
     # Working size, split once for the display/selkies/chromium modules.
     SCREEN_WIDTH="${SCREEN_GEOMETRY%%x*}"
     SCREEN_HEIGHT="$(printf '%s' "${SCREEN_GEOMETRY}" | cut -dx -f2)"
     # RandR ceiling (WxHxD) the Xvfb screen is created at, giving Selkies'
-    # browser-driven resize room to grow past SCREEN_GEOMETRY. Empty = the old
-    # behavior: a fixed screen of SCREEN_GEOMETRY nothing can resize beyond.
-    # The default matches the official selkies-session framebuffer (8192x4096).
-    SCREEN_GEOMETRY_MAX="${SCREEN_GEOMETRY_MAX-8192x4096x24}"
-    if [ -n "${SCREEN_GEOMETRY_MAX}" ] \
-        && ! printf '%s' "${SCREEN_GEOMETRY_MAX}" | grep -Eq '^[0-9]+x[0-9]+x[0-9]+$'; then
-        die "SCREEN_GEOMETRY_MAX must be WxHxD or empty, got '${SCREEN_GEOMETRY_MAX}'"
-    fi
+    # browser-driven resize room to grow past SCREEN_GEOMETRY; matches the
+    # official selkies-session framebuffer (8192x4096).
+    SCREEN_GEOMETRY_MAX="8192x4096x24"
 
     ENABLE_SELKIES="${ENABLE_SELKIES:-true}"
     ENABLE_CDP="${ENABLE_CDP:-true}"
@@ -228,9 +163,6 @@ config_display() {
         x11|wayland) : ;;
         *) die "DISPLAY_BACKEND='${DISPLAY_BACKEND}' must be x11 or wayland" ;;
     esac
-    # picom is started together with Xvfb; the knob only makes sense when the
-    # display exists (ENABLE_SELKIES=true) and is harmlessly ignored otherwise.
-    ENABLE_COMPOSITOR="${ENABLE_COMPOSITOR:-true}"
 }
 
 config_selkies() {
@@ -279,10 +211,11 @@ config_nginx() {
 config_tls() {
     # TLS: reuse any valid existing pair (mounted or generated on an earlier
     # start); generate a self-signed one only when no usable pair is found.
-    TLS_CERT_DIR="${TLS_CERT_DIR:-/etc/nginx/tls}"
-    TLS_CERT_FILE="${TLS_CERT_FILE:-${TLS_CERT_DIR}/fullchain.pem}"
-    TLS_KEY_FILE="${TLS_KEY_FILE:-${TLS_CERT_DIR}/privkey.pem}"
-    TLS_SELF_SIGNED_CN="${TLS_SELF_SIGNED_CN:-localhost}"
+    # The directory is where compose.https.yaml mounts ./tls.
+    TLS_CERT_DIR="/etc/nginx/tls"
+    TLS_CERT_FILE="${TLS_CERT_DIR}/fullchain.pem"
+    TLS_KEY_FILE="${TLS_CERT_DIR}/privkey.pem"
+    TLS_SELF_SIGNED_CN="localhost"
     # fallback location for generated pairs when TLS_CERT_DIR is not writable
     # (e.g. a read-only mount); container-local, so it survives `docker restart`
     TLS_FALLBACK_DIR="/etc/nginx/tls-selfsigned"
@@ -299,11 +232,6 @@ config_chromium() {
         true|false) : ;;
         *) die "CHROMIUM_AUTOSTART='${CHROMIUM_AUTOSTART}' must be true or false" ;;
     esac
-    CHROMIUM_DEVICE_INTERPOSERS="${CHROMIUM_DEVICE_INTERPOSERS:-true}"
-    case "${CHROMIUM_DEVICE_INTERPOSERS}" in
-        true|false) : ;;
-        *) die "CHROMIUM_DEVICE_INTERPOSERS='${CHROMIUM_DEVICE_INTERPOSERS}' must be true or false" ;;
-    esac
     # Minutes until the gateway closes an idle on-demand main browser; 0 = never.
     CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT:-0}"
     case "${CHROMIUM_IDLE_TIMEOUT}" in
@@ -312,22 +240,16 @@ config_chromium() {
     if [ "${CHROMIUM_IDLE_TIMEOUT}" -gt 0 ] && [ "${CHROMIUM_AUTOSTART}" != "false" ]; then
         die "CHROMIUM_IDLE_TIMEOUT needs CHROMIUM_AUTOSTART=false (only an on-demand main browser can be closed and started again)"
     fi
-    CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR:-/browser/user-data}"
+    # The persisted profile, on the /browser mount.
+    CHROMIUM_USER_DATA_DIR="/browser/user-data"
     # Browser UI locale + Accept-Language; en-US by default (env override: any
     # other locale, e.g. zh-CN).
     CHROMIUM_LANG="${CHROMIUM_LANG:-en-US}"
-    # Comma-separated chromium feature names -> --disable-features=<value>. No
-    # default here on purpose: the compose file owns the default value; with a
-    # bare `docker run` the flag is only passed when the variable is set non-empty.
-    CHROMIUM_DISABLE_FEATURES="${CHROMIUM_DISABLE_FEATURES:-}"
     # Single GPU/rendering policy knob; the device detection lives in gpu.sh.
     # auto = hardware GL when a GPU is visible, else SwiftShader software;
     # off = always software (the historical behavior); strict = hardware
     # only, never allow SwiftShader.
     CHROMIUM_GPU="${CHROMIUM_GPU:-auto}"
-    # Screen follower for the headed chromium window (started next to
-    # chromium, see chromium.sh); ignored when chromium runs headless.
-    CHROMIUM_FOLLOW_SCREEN="${CHROMIUM_FOLLOW_SCREEN:-true}"
 }
 
 config_cdp_gateway() {
@@ -335,33 +257,18 @@ config_cdp_gateway() {
     # (cdp-gateway.sh).
     CDP_GATEWAY_INTERNAL_PORT="${CDP_GATEWAY_INTERNAL_PORT:-9220}" # gateway loopback port (behind nginx)
     CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX:-4}"
-    CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR:-/browser/contexts}"
-    ENABLE_CDP_CONSOLE_PANEL="${ENABLE_CDP_CONSOLE_PANEL:-true}"
-    case "${ENABLE_CDP_CONSOLE_PANEL}" in
-        true|false) : ;;
-        *) die "ENABLE_CDP_CONSOLE_PANEL='${ENABLE_CDP_CONSOLE_PANEL}' must be true or false" ;;
-    esac
-    # The sidebar needs the web UI to sit in and the gateway to talk to
-    # (nginx.sh, cdp-gateway.sh); silently off otherwise.
-    CDP_CONSOLE_PANEL_ACTIVE=false
-    if [ "${ENABLE_CDP_CONSOLE_PANEL}" = "true" ] && [ "${ENABLE_SELKIES}" = "true" ] \
-        && [ "${ENABLE_CDP}" = "true" ]; then
-        CDP_CONSOLE_PANEL_ACTIVE=true
-    fi
     case "${CDP_CONTEXTS_MAX}" in
         ''|*[!0-9]*|0) die "CDP_CONTEXTS_MAX='${CDP_CONTEXTS_MAX}' must be a positive number" ;;
     esac
-    # Its context-N clones are wiped on every start; it must not sit inside the
-    # profile the isolated contexts are cloned from (the clone would copy itself).
-    CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR%/}"
-    case "${CDP_CONTEXTS_DIR}" in
-        /?*) : ;;
-        *) die "CDP_CONTEXTS_DIR='${CDP_CONTEXTS_DIR}' must be an absolute path other than /" ;;
-    esac
-    case "${CDP_CONTEXTS_DIR}/" in
-        "${CHROMIUM_USER_DATA_DIR}"/*|"${CHROMIUM_USER_DATA_DIR}/")
-            die "CDP_CONTEXTS_DIR must not be inside CHROMIUM_USER_DATA_DIR" ;;
-    esac
+    # The profile clones (wiped on every start) sit on the /browser mount next
+    # to the profile, so they are reflinks where the filesystem supports it.
+    CDP_CONTEXTS_DIR="/browser/contexts"
+    # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
+    # needs the web UI to sit in and the gateway to talk to.
+    CDP_CONSOLE_PANEL_ACTIVE=false
+    if [ "${ENABLE_SELKIES}" = "true" ] && [ "${ENABLE_CDP}" = "true" ]; then
+        CDP_CONSOLE_PANEL_ACTIVE=true
+    fi
 }
 
 # Every port knob must be a plain TCP port number; a typo would otherwise

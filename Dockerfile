@@ -13,7 +13,7 @@ ARG SELKIES_VERSION=2.1.0
 # discovers gamepads through libudev; everything else passes through to the
 # real libudev). The release wheel carries none of them, so they are built
 # from the tag's source; the entrypoint preloads them into Chromium only
-# (CHROMIUM_DEVICE_INTERPOSERS) — never into Selkies, which needs the real
+# (entrypoint/lib/chromium.sh) — never into Selkies, which needs the real
 # device nodes.
 FROM ubuntu:26.04 AS interposers
 ARG DEBIAN_FRONTEND=noninteractive
@@ -155,10 +155,10 @@ RUN apt-get update && \
 # nvidia container toolkit injects host-matching libraries at runtime.
 # picom = compositing manager for the Xvfb display: chromium only alpha-
 # blends its popup (context menu) shadows when a compositor is present, so
-# the entrypoint runs picom alongside Xvfb (see ENABLE_COMPOSITOR).
+# the entrypoint runs picom alongside Xvfb (entrypoint/lib/display-x11.sh).
 # python3-xlib = the entrypoint's screen follower: no window manager runs on
 # the Xvfb display, so it keeps the chromium window sized to the screen when
-# Selkies resizes it (see CHROMIUM_FOLLOW_SCREEN).
+# Selkies resizes it (entrypoint/lib/chromium.sh).
 # labwc + wlr-randr + wlrctl = the DISPLAY_BACKEND=wayland desktop: labwc is
 # the headless Wayland compositor + window manager Selkies captures (it
 # maximizes the browser windows), wlr-randr sizes its output at startup and

@@ -171,7 +171,7 @@ await browser.close();  // 只关闭 CDP 会话,不关浏览器
 * nginx 把 CDP 端口转发给一个小网关(`/usr/local/lib/cdp-gateway/gateway.mjs`)。
 * 使用默认 context(`browser.contexts()[0]`)的客户端原样直通到主浏览器,行为不变。
 * 客户端新建 context 时,网关自己处理 `Target.createBrowserContext`:
-  * 复制 profile,跳过缓存和已打开的标签页(隔离 context 和任何新建 context 一样从零个页面开始)。当 profile 与 `CDP_CONTEXTS_DIR` 位于同一个 XFS 或 btrfs 挂载上时(默认的 `/browser` 布局在这类宿主机上即满足),复制是 reflink(瞬间完成、写时复制),否则是完整复制。网关日志(`/tmp/cdp-gateway.log`)启动时会写明是哪一种;
+  * 复制 profile,跳过缓存和已打开的标签页(隔离 context 和任何新建 context 一样从零个页面开始)。profile(`/browser/user-data`)与克隆(`/browser/contexts`)同在 `/browser` 挂载上,宿主机为 XFS 或 btrfs 时,复制是 reflink(瞬间完成、写时复制),否则是完整复制。网关日志(`/tmp/cdp-gateway.log`)启动时会写明是哪一种;
   * 在副本上启动一个 Chromium;
   * 再从主浏览器把实时 cookie(含 HttpOnly 和会话 cookie)和主浏览器已打开 origin 的实时 localStorage 补写进去,因为 Chromium 写这两样到磁盘都有延迟;
   * 把这个 context 的流量路由到新浏览器。
@@ -186,7 +186,7 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。控制台页面的状态只通过 `/console/ws` WebSocket 获取:连上时先收到一份全量快照,之后只收变化;页面上的操作则是 `/console/api/` 下的普通 HTTP 请求。控制台(以及下面的侧边栏)支持英文和简体中文:默认跟随浏览器语言,标题栏的 *中文* / *EN* 按钮可以切换(按浏览器记住)。
 
-同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API 和 WebSocket(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,两者都要求**主密码**(WebSocket 还只接受同源页面的连接):用只读密码登录的用户看不到拉手。设 `ENABLE_CDP_CONSOLE_PANEL=false` 则完全不改动 Selkies 页面。
+同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API 和 WebSocket(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,两者都要求**主密码**(WebSocket 还只接受同源页面的连接):用只读密码登录的用户看不到拉手。只要 Selkies 和 CDP 端点同时启用,侧边栏就会出现。
 
 **按需启动主浏览器。** 设置 `CHROMIUM_AUTOSTART=false` 后,容器启动时不启动主浏览器,闲置的容器里完全没有 Chromium 进程。由网关在以下时机启动它:
 
@@ -265,9 +265,6 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `NGINX_LISTEN_HTTPS_PORT`        | `443`                                         | nginx 在容器内提供 TLS Web UI 的端口                                                                                                                             |
 | `NGINX_LISTEN_ADDR`              | *(空)*                                        | 所有 nginx 监听(Web UI、CDP、`PORT_FORWARDS`)绑定的地址;空 = 所有网卡。使用 [host 网络](#host-网络compose)时建议设为 `127.0.0.1`,让 CDP 与 Web UI 只在本机可访问 |
 | `ENABLE_HTTPS`                   | `false`                                       | `true` = nginx 在容器 `NGINX_LISTEN_HTTPS_PORT` 端口同时提供 TLS 的 Web UI                                                                                       |
-| `TLS_CERT_DIR`                   | `/etc/nginx/tls`                              | 证书查找 / 生成目录                                                                                                                                              |
-| `TLS_CERT_FILE` / `TLS_KEY_FILE` | `$TLS_CERT_DIR/fullchain.pem` / `privkey.pem` | 显式证书/私钥路径                                                                                                                                                |
-| `TLS_SELF_SIGNED_CN`             | `localhost`                                   | 生成的自签证书 CN                                                                                                                                                |
 
 **额外端口转发**
 
@@ -281,9 +278,9 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | ----------------------------- | --------- | --------------------------------------------------------- |
 | `SELKIES_BASIC_AUTH_PASSWORD` | *(空)*    | 设置即启用登录页;空 = 无登录                              |
 | `SELKIES_BASIC_AUTH_USER`     | `ubuntu`  | 登录用户名                                                |
-| `SELKIES_ENCODER`             | `h264enc` | `h264enc` \| `h264enc-striped` \| `openh264enc` \| `jpeg` |
+| `SELKIES_ENCODER`             | `h264enc` | selkies 原生设置(原样透传):`h264enc` \| `h265enc` \| `vp8enc` \| `vp9enc` \| `av1enc` \| `h264enc-striped` \| `jpeg` |
 | `SELKIES_EXTRA_ARGS`          | *(空)*    | 追加到 `selkies` 的额外 CLI 参数                          |
-| `SELKIES_ENABLE_RESIZE`       | `true`    | 由浏览器驱动调整分辨率:虚拟显示器跟随观看端浏览器窗口大小(X11 下的余量见 `SCREEN_GEOMETRY_MAX`);`false` = 不论谁在观看,显示器都保持 `SCREEN_GEOMETRY` |
+| `SELKIES_ENABLE_RESIZE`       | `true`    | 由浏览器驱动调整分辨率:虚拟显示器跟随观看端浏览器窗口大小(X11 下最大 8192x4096);`false` = 不论谁在观看,显示器都保持 `SCREEN_GEOMETRY` |
 | `SELKIES_VIDEO_STREAMING_MODE` | `false` | Turbo 模式:`true` = 像普通视频编码器一样逐帧编码,静止桌面也不例外(有人观看时 CPU 恒定占用,1080p 下约单核 2.5%);`false` = 只编码有变化的帧,静止画面几乎不占 CPU。看视频或玩游戏时可在侧边栏实时打开 |
 | `SELKIES_VIDEO_ON_START` | `true` | 会话开始时即推送视频;`false` = 需在侧边栏手动打开 |
 | `SELKIES_AUDIO_ENABLED` | `true` | 音频支持;`false` = 彻底关闭音频,麦克风也随之不可用 |
@@ -306,11 +303,8 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_START_URL`        | `about:blank`                                                                                       | 启动时打开的页面                                                                                                                                                                  |
 | `CHROMIUM_AUTOSTART`        | `true`                                                                                              | `false` = 容器启动时不启动主浏览器,由 CDP 网关在首个 CDP 客户端连接或在 CDP 控制台点 *Start browser* 时才启动,关闭它也不会让容器退出([详情](#cdp-网关带登录态的隔离-context)) |
 | `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 配合 `CHROMIUM_AUTOSTART=false`:主浏览器空闲(无 CDP 客户端、无隔离 context、无人观看串流)多少分钟后自动关闭;`0` = 不自动关闭 |
-| `CHROMIUM_DEVICE_INTERPOSERS` | `true` | 把 Selkies 的摄像头 + 手柄 interposer(以及 fake-udev,镜像构建时从 Selkies 源码编译)预加载进浏览器(含隔离 context):观看端摄像头显示为 *Selkies Virtual Camera*,手柄出现在 Gamepad API 中,无需 `/dev/video*`、`/dev/uinput` 或特权。仅在 `ENABLE_SELKIES=true` 时生效;`false` = 不预加载 |
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
-| `CHROMIUM_DISABLE_FEATURES` | `HttpsFirstBalancedModeAutoEnable,HttpsUpgrades,HttpsFirstModeV2`(compose 默认;不用 compose 时为空) | 逗号分隔的特性列表,以 `--disable-features=` 传给 chromium —— 关闭 HTTPS-First / HTTPS-Upgrade 实验;在 `.env` 里设为空可去掉该参数                                                 |
-| `CHROMIUM_USER_DATA_DIR`    | `/browser/user-data`                                                                                | 浏览器配置目录(位于 `/browser` 挂载内,见[持久化](#持久化));在 `.env` 中覆盖时请保持在该挂载内                                                                                                                                                         |
 | `CDP_LISTEN_PORT`           | `9222`                                                                                              | 公开 CDP 端点在容器内的端口(nginx → CDP 网关 → chromium;见[端口](#端口))                                                                                                                   |
 | `CDP_INTERNAL_PORT`         | `9221`                                                                                              | Chromium 回环 DevTools 端口(nginx 后面)                                                                                                                                           |
 
@@ -319,23 +313,15 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | 变量                        | 默认值                      | 说明                                                                                                                                    |
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDP_CONTEXTS_MAX`          | `4`                         | 同时存在的隔离 context 上限(每个都是完整浏览器);超出后新建 context 返回 CDP 错误                                                        |
-| `CDP_CONTEXTS_HEADLESS`     | 与 `CHROMIUM_HEADLESS` 相同 | `1` = context 浏览器无界面运行;`0` = 有界面,显示在桌面上(串流里可见)                                                                    |
-| `CDP_CONTEXTS_DIR`          | `/browser/contexts`         | 每个隔离 context 的浏览器(profile 克隆)存放目录;每次启动清空,不得位于 `CHROMIUM_USER_DATA_DIR` 之内;与 profile 放在同一挂载上,克隆才能用 reflink               |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | 网关回环端口(nginx 后面)                                                                                                                |
-| `ENABLE_CDP_CONSOLE_PANEL`  | `true`                      | Selkies 和 CDP 端点都启用时:在 Selkies 页面右边缘加一个 CDP 控制台侧边栏(设置了 Selkies 登录时需要主密码);`false` = 不加侧边栏 |
 
 **桌面 / 容器**
 
 | 变量                | 默认值         | 说明                                                                                                                                                                                                                 |
 | ------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TZ`                | `UTC`          | 容器时区(任意 IANA 时区,如 `Asia/Shanghai`)                                                                                                                                                                          |
-| `DISPLAY_BACKEND`   | `x11`          | 有头浏览器所在的桌面:`x11` = Xvfb(+ picom);`wayland` = labwc,一个无头 Wayland 合成器 + 窗口管理器,由 Selkies 在 GPU 上采集 —— 挂了 GPU 时,动画页面的 CPU 占用降低数倍,见 [Wayland 桌面](#wayland-桌面display_backendwayland)。下方标注 *仅 X11* 的四项对 `wayland` 不生效 |
+| `DISPLAY_BACKEND`   | `x11`          | 有头浏览器所在的桌面:`x11` = Xvfb(+ picom);`wayland` = labwc,一个无头 Wayland 合成器 + 窗口管理器,由 Selkies 在 GPU 上采集 —— 挂了 GPU 时,动画页面的 CPU 占用降低数倍,见 [Wayland 桌面](#wayland-桌面display_backendwayland) |
 | `SCREEN_GEOMETRY`   | `1920x1080x24` | Xvfb 屏幕尺寸 `宽x高x深`(`wayland` 时为 labwc 输出的尺寸);同时决定 Selkies 串流分辨率                                                                                                                                 |
-| `SCREEN_GEOMETRY_MAX` | `8192x4096x24` | *仅 X11。* Xvfb 创建屏幕时的 RandR 上限 `宽x高x深`,使 Selkies 动态分辨率(浏览器窗口大小 → 虚拟显示器分辨率,默认开启,见 `SELKIES_ENABLE_RESIZE`)可以超过 `SCREEN_GEOMETRY` 向上调整;启动时再把工作尺寸经 RandR 预设回来。留空 = 固定为 `SCREEN_GEOMETRY` 的屏幕(大于该尺寸的浏览器窗口只能被裁切显示) |
-| `DISPLAY`           | `:0`           | *仅 X11。* Xvfb 的 display;若该编号在当前网络命名空间里已被占用(在跑着 X/Xwayland 的机器上使用 host 网络),自动换用下一个空闲编号并记录日志                                                                                      |
-| `ENABLE_COMPOSITOR` | `true`         | *仅 X11。* 在 Xvfb 显示器上运行合成器(picom),让 Chromium 的弹出菜单(右键菜单)保留投影 —— 没有合成器时菜单会渲染成看似无边框的白色贴片;`false` = 恢复旧的扁平外观                                                                |
-| `CHROMIUM_FOLLOW_SCREEN` | `true` | *仅 X11*(labwc 自己保持窗口最大化)。屏幕尺寸改变时(Selkies 按浏览器窗口动态调整分辨率,见 `SCREEN_GEOMETRY_MAX`)让有头 Chromium 窗口始终铺满整个显示器 —— Xvfb 上没有窗口管理器,否则窗口保持启动时的尺寸(屏幕变大时周围是黑边,变小时被裁切);只调整浏览器主窗口,弹出窗口和独立的 DevTools 窗口保持各自尺寸;`false` = 窗口保持启动时的样子 |
-| `PIXELFLUX_HOST_CAPTURE` | `zwlr` | *仅 Wayland*(pixelflux 原生设置)。Selkies 采集 labwc 的方式:`zwlr` = wlr-screencopy;其他任意值(如 `auto`)让 pixelflux 优先用 ext-image-copy-capture,而 labwc 无法导入它分配的 GPU 缓冲 —— 有 GPU 时串流根本起不来 |
 | `RUN_USER`          | *(空)*         | 桌面栈(Xvfb 或 labwc、picom、PulseAudio、selkies、chromium、CDP 网关)与 nginx *worker* 以该用户而非 root 运行 —— 已存在的用户名(如 `browser`)或 `uid[:gid]`;PID 1 与 nginx master 保持 root。见[权限降级(`RUN_USER`)](#权限降级run_user) |
 
 ### 权限降级(`RUN_USER`)
@@ -354,7 +340,7 @@ RUN_USER=browser       # 或数字 uid[:gid],例如 1000,与宿主机上
 
 * 接受已存在的用户名(镜像内置 `browser`,uid 1001)或 `uid[:gid]`;数字 id 缺失的 passwd/group 条目会在启动时合成。
 * PID 1 与 nginx **master** 保持 root:nginx 绑定(默认为特权的)监听端口并读取 TLS 密钥,监督进程负责准备浏览器 profile。其余进程经 `setpriv` 以无 capability 状态启动。
-* 浏览器 profile(`CHROMIUM_USER_DATA_DIR`)每次启动都会 `chown` 给该用户 —— 首次迁移较大的 root 属主 profile 需要一点时间,之后只是空遍历。
+* 浏览器 profile(`/browser/user-data`)每次启动都会 `chown` 给该用户 —— 首次迁移较大的 root 属主 profile 需要一点时间,之后只是空遍历。
 * GPU 设备节点保持可用:`/dev/dri` / NVIDIA 节点的宿主机 gid 会被加入补充组。
 * 刻意**不**改变的:chromium 仍带 `--no-sandbox`(Docker 默认 seccomp 对任何 uid 都不允许 userns 沙箱),CDP/web 端口保持不变。收益是文件系统/权限隔离 —— 浏览器被攻破后不再能以 root 写文件。
 
@@ -429,7 +415,7 @@ DISPLAY_BACKEND=wayland
 * 鼠标指针只由 Selkies 客户端在本地绘制,没有串流延迟(labwc 自己的指针不进入视频画面 —— 否则它会延迟跟随,形成第二个"重影"指针)。指针始终是箭头:screencopy 不携带光标形状,所以不像 `x11` 那样有文本/手形光标。
 * Selkies 按浏览器窗口调整分辨率(`SELKIES_ENABLE_RESIZE`,默认开启)时调整的是 labwc 的输出;设为 `SELKIES_ENABLE_RESIZE=false` 时输出保持 `SCREEN_GEOMETRY`。
 * Chromium 走它原生的 Wayland/EGL 路径,不使用上面的 Vulkan 标志(Chromium 不支持 Wayland 下的 Vulkan)。
-* Selkies 通过 wlr-screencopy 采集 labwc(`PIXELFLUX_HOST_CAPTURE=zwlr`,由入口脚本设置)。labwc 也提供更新的 ext-image-copy-capture,pixelflux 会优先用它,但 labwc 无法导入 pixelflux 为它分配的 GPU 缓冲区,挂了 GPU 时串流根本起不来;设成其他任意值(如 `auto`)就把选择权交还给 pixelflux。
+* Selkies 通过 wlr-screencopy 采集 labwc(`PIXELFLUX_HOST_CAPTURE=zwlr`,由入口脚本设置)。labwc 也提供更新的 ext-image-copy-capture,pixelflux 会优先用它,但 labwc 无法导入 pixelflux 为它分配的 GPU 缓冲区,挂了 GPU 时串流根本起不来。
 
 不起作用的情况:没有 GPU 时两种方式都纯软件渲染,开销与 `x11` 基本相同(CI 里的 `wayland` 冒烟测试就是这样跑的);使用 **NVIDIA** 时,注入的驱动栈在 Wayland 下给不了 Chromium GPU 合成 —— 这种情况请保持默认的 `x11`(入口脚本会给出警告)。
 
@@ -506,7 +492,7 @@ docker compose build            # 或:docker build -t agentene/browser .
 
 ## 版本联动脚本
 
-[`update-chrome-node.mjs`](update-chrome-node.mjs) 基于实时元数据([Chrome for Testing 版本源](https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json)的 Stable 通道 + Node.js 发布索引中最新的 LTS 主版本)统一重钉 `Dockerfile`、`compose.yaml`、`.env.example` 以及两个 README 构建参数默认值表格中的 Chrome 与 Node 版本。Chrome 版本必须提供 `linux64` 构建:
+[`update-chrome-node.mjs`](update-chrome-node.mjs) 基于实时元数据([Chrome for Testing 版本源](https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json)的 Stable 通道 + Node.js 发布索引中最新的 LTS 主版本)统一重钉 `Dockerfile`、`compose.yaml` 以及两个 README 构建参数默认值表格中的 Chrome 与 Node 版本。Chrome 版本必须提供 `linux64` 构建:
 
 ```bash
 node update-chrome-node.mjs                  # 钉到最新的 Stable Chrome for Testing

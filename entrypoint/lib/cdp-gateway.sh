@@ -14,16 +14,14 @@
 cdp_gateway_start() {
     # Isolated contexts live until their client leaves, so nothing survives a
     # restart: drop the leftover clones. Only the gateway's own context-N
-    # dirs — the directory itself may be shared (e.g. CDP_CONTEXTS_DIR=/browser
-    # next to the live profile, or /tmp).
+    # dirs — the directory sits on the /browser mount next to the live profile.
     rm -rf "${CDP_CONTEXTS_DIR}"/context-*
     mkdir -p "${CDP_CONTEXTS_DIR}"
     give_to_run_user "${CDP_CONTEXTS_DIR}"
 
-    # Context browsers follow the main browser's display mode unless told
-    # otherwise, and fall back to headless like the main browser does without
-    # a display.
-    CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS:-${CHROMIUM_HEADLESS}}"
+    # Context browsers follow the main browser's display mode, and fall back
+    # to headless like the main browser does without a display.
+    CDP_CONTEXTS_HEADLESS="${CHROMIUM_HEADLESS}"
     if [ "${CDP_CONTEXTS_HEADLESS}" = "0" ] && ! desktop_ready; then
         log "WARNING: no ${DISPLAY_BACKEND} display for headed CDP contexts -> they run headless"
         CDP_CONTEXTS_HEADLESS=1

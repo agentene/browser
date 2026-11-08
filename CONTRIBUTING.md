@@ -47,7 +47,7 @@ the Wayland desktop (see `.github/workflows/ci.yaml`).
 | `compose.yaml` | base compose file |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | opt-in overlays: HTTPS, Intel/AMD GPU, NVIDIA GPU, host networking |
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |
-| `.env.example` | documented runtime configuration template |
+| `.env.example` | documented runtime configuration template (commonly changed knobs only) |
 | `update-chrome-node.mjs` | version-sync helper (Chrome for Testing ↔ Node) |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag → publish |
 | `.github/workflows/chrome-update.yaml` | daily Chrome for Testing (Stable) watch → bump PR → auto-merge → release → `chore/chrome-update` branch cleanup (in `ci.yaml`) |
@@ -55,7 +55,7 @@ the Wayland desktop (see `.github/workflows/ci.yaml`).
 
 ## Guidelines
 
-* **Keep behavior configurable.** New features should come with an environment knob, a default that is safe for the majority, and an entry in `.env.example`, `compose.yaml` and both READMEs.
+* **Keep behavior configurable.** New features should come with an environment knob, a default that is safe for the majority, and an entry in `compose.yaml` and both READMEs (plus `.env.example` if most users will want to change it).
 * **One PR per concern**, with a short rationale. For behavioral changes, explain how you verified it.
 * **Scripts must pass their linters** (`shellcheck` for bash — the entrypoint, its modules and helpers; `node --check` for JS; `py_compile` for the Python helpers). The Dockerfile must stay `hadolint`-clean and `docker build --check`-clean.
 * **Docs stay in sync**: `README.md` and `README.zh-CN.md` mirror each other; update both.

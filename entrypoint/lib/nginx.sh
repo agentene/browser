@@ -255,7 +255,7 @@ ${locations}
 EOF
 }
 
-# The CDP console sidebar on the web UI (ENABLE_CDP_CONSOLE_PANEL): inject
+# The CDP console sidebar on the web UI (CDP_CONSOLE_PANEL_ACTIVE): inject
 # cdp-gateway/panel.js into the Selkies entry page only (the /api/files/
 # browser is HTML too), and proxy cdp-console/ next to it to the gateway's
 # console. Both paths are relative to the subfolder, like the page's own.

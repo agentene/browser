@@ -105,7 +105,6 @@ services:
       # Certificates: an existing valid pair in ./tls is reused as-is;
       # otherwise a self-signed pair is generated once and then reused.
       ENABLE_HTTPS: "${ENABLE_HTTPS:-false}"
-      #TLS_SELF_SIGNED_CN: "localhost" # CN of the generated self-signed certificate
 
       # --- Extra port forwards (docker network) ---
       # Space/comma-separated LISTEN=HOST:PORT entries: nginx also listens on
@@ -126,8 +125,6 @@ services:
       # Set a password to enable the login screen (username defaults to
       # "ubuntu"; override with SELKIES_BASIC_AUTH_USER). Empty = no login.
       SELKIES_BASIC_AUTH_PASSWORD: "${SELKIES_BASIC_AUTH_PASSWORD:-}"
-      # h264enc (default) | h264enc-striped | openh264enc | jpeg
-      SELKIES_ENCODER: "${SELKIES_ENCODER:-h264enc}"
       # URL path prefix the web UI is served under, e.g. "/desk" ->
       # http://host:port/desk/ (slashes optional; empty = site root). An
       # outer reverse proxy mounting it at a subpath must forward the path
@@ -138,22 +135,10 @@ services:
       # Browser-driven resize: the virtual display follows the viewer's
       # browser window size; false = it stays at SCREEN_GEOMETRY
       SELKIES_ENABLE_RESIZE: "${SELKIES_ENABLE_RESIZE:-true}"
-      # Turbo: encode every frame, a still desktop too; false = only changed
-      # frames (the side menu turns it on for video or games)
-      SELKIES_VIDEO_STREAMING_MODE: "${SELKIES_VIDEO_STREAMING_MODE:-false}"
-      # Media: *_ENABLED = the server accepts it, *_ON_START = it starts with
-      # the session (else it waits for the side menu toggle); "|locked"
-      # stops viewers from changing a value
-      SELKIES_VIDEO_ON_START: "${SELKIES_VIDEO_ON_START:-true}"
-      # false = no audio at all, which also disables the microphone
-      SELKIES_AUDIO_ENABLED: "${SELKIES_AUDIO_ENABLED:-true}"
-      SELKIES_AUDIO_ON_START: "${SELKIES_AUDIO_ON_START:-false}"
-      SELKIES_MICROPHONE_ENABLED: "${SELKIES_MICROPHONE_ENABLED:-true}"
-      SELKIES_MICROPHONE_ON_START: "${SELKIES_MICROPHONE_ON_START:-false}"
-      SELKIES_WEBCAM_ENABLED: "${SELKIES_WEBCAM_ENABLED:-true}"
-      SELKIES_WEBCAM_ON_START: "${SELKIES_WEBCAM_ON_START:-false}"
-      SELKIES_GAMEPAD_ENABLED: "${SELKIES_GAMEPAD_ENABLED:-true}"
-      SELKIES_GAMEPAD_ON_START: "${SELKIES_GAMEPAD_ON_START:-false}"
+      # Media (SELKIES_*_ENABLED / SELKIES_*_ON_START), the encoder and every
+      # other native SELKIES_* setting reach selkies through the env_file
+      # pass-through; the image's media defaults live in the entrypoint
+      # (only video starts with the session, Turbo off).
 
       # --- Chromium / CDP ---
       # 0 (default) = headed on the desktop, visible in the Selkies stream;
@@ -170,9 +155,6 @@ services:
       # (no CDP client, no isolated context, nobody watching the stream)
       # before the gateway closes it again; 0 = never
       CHROMIUM_IDLE_TIMEOUT: "${CHROMIUM_IDLE_TIMEOUT:-0}"
-      # Preload Selkies' webcam + gamepad interposers into the browsers, so
-      # the viewer's camera and gamepads reach them (no device nodes needed)
-      CHROMIUM_DEVICE_INTERPOSERS: "${CHROMIUM_DEVICE_INTERPOSERS:-true}"
       # Extra chromium flags, e.g. "--proxy-server=http://host:3128"
       CHROMIUM_EXTRA_ARGS: "${CHROMIUM_EXTRA_ARGS:-}"
       # GPU/rendering policy (default owned by the entrypoint, so it also
@@ -181,15 +163,6 @@ services:
       # SwiftShader software; off = force software; strict = never
       # SwiftShader (WebGL then requires the GPU).
       CHROMIUM_GPU: "${CHROMIUM_GPU:-auto}"
-      # Comma-separated chromium features disabled via --disable-features=.
-      # Default turns off the HTTPS-First / HTTPS-Upgrade experiments so plain
-      # http:// pages are not auto-upgraded (typical for CDP automation
-      # against internal/intercepted sites). Overridable in .env; set it to an
-      # EMPTY value there (CHROMIUM_DISABLE_FEATURES=) to drop the flag.
-      CHROMIUM_DISABLE_FEATURES: "${CHROMIUM_DISABLE_FEATURES-HttpsFirstBalancedModeAutoEnable,HttpsUpgrades,HttpsFirstModeV2}"
-      # Browser profile; inside the /browser mount so logins, cookies and
-      # extensions survive container recreation
-      CHROMIUM_USER_DATA_DIR: "${CHROMIUM_USER_DATA_DIR:-/browser/user-data}"
 
       # --- CDP gateway ---
       # Every isolated CDP context (browser.newContext(), playwright-cli
@@ -198,42 +171,17 @@ services:
       # closes. Dashboard: http://host:${CDP_PORT}/console/
       # Most isolated contexts alive at once (each is a whole browser)
       CDP_CONTEXTS_MAX: "${CDP_CONTEXTS_MAX:-4}"
-      # 1 = context browsers run headless; empty = same as CHROMIUM_HEADLESS
-      CDP_CONTEXTS_HEADLESS: "${CDP_CONTEXTS_HEADLESS:-}"
-      # One profile-cloned browser per isolated context lives here (wiped at
-      # every start); keep it on the /browser mount next to the profile so
-      # the clones can be reflinks
-      CDP_CONTEXTS_DIR: "${CDP_CONTEXTS_DIR:-/browser/contexts}"
-      # The CDP console also as a sidebar on the right of
-      # the Selkies page (needs the Selkies master password when one is set)
-      ENABLE_CDP_CONSOLE_PANEL: "${ENABLE_CDP_CONSOLE_PANEL:-true}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: x11 = Xvfb (+ picom); wayland =
       # labwc, a headless Wayland compositor + window manager that Selkies
       # captures on the GPU (with the compose.gpu.yaml overlay: several times
       # less CPU for animated pages; no gain without a GPU, keep x11 with
-      # NVIDIA). SCREEN_GEOMETRY_MAX, ENABLE_COMPOSITOR and
-      # CHROMIUM_FOLLOW_SCREEN below are X11-only.
+      # NVIDIA).
       DISPLAY_BACKEND: "${DISPLAY_BACKEND:-x11}"
       # Xvfb screen geometry WxHxD (wayland: labwc's output size); also sizes
       # the Selkies stream
       SCREEN_GEOMETRY: "${SCREEN_GEOMETRY:-1920x1080x24}"
-      # RandR ceiling WxHxD the Xvfb screen is created at, so Selkies'
-      # dynamic resize (browser window size -> virtual display resolution)
-      # can grow past SCREEN_GEOMETRY; the working size is preset back in
-      # at startup. Empty = the fixed screen of SCREEN_GEOMETRY (no colon:
-      # an explicitly empty value stays empty and disables the headroom).
-      SCREEN_GEOMETRY_MAX: "${SCREEN_GEOMETRY_MAX-8192x4096x24}"
-      # Run a compositing manager (picom) on the Xvfb display. Without one
-      # chromium drops the alpha-blended shadows of its popup windows, so
-      # the right-click context menu shows up as a seemingly borderless
-      # white sheet on light pages. false = the old flat look.
-      ENABLE_COMPOSITOR: "${ENABLE_COMPOSITOR:-true}"
-      # Keep the headed chromium window covering the whole display when the
-      # screen is resized (Selkies' browser-driven resize); no window manager
-      # runs on Xvfb to do it. false = the window keeps its startup size.
-      CHROMIUM_FOLLOW_SCREEN: "${CHROMIUM_FOLLOW_SCREEN:-true}"
 
       # --- Privilege drop ---
       # Run the desktop stack (Xvfb/labwc, picom, PulseAudio, selkies, chromium,

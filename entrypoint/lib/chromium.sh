@@ -152,14 +152,12 @@ chromium_build_flags() {
     if [ "${CHROMIUM_GPU}" != "strict" ]; then
         CHROMIUM_TAIL_FLAGS+=(--enable-unsafe-swiftshader)
     fi
-    # Dedicated --disable-features knob (CHROMIUM_DISABLE_FEATURES, fed from
-    # .env by compose). Appended before CHROMIUM_EXTRA_ARGS so a manually
-    # passed --disable-features there still wins (chromium keeps the last
-    # occurrence of a repeated switch).
-    if [ -n "${CHROMIUM_DISABLE_FEATURES}" ]; then
-        log "chromium: disabling features: ${CHROMIUM_DISABLE_FEATURES}"
-        CHROMIUM_TAIL_FLAGS+=(--disable-features="${CHROMIUM_DISABLE_FEATURES}")
-    fi
+    # Keep plain http:// pages as they are (typical for CDP automation
+    # against internal or intercepted sites): no HTTPS-First / HTTPS-Upgrade.
+    # Appended before CHROMIUM_EXTRA_ARGS so a --disable-features passed
+    # there still wins (chromium keeps the last occurrence of a repeated
+    # switch).
+    CHROMIUM_TAIL_FLAGS+=("--disable-features=HttpsFirstBalancedModeAutoEnable,HttpsUpgrades,HttpsFirstModeV2")
     if [ -n "${CHROMIUM_EXTRA_ARGS:-}" ]; then
         # split the flag string into words — same semantics as an unquoted
         # expansion, but robust for the array append
@@ -226,7 +224,7 @@ GSKEYFILE
 # The browsers alone get them: Selkies must keep seeing the real device nodes.
 chromium_device_interposers() {
     local dir=/usr/local/lib/selkies-interposers
-    [ "${CHROMIUM_DEVICE_INTERPOSERS}" = "true" ] && [ "${ENABLE_SELKIES}" = "true" ] || return 0
+    [ "${ENABLE_SELKIES}" = "true" ] || return 0
     # The input interposer adds its nodes to a /dev/input listing, so the
     # directory has to exist; a container's /dev has none.
     [ -d /dev/input ] || mkdir -m1777 /dev/input 2>/dev/null \
@@ -243,8 +241,7 @@ chromium_device_interposers() {
 # caught at map time. Once started it is supervised like every service.
 # X11 only: labwc keeps the windows maximized on the Wayland desktop.
 chromium_start_follower() {
-    if [ "${CHROMIUM_HEADLESS}" != "0" ] || [ "${CHROMIUM_FOLLOW_SCREEN}" != "true" ] \
-        || [ "${DISPLAY_BACKEND}" != "x11" ]; then
+    if [ "${CHROMIUM_HEADLESS}" != "0" ] || [ "${DISPLAY_BACKEND}" != "x11" ]; then
         return 0
     fi
     log "starting chromium screen follower on display ${DISPLAY}"

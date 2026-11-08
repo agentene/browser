@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * update-chrome-node.mjs — keep the pinned Chrome for Testing + Node.js
- * versions in sync across the repo (Dockerfile, compose.yaml, .env.example,
- * and the build-arg default tables in README.md / README.zh-CN.md).
+ * versions in sync across the repo (Dockerfile, compose.yaml, and the
+ * build-arg default tables in README.md / README.zh-CN.md).
  *
  * Versions come from live metadata instead of guesswork:
  *   1. Chrome: the Stable channel of Google's Chrome for Testing feed
@@ -124,13 +124,6 @@ async function main() {
           `$1${chromeVersion}$3`,
         ],
         [/^((\s*)NODE_VERSION: "\$\{NODE_VERSION:-)[^}]*(\}")$/m, `$1${nodeMajor}$3`],
-      ],
-    },
-    {
-      file: ".env.example",
-      subs: [
-        [/^(#CHROME_VERSION=)\S*/m, `$1${chromeVersion}`],
-        [/^(#NODE_VERSION=)\S*/m, `$1${nodeMajor}`],
       ],
     },
     // The README build-arg tables mirror the same defaults (docs are a
