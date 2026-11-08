@@ -509,7 +509,16 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 * **GHCR**:`ghcr.io/agentene/browser`(使用内置 `GITHUB_TOKEN`)
 * **Docker Hub**:`agentene/browser`(与 GHCR 同为 `<owner>/<repo>` 路径;需要仓库 secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`,且该账号有权推送到此命名空间;未配置则跳过)
 
-标签规则(标签与 Chrome 版本对齐):`v150.0.7871.100` → `150.0.7871.100`、`150`、`sha-<短哈希>`、`latest`。手动运行 workflow(无标签)时只发布 `sha-<短哈希>` 标签。
+版本规则:项目自身版本 `X.Y.Z`(semver)记录在 [`VERSION`](VERSION) 文件中,手动升级;其后拼接内置的 Chrome for Testing 版本。Git 发布标签为 `v<X.Y.Z>-<chrome 版本>`,例如 `v0.1.0-150.0.7871.100`,发布以下镜像标签:
+
+| 镜像标签 | 示例 | 含义 |
+| --- | --- | --- |
+| `<X.Y.Z>-<chrome 版本>` | `0.1.0-150.0.7871.100` | 精确版本 —— 需要可复现部署时钉这个 |
+| `<X.Y.Z>` | `0.1.0` | 该项目版本下最新的 Chrome 构建 |
+| `latest` | | 最新发布 |
+| `sha-<短哈希>` | `sha-2c2f6bb` | 构建镜像所用的提交 |
+
+Chrome 升级保持 `X.Y.Z` 不变、只改后缀(`v0.1.0-150.0.7871.100` → `v0.1.0-151.0.…`);代码改动通过升级 `VERSION` 发布。`publish` job 会拒绝与所在提交的 `VERSION` + Chrome 版本不一致的标签。手动运行 workflow(无标签)时只发布 `sha-<短哈希>` 标签。
 
 ### 上游版本自动更新
 
@@ -519,18 +528,18 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 2. 自动开启一个包含变更 diff 的 bump PR;
 3. `ci.yaml` 在该 PR 上运行(lint + 完整构建 + 冒烟测试);
 4. CI 全绿后 PR 以 squash 方式自动合并;
-5. `ci.yaml` 中的 `release-tag` job 推送标签 `v<chrome 版本>`;
+5. `ci.yaml` 中的 `release-tag` job 推送标签 `v<X.Y.Z>-<chrome 版本>`;
 6. 标签事件触发 `publish` job → 镜像发布到 GHCR / Docker Hub;
 7. `ci.yaml` 中的 `cleanup-update-branch` job 删除已合并的 `chore/chrome-update` 分支(若新一轮 bump 已复用该分支则保留)。
 
-若 `v150.0.7871.100` 已被占用(同一 Chrome 版本重新发布),标签自动递增为 `v150.0.7871.100-r2`、`-r3`、……
+合入 main 的 `VERSION` 变更同样由该 job 发布。每个 `VERSION` + Chrome 组合只发布一次:标签已存在时 job 跳过并给出警告 —— 要在同一 Chrome 上再次发布,请升级 `VERSION`。
 
 要实现全自动,需一次性配置:
 
 * **仓库 secret `CHROME_UPDATE_TOKEN`** —— 经典 PAT(需 `repo` 权限)或 fine-grained PAT(需 *Contents* + *Pull requests* 读写)。它在两处不可或缺:GitHub 对用内置 `GITHUB_TOKEN` 创建的 PR 绝不触发 `on: pull_request`(bump PR 将没有 CI 检查);且 `GITHUB_TOKEN` 产生的事件不会触发任何 workflow(用它推送的发布标签永远不会启动 publish job)。不配置该 secret 时 bump PR 照常开启、等待人工合并(关闭再重开该 PR 可强制触发 CI),但推送的标签不会自动发布 —— 需在本机重推标签或手动运行 workflow。
 * **Settings → General → Pull Requests → "Allow auto-merge"** 打开,PR 才能在检查通过后自行合并。
 
-不配置 secret 时流程仍然完整,只是加了人工闸门:PR 照常开启,你验证后手动合并,打标签与发布随后自动完成。手动 `v*` 标签的发布方式完全不变;手动改 Chrome 版本合入 main 也会同样被自动打标签并发布。
+不配置 secret 时流程仍然完整,只是加了人工闸门:PR 照常开启,你验证后手动合并,打标签与发布随后自动完成。手动推送的标签只要是所在提交的 `v<VERSION>-<chrome 版本>` 也会发布;手动改 Chrome 版本或 `VERSION` 合入 main 也会同样被自动打标签并发布。
 
 ## 安全注意事项
 

@@ -49,7 +49,8 @@ the Wayland (default) and X11 desktops (see `.github/workflows/ci.yaml`).
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |
 | `.env.example` | documented runtime configuration template (commonly changed knobs only) |
 | `update-chrome-node.mjs` | version-sync helper (Chrome for Testing ↔ Node) |
-| `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag → publish |
+| `VERSION` | the project version `X.Y.Z` (semver, bumped by hand); releases are tagged `v<VERSION>-<chrome-version>`, e.g. `v0.1.0-150.0.7871.100` |
+| `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag (`v<VERSION>-<chrome-version>`) → publish |
 | `.github/workflows/chrome-update.yaml` | daily Chrome for Testing (Stable) watch → bump PR → auto-merge → release → `chore/chrome-update` branch cleanup (in `ci.yaml`) |
 | `examples/` | CDP client examples |
 

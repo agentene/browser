@@ -509,7 +509,16 @@ Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/c
 * **GHCR**: `ghcr.io/agentene/browser` (uses the built-in `GITHUB_TOKEN`)
 * **Docker Hub**: `agentene/browser` (same `<owner>/<repo>` path as GHCR; needs the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets of an account allowed to push there; skipped otherwise)
 
-Tag scheme (tags follow the Chrome version): `v150.0.7871.100` → `150.0.7871.100`, `150`, `sha-<short>` and `latest`. A manual run of the workflow (no tag) publishes only the `sha-<short>` tag.
+Version scheme: the project's own version `X.Y.Z` (semver) lives in [`VERSION`](VERSION) and is bumped by hand; the bundled Chrome for Testing version is appended to it. Git release tags are `v<X.Y.Z>-<chrome-version>`, e.g. `v0.1.0-150.0.7871.100`, and publish these image tags:
+
+| Image tag | Example | Meaning |
+| --- | --- | --- |
+| `<X.Y.Z>-<chrome-version>` | `0.1.0-150.0.7871.100` | exact release — pin this for reproducible deployments |
+| `<X.Y.Z>` | `0.1.0` | newest Chrome build of that project version |
+| `latest` | | newest release |
+| `sha-<short>` | `sha-2c2f6bb` | the commit the image was built from |
+
+A Chrome bump keeps `X.Y.Z` and only changes the suffix (`v0.1.0-150.0.7871.100` → `v0.1.0-151.0.…`); a code change is released by bumping `VERSION`. The `publish` job rejects a tag that does not match its commit's `VERSION` + Chrome pin. A manual run of the workflow (no tag) publishes only the `sha-<short>` tag.
 
 ### Automatic upstream updates
 
@@ -519,18 +528,18 @@ Tag scheme (tags follow the Chrome version): `v150.0.7871.100` → `150.0.7871.1
 2. a bump PR is opened with the diff,
 3. `ci.yaml` runs on the PR (lint + full build + smoke tests),
 4. the PR squashes via auto-merge once CI is green,
-5. the `release-tag` job in `ci.yaml` pushes tag `v<chrome-version>`,
+5. the `release-tag` job in `ci.yaml` pushes tag `v<X.Y.Z>-<chrome-version>`,
 6. the tag event runs the `publish` job → the image lands on GHCR / Docker Hub,
 7. the `cleanup-update-branch` job in `ci.yaml` deletes the merged `chore/chrome-update` branch (kept if a newer bump already reuses it).
 
-If `v150.0.7871.100` is already taken (re-release of the same Chrome version), the tag increments to `v150.0.7871.100-r2`, `-r3`, …
+The same job also releases a merged change of `VERSION`. Each `VERSION` + Chrome pair is released once: if the tag already exists, the job skips with a warning — bump `VERSION` to release again on the same Chrome.
 
 For the fully automatic path, configure once:
 
 * **Repo secret `CHROME_UPDATE_TOKEN`** — a PAT with `repo` scope (classic) or a fine-grained token with *Contents* + *Pull requests* read/write. It is needed twice: GitHub never fires `on: pull_request` for PRs created with the built-in `GITHUB_TOKEN` (the bump PR would carry no CI checks), and events created by `GITHUB_TOKEN` never trigger workflows (a release tag pushed with it would never start the publish job). Without the PAT the bump PR still opens and waits for a manual merge (close & reopen it to force CI), but the pushed tag does not auto-publish — re-push the tag from a machine or run the workflow manually.
 * **Settings → General → Pull Requests → "Allow auto-merge"** enabled, so the PR can merge itself once checks pass.
 
-Without the secret everything still works, just human-gated: the PR opens, you verify, you merge — tagging and publishing then run automatically. Manual `v*` tags keep working exactly as before, and a manual Chrome bump merged to main is auto-tagged and released the same way.
+Without the secret everything still works, just human-gated: the PR opens, you verify, you merge — tagging and publishing then run automatically. A manual tag also publishes, as long as it is `v<VERSION>-<chrome-version>` of the tagged commit; a manual Chrome or `VERSION` bump merged to main is auto-tagged and released the same way.
 
 ## Security considerations
 
