@@ -9,8 +9,9 @@
 #      the optional CHROME_UPDATE_TOKEN secret (see README): PRs created
 #      with the default GITHUB_TOKEN never fire `on: pull_request` workflows,
 #   4. the PR is marked auto-merge and is squashed once CI is green,
-#   5. the release-tag job in ci.yaml tags v<chrome-version> for the merged
-#      pin, which re-triggers ci.yaml's publish job (GHCR + Docker Hub);
+#   5. the release-tag job in ci.yaml tags v<VERSION>-<chrome-version> for
+#      the merged pin (VERSION unchanged — a Chrome bump only changes the
+#      suffix), which re-triggers ci.yaml's publish job (GHCR + Docker Hub);
 #      ci.yaml's cleanup-update-branch job deletes chore/chrome-update.
 #
 # Required repo settings for the fully automatic path:
@@ -69,6 +70,7 @@ jobs:
           {
             echo "chrome=$(grep -m1 '^ARG CHROME_VERSION=' Dockerfile | cut -d= -f2 | awk '{print $1}')"
             echo "node=$(grep -m1 '^ARG NODE_VERSION=' Dockerfile | cut -d= -f2 | awk '{print $1}')"
+            echo "version=$(tr -d '[:space:]' < VERSION)"
             if git diff --quiet; then
               echo "changed=false"
             else
@@ -103,8 +105,9 @@ jobs:
             | Chrome for Testing (Stable) | `${{ steps.before.outputs.chrome }}` | `${{ steps.update.outputs.chrome }}` |
             | Node major | `${{ steps.before.outputs.node }}` | `${{ steps.update.outputs.node }}` |
 
-            Merging releases image tag `${{ steps.update.outputs.chrome }}`: the
-            `release-tag` job in `ci.yaml` pushes tag `v${{ steps.update.outputs.chrome }}`,
+            Merging releases image tag `${{ steps.update.outputs.version }}-${{ steps.update.outputs.chrome }}`:
+            the `release-tag` job in `ci.yaml` pushes tag
+            `v${{ steps.update.outputs.version }}-${{ steps.update.outputs.chrome }}`,
             whose tag event runs the `publish` job (GHCR + Docker Hub).
 
             ${{ env.HAS_PAT == 'true' && 'CI (lint + full build + smoke tests) must pass; this PR auto-merges (squash) once green.' || 'Note: `CHROME_UPDATE_TOKEN` is not configured, so CI will NOT run on this PR (GitHub does not fire `pull_request` for PRs created with the default token). Close & reopen the PR to force CI, then merge manually.' }}

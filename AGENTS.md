@@ -26,6 +26,7 @@ runtime smoke tests.
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | Every runtime knob, documented |
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page, `ENABLE_CDP_CONSOLE_PANEL`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
+| `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Release tags are `v<VERSION>-<chrome-version>` — see [Releases](#releases) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + `.env.example` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
 | `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release (ci.yaml's `cleanup-update-branch` then deletes `chore/chrome-update`) |
@@ -44,6 +45,7 @@ docker run --rm -i -e HADOLINT_CONFIG=/.hadolint.yaml \
   -v "$PWD/.hadolint.yaml:/.hadolint.yaml" hadolint/hadolint:v2.12.0 < Dockerfile
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
+grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION                   # X.Y.Z, one line
 node --check update-chrome-node.mjs
 for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
@@ -206,16 +208,33 @@ node update-chrome-node.mjs --node 22        # force the Node major
 
 ## Releases
 
-Routine releases are fully automated — do not hand-tag Chrome bumps.
-Image tags follow the Chrome version (4 parts, e.g. `v150.0.7871.100`; not
-semver). Merging to main a change of the `ARG CHROME_VERSION` pin makes the
-`release-tag` job in `ci.yaml` push `v<chrome-version>` (`-r2`, `-r3`, … on
-re-release),
-which triggers the `publish` job (GHCR always; Docker Hub when the
-`DOCKERHUB_*` secrets exist). The daily `chrome-update.yaml` cron opens
-the bump PR and auto-merges it once CI is green; the `cleanup-update-branch`
-job in `ci.yaml` then deletes the merged `chore/chrome-update` branch.
-Manual `v*` tags still work.
+Version scheme — two parts, joined by `-`:
+
+* **Project version** `X.Y.Z` (semver) lives in the root `VERSION` file and
+  is changed by hand, in the PR that makes the change: patch for fixes,
+  minor for features / new knobs, major for breaking changes (removed or
+  renamed knobs, changed defaults users must react to). Bump it whenever an
+  image-affecting change should be released.
+* **Chrome version** — the 4-part `ARG CHROME_VERSION` pin (only
+  `update-chrome-node.mjs` touches it). A Chrome bump does NOT change
+  `VERSION`; it only changes the suffix.
+
+Git release tag: `v<VERSION>-<chrome-version>`, e.g. `v0.1.0-150.0.7871.100`.
+Docker image tags: `<VERSION>-<chrome-version>` (e.g. `0.1.0-150.0.7871.100`),
+plus the floating `<VERSION>` (e.g. `0.1.0`) and `latest`, and
+`sha-<short>`. A tag is immutable: one `VERSION` + Chrome pair is released
+once — to re-release on the same Chrome, bump `VERSION`.
+
+Routine releases are fully automated — do not hand-tag. Merging to main a
+change of `VERSION` or of the `ARG CHROME_VERSION` pin makes the
+`release-tag` job in `ci.yaml` push `v<VERSION>-<chrome-version>` (skipped
+with a warning if that tag already exists), which triggers the `publish` job
+(GHCR always; Docker Hub when the `DOCKERHUB_*` secrets exist). `publish`
+refuses a tag that does not equal `v<VERSION>-<CHROME_VERSION>` of its own
+commit, so a manual tag must follow the same scheme. The daily
+`chrome-update.yaml` cron opens the bump PR and auto-merges it once CI is
+green; the `cleanup-update-branch` job in `ci.yaml` then deletes the merged
+`chore/chrome-update` branch.
 
 ## Commit style
 
