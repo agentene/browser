@@ -18,7 +18,7 @@ runtime smoke tests.
 | Path | Role |
 | --- | --- |
 | `Dockerfile` | Single-stage ubuntu:26.04 image: Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
-| `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages Xvfb → picom (or labwc) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
+| `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages labwc (or Xvfb → picom) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
 | `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `audio`, `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
 | `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, chromium prefs seeding, the orderly Browser.close the supervisor's stop hook runs) — formerly heredocs in the entrypoint |
 | `.shellcheckrc` | Lets shellcheck follow the module `source` statements |
@@ -27,7 +27,7 @@ runtime smoke tests.
 | `.env.example` | The commonly changed runtime knobs, documented (the full reference is the READMEs' Configuration section + `entrypoint/lib/config.sh`) |
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies and CDP are both on), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + the README build-arg tables together |
-| `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
+| `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland, X11) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
 | `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release (ci.yaml's `cleanup-update-branch` then deletes `chore/chrome-update`) |
 | `examples/` | CDP client examples (`connect-playwright.mjs`, `webgl-renderer-probe.mjs`) |
 | `README.md` / `README.zh-CN.md` | Mirrored EN / zh-CN user docs |
@@ -71,8 +71,8 @@ docker rm -f web-smoke
 ```
 
 CI additionally smoke-tests the CDP gateway (an isolated context is created,
-driven and disposed with raw CDP) and the Wayland desktop
-(`DISPLAY_BACKEND=wayland`) — see the `verify` job in `ci.yaml`.
+driven and disposed with raw CDP), the default Wayland desktop and the X11
+one (`DISPLAY_BACKEND=x11`) — see the `verify` job in `ci.yaml`.
 
 When a smoke test fails: container logs live in `/tmp/*.log` (`xvfb.log`,
 `labwc.log`, `picom.log`, `chromium.log`, `pulseaudio.log`,
@@ -177,7 +177,7 @@ node update-chrome-node.mjs --node 22        # force the Node major
   `CHROMIUM_COMMON_FLAGS`/`CHROMIUM_TAIL_FLAGS` — new chromium flags belong
   in one of those so context browsers inherit them. The gateway is in
   `pids`; context chromiums are its children and are cleaned up by it.
-* **Two display backends (`DISPLAY_BACKEND=x11|wayland`, default x11).**
+* **Two display backends (`DISPLAY_BACKEND=wayland|x11`, default wayland).**
   `wayland` replaces Xvfb/picom with labwc on the wlroots *headless*
   backend, which Selkies captures as an external compositor
   (`--wayland-host-display`, screencopy, dmabuf zero-copy with a GPU).

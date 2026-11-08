@@ -159,7 +159,8 @@ RUN apt-get update && \
 # python3-xlib = the entrypoint's screen follower: no window manager runs on
 # the Xvfb display, so it keeps the chromium window sized to the screen when
 # Selkies resizes it (entrypoint/lib/chromium.sh).
-# labwc + wlr-randr + wlrctl = the DISPLAY_BACKEND=wayland desktop: labwc is
+# labwc + wlr-randr + wlrctl = the DISPLAY_BACKEND=wayland desktop (the
+# default): labwc is
 # the headless Wayland compositor + window manager Selkies captures (it
 # maximizes the browser windows), wlr-randr sizes its output at startup and
 # wlrctl raises a window for the CDP console.
@@ -225,17 +226,18 @@ RUN apt-get update && \
 # preloads them into Chromium from this directory.
 COPY --from=interposers /out/ /usr/local/lib/selkies-interposers/
 
-# Step 3: Selkies attaches to an existing X display (or, with
-# DISPLAY_BACKEND=wayland, a headless labwc) and PulseAudio server.
-# docker-entrypoint.sh starts both (Xvfb + PulseAudio) plus Selkies (bound to
+# Step 3: Selkies attaches to an existing headless labwc (or, with
+# DISPLAY_BACKEND=x11, an X display) and PulseAudio server.
+# docker-entrypoint.sh starts both (labwc/Xvfb + PulseAudio) plus Selkies (bound to
 # loopback), Chrome for Testing and the nginx front door in one place, so
 # container start is service start; combine with `docker run --restart=always`
 # for boot persistence.
 # The entrypoint defaults these itself (entrypoint/lib/config.sh); they are
 # set here only so `docker exec` shells (glxinfo, pactl, ...) reach the
-# desktop. They are the defaults, not the live values: exec sees DISPLAY=:0
-# even where the entrypoint moved to a free display or, with
-# DISPLAY_BACKEND=wayland, runs no X server at all.
+# X11 desktop (DISPLAY_BACKEND=x11). They are the defaults, not the live
+# values: exec sees DISPLAY=:0 even where the entrypoint moved to a free
+# display or, with the default DISPLAY_BACKEND=wayland, runs no X server at
+# all (labwc's socket name is in /tmp/labwc-display).
 ENV DISPLAY=":0"
 ENV XDG_RUNTIME_DIR="/tmp"
 ENV PULSE_RUNTIME_PATH="/tmp/pulse"

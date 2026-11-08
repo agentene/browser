@@ -12,7 +12,7 @@
 The container starts everything it needs in one place and supervises it as PID 1:
 
 ```
-docker run ─┬─ Xvfb        virtual display (what Selkies streams; labwc with DISPLAY_BACKEND=wayland)
+docker run ─┬─ labwc       virtual Wayland desktop (what Selkies streams; Xvfb with DISPLAY_BACKEND=x11)
             ├─ PulseAudio  virtual audio
             ├─ Selkies     HTML5 remote desktop  ─┐
             ├─ Chrome      for Testing, CDP ──────┼─ nginx front door
@@ -20,7 +20,7 @@ docker run ─┬─ Xvfb        virtual display (what Selkies streams; labwc wi
 ```
 
 * **Chromium with a public CDP endpoint** — connect [Playwright](https://playwright.dev) / Puppeteer / Selenium from *outside* the container via `connectOverCDP("http://localhost:9222")`.
-* **Live-viewable desktop** — the browser runs **headed** on a virtual X11 display by default, and [Selkies](https://github.com/selkies-project/selkies) 2.x streams it to any browser over WebSockets/WebCodecs (WebRTC opt-in, audio included). Watch and interact with your automation as it runs.
+* **Live-viewable desktop** — the browser runs **headed** on a headless Wayland desktop ([labwc](https://labwc.github.io/)) by default (Xvfb/X11 with `DISPLAY_BACKEND=x11`), and [Selkies](https://github.com/selkies-project/selkies) 2.x streams it to any browser over WebSockets/WebCodecs (WebRTC opt-in, audio included). Watch and interact with your automation as it runs.
 * **Persistent profile** — cookies, logins and extensions survive container recreation via a bind mount.
 * **HTTPS support** — self-signed by default, or bring your own certificate; existing valid pairs are always reused.
 * **Sane defaults** — UTC timezone, `en-US` browser locale; both are one-line overrides.
@@ -62,8 +62,8 @@ docker run ─┬─ Xvfb        virtual display (what Selkies streams; labwc wi
 | Chrome for Testing  | [pinned stable](Dockerfile)  | the automated browser, Google's official build of the Stable channel   |
 | Selkies             | [pinned release](Dockerfile) | HTML5 remote desktop (web client, signaling, streaming)                 |
 | nginx               | Ubuntu package               | front door: web UI (HTTP/HTTPS) + CDP endpoint, WebSocket-capable       |
-| Xvfb / PulseAudio   | Ubuntu packages              | virtual display + audio for the stream                                  |
-| labwc               | Ubuntu package               | headless Wayland desktop, opt-in (`DISPLAY_BACKEND=wayland`)            |
+| labwc               | Ubuntu package               | headless Wayland desktop, the default (`DISPLAY_BACKEND=wayland`)       |
+| Xvfb / PulseAudio   | Ubuntu packages              | X11 display (`DISPLAY_BACKEND=x11`) + audio for the stream              |
 
 All services are loopback-only inside the container; nginx is the single public front door and every proxy speaks WebSocket (required by both CDP and Selkies signaling).
 
@@ -320,7 +320,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | Variable             | Default        | Description                                                                                                                                                                                                                                                                      |
 | -------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TZ`                 | `UTC`          | container timezone (any IANA zone, e.g. `Asia/Shanghai`)                                                                                                                                                                                                                         |
-| `DISPLAY_BACKEND`    | `x11`          | desktop the headed browsers live on: `x11` = Xvfb (+ picom); `wayland` = labwc, a headless Wayland compositor + window manager that Selkies captures on the GPU — several times less CPU for animated pages when a GPU is passed in, see [Wayland desktop](#wayland-desktop-display_backendwayland) |
+| `DISPLAY_BACKEND`    | `wayland`      | desktop the headed browsers live on: `wayland` = labwc, a headless Wayland compositor + window manager that Selkies captures on the GPU — several times less CPU for animated pages when a GPU is passed in, see [Wayland desktop](#wayland-desktop-display_backendwayland); `x11` = Xvfb (+ picom) — use it with an NVIDIA GPU |
 | `SCREEN_GEOMETRY`    | `1920x1080x24` | Xvfb screen size `WxHxD` (with `wayland`: the size of labwc's output); also sizes the Selkies stream                                                                                                                                                                             |
 | `RUN_USER`           | *(empty)*      | run the desktop stack (Xvfb or labwc, picom, PulseAudio, selkies, chromium, the CDP gateway) and the nginx *workers* as this user instead of root — an existing username (e.g. `browser`) or `uid[:gid]`; PID 1 and the nginx master stay root. See [Privilege drop (`RUN_USER`)](#privilege-drop-run_user) |
 
@@ -388,18 +388,17 @@ COMPOSE_FILE=compose.yaml:compose.gpu.yaml
 COMPOSE_FILE=compose.yaml:compose.gpu-nvidia.yaml
 ```
 
-The entrypoint auto-detects the device at start (`CHROMIUM_GPU=auto`, the default) and switches Chromium to the Vulkan/ANGLE backend (`--use-angle=vulkan --enable-features=Vulkan`): WebGL/WebGPU contexts render via Vulkan — the native-GL path cannot work on Xvfb at all — and the display compositor runs on Vulkan too (without the compositing flag chrome://gpu reports WebGL as "Hardware accelerated but at reduced performance": GPU frames read back into a CPU compositor). Verified results: NVIDIA passthrough → `ANGLE (NVIDIA, Vulkan … GeForce RTX …)`, AMD iGPU → `ANGLE (AMD, Vulkan … RADV)` with `webgl/webgpu: enabled` (no readback). `--disable-gpu` is then no longer added in headless mode, and SwiftShader stays allowed as a runtime fallback so WebGL survives a flaky device. `CHROMIUM_GPU=strict` never allows SwiftShader (anti-fingerprinting: the browser must not report a software renderer — WebGL is then unavailable without a GPU); `off` forces the software path even with a GPU attached.
+The entrypoint auto-detects the device at start (`CHROMIUM_GPU=auto`, the default). On the default Wayland desktop Chromium then renders through its native Wayland/EGL path (see [Wayland desktop](#wayland-desktop-display_backendwayland)); with `DISPLAY_BACKEND=x11` it switches Chromium to the Vulkan/ANGLE backend (`--use-angle=vulkan --enable-features=Vulkan`): WebGL/WebGPU contexts render via Vulkan — the native-GL path cannot work on Xvfb at all — and the display compositor runs on Vulkan too (without the compositing flag chrome://gpu reports WebGL as "Hardware accelerated but at reduced performance": GPU frames read back into a CPU compositor). Verified results: NVIDIA passthrough → `ANGLE (NVIDIA, Vulkan … GeForce RTX …)`, AMD iGPU → `ANGLE (AMD, Vulkan … RADV)` with `webgl/webgpu: enabled` (no readback). `--disable-gpu` is then no longer added in headless mode, and SwiftShader stays allowed as a runtime fallback so WebGL survives a flaky device. `CHROMIUM_GPU=strict` never allows SwiftShader (anti-fingerprinting: the browser must not report a software renderer — WebGL is then unavailable without a GPU); `off` forces the software path even with a GPU attached.
 
 The image bakes in the Mesa/VA-API userland for Intel/AMD; NVIDIA GL libraries cannot be baked in (they must match the host driver) — the nvidia container toolkit injects them at container start. Verify with `docker compose exec browser glxinfo -B` / `vainfo` (Intel/AMD) or `nvidia-smi` (NVIDIA), and with `chrome://gpu` in the streamed browser: WebGL should report the hardware renderer. [`examples/webgl-renderer-probe.mjs`](examples/webgl-renderer-probe.mjs) prints the WebGL renderer and the `chrome://gpu` feature status without any dependency: it defaults to the loopback DevTools port `127.0.0.1:9221` (run it inside the container, e.g. after `docker cp`), or point it at the public endpoint with `node examples/webgl-renderer-probe.mjs localhost 9222`.
 
 ### Wayland desktop (`DISPLAY_BACKEND=wayland`)
 
-With an Intel/AMD GPU passed in, the Wayland desktop is far cheaper than Xvfb for anything that animates (video, canvas, carousels — e.g. the baidu.com homepage logo is a looping video). On Xvfb every frame of a browser window is read back from the GPU and copied through the single-threaded software X server, and Selkies copies it out again; one animated page keeps Xvfb at ~100% of a CPU core, and once it saturates every window and the stream slow down. With
+The Wayland desktop is the default. With an Intel/AMD GPU passed in, it is far cheaper than Xvfb for anything that animates (video, canvas, carousels — e.g. the baidu.com homepage logo is a looping video). On Xvfb every frame of a browser window is read back from the GPU and copied through the single-threaded software X server, and Selkies copies it out again; one animated page keeps Xvfb at ~100% of a CPU core, and once it saturates every window and the stream slow down. With
 
 ```bash
-# .env
+# .env  (DISPLAY_BACKEND=wayland is the default)
 COMPOSE_FILE=compose.yaml:compose.gpu.yaml
-DISPLAY_BACKEND=wayland
 ```
 
 the browsers run in [labwc](https://labwc.github.io/), a headless Wayland compositor + window manager, and Selkies captures its output by screencopy: the frames stay on the GPU from Chromium to the VA-API encoder (dmabuf zero-copy). Measured on an AMD iGPU (Renoir), 1920x1200, baidu.com homepage open, whole-container CPU:
@@ -409,7 +408,7 @@ the browsers run in [labwc](https://labwc.github.io/), a headless Wayland compos
 | nobody watching | 107% | 17% |
 | a Selkies viewer connected | 335% (Xvfb saturated) | 29% |
 
-What changes with it:
+How it differs from `x11`:
 
 * Browser windows are maximized by labwc and keep their tab strip and address bar, and they stay locked that way: only the close button is shown, double/middle clicks on the tab strip do nothing, dragging a window or its edges (Alt+drag included) can neither move nor resize it, and *Minimize* / *Restore* from the tab strip's context menu are undone within a fraction of a second (the watcher that undoes them sleeps while no window is open, so an empty desktop costs no CPU); popups and the context menu are composited natively (no picom). Alt+Tab cycles windows; the CDP console's *Show* raises a window through labwc.
 * labwc's own 60 Hz frame clock paces the browsers whether or not anyone watches the stream, and windows covered by others keep rendering, so automation behaves as on Xvfb.
@@ -418,7 +417,7 @@ What changes with it:
 * Chromium renders through its native Wayland/EGL path instead of the Vulkan flags above (Chromium does not support Vulkan with Wayland).
 * Selkies captures labwc through wlr-screencopy (`PIXELFLUX_HOST_CAPTURE=zwlr`, set by the entrypoint). labwc also offers the newer ext-image-copy-capture, which pixelflux would prefer, but labwc cannot import the GPU buffers pixelflux allocates for it, so with a GPU the stream never starts.
 
-When it does not help: without a GPU everything runs in software either way and costs about the same as `x11` (the `wayland` smoke test in CI runs that way); with **NVIDIA**, Chromium gets no GPU compositing on Wayland from the injected driver stack — keep the default `x11` there (the entrypoint warns).
+When it does not help: without a GPU everything runs in software either way and costs about the same as `x11` (the `wayland` smoke test in CI runs that way); with **NVIDIA**, Chromium gets no GPU compositing on Wayland from the injected driver stack — set `DISPLAY_BACKEND=x11` there (the entrypoint warns).
 
 ## Persistence
 
@@ -471,7 +470,7 @@ What changes in this mode:
 * Nothing is published; nginx binds its ports on the host directly. `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` default to `NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` / `CDP_PORT` (8080 / 8443 / 9222), so the URLs stay the same as in bridge mode; set them explicitly to override. HTTPS needs only `ENABLE_HTTPS=true` (`compose.https.yaml` is not needed; its port mapping is dropped).
 * The loopback-only internals — `SELKIES_INTERNAL_PORT` (8081), `CDP_INTERNAL_PORT` (9221) and `CDP_GATEWAY_INTERNAL_PORT` (9220) — sit on the host's loopback as well (context browsers pick free ports themselves). Move them in `.env` if your own apps use those ports; a bind failure stops the container.
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` and `hostname` do not apply. `PORT_FORWARDS` still works but resolves names through the host's DNS (container names do not resolve) — usually you just point the browser at `localhost:<port>` directly.
-* If the host runs its own X server on `:0`, the entrypoint picks the next free display automatically. Xvfb listens on its filesystem socket only, so host processes cannot attach to the unauthenticated container display.
+* With `DISPLAY_BACKEND=x11`, if the host runs its own X server on `:0`, the entrypoint picks the next free display automatically. Xvfb listens on its filesystem socket only, so host processes cannot attach to the unauthenticated container display.
 
 ## Service toggles, health and restarts
 
@@ -505,7 +504,7 @@ node update-chrome-node.mjs --node 22        # force the Node major instead of t
 
 [![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
-Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland desktop). Pushing a `v*` tag (or a manual run of the workflow) builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for):
+Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland and X11 desktops). Pushing a `v*` tag (or a manual run of the workflow) builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for):
 
 * **GHCR**: `ghcr.io/agentene/browser` (uses the built-in `GITHUB_TOKEN`)
 * **Docker Hub**: `agentene/browser` (same `<owner>/<repo>` path as GHCR; needs the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets of an account allowed to push there; skipped otherwise)

@@ -173,12 +173,11 @@ services:
       CDP_CONTEXTS_MAX: "${CDP_CONTEXTS_MAX:-4}"
 
       # --- Desktop ---
-      # Desktop the headed browsers live on: x11 = Xvfb (+ picom); wayland =
-      # labwc, a headless Wayland compositor + window manager that Selkies
-      # captures on the GPU (with the compose.gpu.yaml overlay: several times
-      # less CPU for animated pages; no gain without a GPU, keep x11 with
-      # NVIDIA).
-      DISPLAY_BACKEND: "${DISPLAY_BACKEND:-x11}"
+      # Desktop the headed browsers live on: wayland = labwc, a headless
+      # Wayland compositor + window manager that Selkies captures on the GPU
+      # (with the compose.gpu.yaml overlay: several times less CPU for
+      # animated pages); x11 = Xvfb (+ picom) — use it with NVIDIA.
+      DISPLAY_BACKEND: "${DISPLAY_BACKEND:-wayland}"
       # Xvfb screen geometry WxHxD (wayland: labwc's output size); also sizes
       # the Selkies stream
       SCREEN_GEOMETRY: "${SCREEN_GEOMETRY:-1920x1080x24}"

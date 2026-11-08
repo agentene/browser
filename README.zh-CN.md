@@ -12,7 +12,7 @@
 容器在一个入口脚本里拉起全部服务,并作为 PID 1 监管它们:
 
 ```
-docker run ─┬─ Xvfb        虚拟显示(Selkies 采集的画面;DISPLAY_BACKEND=wayland 时为 labwc)
+docker run ─┬─ labwc       虚拟 Wayland 桌面(Selkies 采集的画面;DISPLAY_BACKEND=x11 时为 Xvfb)
             ├─ PulseAudio  虚拟音频
             ├─ Selkies     HTML5 远程桌面        ─┐
             ├─ Chrome      for Testing,CDP ───────┼─ nginx 统一门面
@@ -20,7 +20,7 @@ docker run ─┬─ Xvfb        虚拟显示(Selkies 采集的画面;DISPLAY_BA
 ```
 
 * **带公开 CDP 端点的 Chromium** — 在容器*外部*用 `connectOverCDP("http://localhost:9222")` 接入 [Playwright](https://playwright.dev) / Puppeteer / Selenium。
-* **可实时观看的桌面** — 浏览器默认以**有头模式**运行在虚拟 X11 显示器上,[Selkies](https://github.com/selkies-project/selkies) 2.x 经 WebSocket/WebCodecs 把画面(含音频)串流到任意浏览器(WebRTC 可选)。自动化过程实时可见、可交互。
+* **可实时观看的桌面** — 浏览器默认以**有头模式**运行在无头 Wayland 桌面([labwc](https://labwc.github.io/))上(`DISPLAY_BACKEND=x11` 时为 Xvfb/X11),[Selkies](https://github.com/selkies-project/selkies) 2.x 经 WebSocket/WebCodecs 把画面(含音频)串流到任意浏览器(WebRTC 可选)。自动化过程实时可见、可交互。
 * **持久化配置目录** — 通过 bind mount,cookies、登录态、扩展在容器重建后依然保留。
 * **支持 HTTPS** — 默认自动生成自签证书,也可挂载自己的证书;已存在的有效证书永远优先复用。
 * **合理的默认值** — UTC 时区、`en-US` 浏览器语言;两者都是一行环境变量即可覆盖。
@@ -62,8 +62,8 @@ docker run ─┬─ Xvfb        虚拟显示(Selkies 采集的画面;DISPLAY_BA
 | Chrome for Testing  | [钉住的稳定版](Dockerfile)   | 被自动化的浏览器,Google 官方 Stable 通道构建                      |
 | Selkies             | [钉住的 release](Dockerfile) | HTML5 远程桌面(Web 客户端、信令、串流)                            |
 | nginx               | Ubuntu 软件包                | 统一门面:Web UI(HTTP/HTTPS)+ CDP 端点,支持 WebSocket              |
-| Xvfb / PulseAudio   | Ubuntu 软件包                | 虚拟显示器 + 音频,供串流                                          |
-| labwc               | Ubuntu 软件包                | 无头 Wayland 桌面,可选启用(`DISPLAY_BACKEND=wayland`)             |
+| labwc               | Ubuntu 软件包                | 无头 Wayland 桌面,默认启用(`DISPLAY_BACKEND=wayland`)             |
+| Xvfb / PulseAudio   | Ubuntu 软件包                | X11 显示器(`DISPLAY_BACKEND=x11`)+ 音频,供串流                  |
 
 容器内部所有服务只监听回环地址;nginx 是唯一的对外门面,且每个代理都支持 WebSocket(CDP 和 Selkies 信令都需要)。
 
@@ -320,7 +320,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | 变量                | 默认值         | 说明                                                                                                                                                                                                                 |
 | ------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TZ`                | `UTC`          | 容器时区(任意 IANA 时区,如 `Asia/Shanghai`)                                                                                                                                                                          |
-| `DISPLAY_BACKEND`   | `x11`          | 有头浏览器所在的桌面:`x11` = Xvfb(+ picom);`wayland` = labwc,一个无头 Wayland 合成器 + 窗口管理器,由 Selkies 在 GPU 上采集 —— 挂了 GPU 时,动画页面的 CPU 占用降低数倍,见 [Wayland 桌面](#wayland-桌面display_backendwayland) |
+| `DISPLAY_BACKEND`   | `wayland`      | 有头浏览器所在的桌面:`wayland` = labwc,一个无头 Wayland 合成器 + 窗口管理器,由 Selkies 在 GPU 上采集 —— 挂了 GPU 时,动画页面的 CPU 占用降低数倍,见 [Wayland 桌面](#wayland-桌面display_backendwayland);`x11` = Xvfb(+ picom)—— 使用 NVIDIA GPU 时请选它 |
 | `SCREEN_GEOMETRY`   | `1920x1080x24` | Xvfb 屏幕尺寸 `宽x高x深`(`wayland` 时为 labwc 输出的尺寸);同时决定 Selkies 串流分辨率                                                                                                                                 |
 | `RUN_USER`          | *(空)*         | 桌面栈(Xvfb 或 labwc、picom、PulseAudio、selkies、chromium、CDP 网关)与 nginx *worker* 以该用户而非 root 运行 —— 已存在的用户名(如 `browser`)或 `uid[:gid]`;PID 1 与 nginx master 保持 root。见[权限降级(`RUN_USER`)](#权限降级run_user) |
 
@@ -387,18 +387,17 @@ COMPOSE_FILE=compose.yaml:compose.gpu.yaml
 COMPOSE_FILE=compose.yaml:compose.gpu-nvidia.yaml
 ```
 
-entrypoint 启动时自动探测设备(`CHROMIUM_GPU=auto` 为默认)并把 Chromium 切到 Vulkan/ANGLE 后端(`--use-angle=vulkan --enable-features=Vulkan`):WebGL/WebGPU 上下文经 Vulkan 渲染(原生 GL 路径在 Xvfb 上根本走不通),显示合成器也跑在 Vulkan 上(不开启合成标志时,chrome://gpu 会把 WebGL 标为 "Hardware accelerated but at reduced performance"—— GPU 帧被回读进 CPU 合成器)。实测:NVIDIA 直通 → `ANGLE (NVIDIA, Vulkan … GeForce RTX …)`;AMD 核显 → `ANGLE (AMD, Vulkan … RADV)`,`webgl/webgpu: enabled`(无回读)。此时无头模式也不再追加 `--disable-gpu`,SwiftShader 仍作为运行时兜底保留,设备中途出错 WebGL 不断供。`CHROMIUM_GPU=strict` 永不允许 SwiftShader(反指纹:浏览器不得上报软件渲染器,无 GPU 时 WebGL 不可用);`off` 即使挂了 GPU 也强制走软件路径。
+entrypoint 启动时自动探测设备(`CHROMIUM_GPU=auto` 为默认)。在默认的 Wayland 桌面上,Chromium 走它原生的 Wayland/EGL 路径(见 [Wayland 桌面](#wayland-桌面display_backendwayland));`DISPLAY_BACKEND=x11` 时则把 Chromium 切到 Vulkan/ANGLE 后端(`--use-angle=vulkan --enable-features=Vulkan`):WebGL/WebGPU 上下文经 Vulkan 渲染(原生 GL 路径在 Xvfb 上根本走不通),显示合成器也跑在 Vulkan 上(不开启合成标志时,chrome://gpu 会把 WebGL 标为 "Hardware accelerated but at reduced performance"—— GPU 帧被回读进 CPU 合成器)。实测:NVIDIA 直通 → `ANGLE (NVIDIA, Vulkan … GeForce RTX …)`;AMD 核显 → `ANGLE (AMD, Vulkan … RADV)`,`webgl/webgpu: enabled`(无回读)。此时无头模式也不再追加 `--disable-gpu`,SwiftShader 仍作为运行时兜底保留,设备中途出错 WebGL 不断供。`CHROMIUM_GPU=strict` 永不允许 SwiftShader(反指纹:浏览器不得上报软件渲染器,无 GPU 时 WebGL 不可用);`off` 即使挂了 GPU 也强制走软件路径。
 
 镜像内置了 Intel/AMD 的 Mesa/VA-API 用户态;NVIDIA 的 GL 库无法内置(必须与宿主机驱动版本匹配)—— 由 nvidia container toolkit 在容器启动时注入。验证方式:`docker compose exec browser glxinfo -B` / `vainfo`(Intel/AMD)或 `nvidia-smi`(NVIDIA),再在串流的浏览器里打开 `chrome://gpu`,WebGL 应显示硬件渲染器。[`examples/webgl-renderer-probe.mjs`](examples/webgl-renderer-probe.mjs) 无需任何依赖即可打印 WebGL 渲染器和 `chrome://gpu` 的特性状态:默认连接回环 DevTools 端口 `127.0.0.1:9221`(在容器内运行,例如先 `docker cp` 进去),也可以用 `node examples/webgl-renderer-probe.mjs localhost 9222` 指向公开端点。
 
 ### Wayland 桌面(`DISPLAY_BACKEND=wayland`)
 
-挂了 Intel/AMD GPU 时,对于一切会动的内容(视频、canvas、轮播图 —— 例如 baidu.com 首页的 logo 就是一段循环播放的视频),Wayland 桌面比 Xvfb 省得多。在 Xvfb 上,浏览器窗口的每一帧都要从 GPU 读回、再经单线程的软件 X server 拷贝一遍,Selkies 还要再拷出来一遍;一个动画页面就能让 Xvfb 吃满约一个 CPU 核,而它一旦饱和,所有窗口和串流都会跟着变慢。设置
+Wayland 桌面是默认桌面。挂了 Intel/AMD GPU 时,对于一切会动的内容(视频、canvas、轮播图 —— 例如 baidu.com 首页的 logo 就是一段循环播放的视频),Wayland 桌面比 Xvfb 省得多。在 Xvfb 上,浏览器窗口的每一帧都要从 GPU 读回、再经单线程的软件 X server 拷贝一遍,Selkies 还要再拷出来一遍;一个动画页面就能让 Xvfb 吃满约一个 CPU 核,而它一旦饱和,所有窗口和串流都会跟着变慢。设置
 
 ```bash
-# .env
+# .env  (DISPLAY_BACKEND=wayland 是默认值)
 COMPOSE_FILE=compose.yaml:compose.gpu.yaml
-DISPLAY_BACKEND=wayland
 ```
 
 后,浏览器运行在 [labwc](https://labwc.github.io/)(一个无头 Wayland 合成器 + 窗口管理器)里,Selkies 通过 screencopy 采集它的输出:帧从 Chromium 到 VA-API 编码器全程留在 GPU 上(dmabuf 零拷贝)。在 AMD 核显(Renoir)、1920x1200、打开 baidu.com 首页时实测的整个容器 CPU 占用:
@@ -408,7 +407,7 @@ DISPLAY_BACKEND=wayland
 | 无人观看 | 107% | 17% |
 | 有一个 Selkies 观看端连接 | 335%(Xvfb 饱和) | 29% |
 
-开启后的变化:
+与 `x11` 的区别:
 
 * 浏览器窗口由 labwc 最大化,保留标签栏和地址栏,并且始终锁定:只显示关闭按钮,双击/中键标签栏空白处无效,拖动窗口或窗口边缘(包括 Alt+拖动)都无法移动或调整大小,标签栏右键菜单里的「最小化」/「恢复」会在不到一秒内被撤销(负责撤销的监视进程在没有窗口时休眠,空桌面不占 CPU);弹出窗口和右键菜单由合成器原生合成(不需要 picom)。Alt+Tab 切换窗口;CDP 控制台的 *Show* 通过 labwc 把窗口提到最前。
 * labwc 自己的 60 Hz 帧时钟驱动浏览器,不论是否有人在看串流;被其他窗口挡住的窗口也照常渲染,所以自动化的行为与 Xvfb 上一致。
@@ -417,7 +416,7 @@ DISPLAY_BACKEND=wayland
 * Chromium 走它原生的 Wayland/EGL 路径,不使用上面的 Vulkan 标志(Chromium 不支持 Wayland 下的 Vulkan)。
 * Selkies 通过 wlr-screencopy 采集 labwc(`PIXELFLUX_HOST_CAPTURE=zwlr`,由入口脚本设置)。labwc 也提供更新的 ext-image-copy-capture,pixelflux 会优先用它,但 labwc 无法导入 pixelflux 为它分配的 GPU 缓冲区,挂了 GPU 时串流根本起不来。
 
-不起作用的情况:没有 GPU 时两种方式都纯软件渲染,开销与 `x11` 基本相同(CI 里的 `wayland` 冒烟测试就是这样跑的);使用 **NVIDIA** 时,注入的驱动栈在 Wayland 下给不了 Chromium GPU 合成 —— 这种情况请保持默认的 `x11`(入口脚本会给出警告)。
+不起作用的情况:没有 GPU 时两种方式都纯软件渲染,开销与 `x11` 基本相同(CI 里的 `wayland` 冒烟测试就是这样跑的);使用 **NVIDIA** 时,注入的驱动栈在 Wayland 下给不了 Chromium GPU 合成 —— 这种情况请设置 `DISPLAY_BACKEND=x11`(入口脚本会给出警告)。
 
 ## 持久化
 
@@ -471,7 +470,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # 建议:CDP 与 Web UI 不暴露到网络
 * 不发布任何端口,nginx 直接在宿主机上绑定端口。`NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` 默认取 `NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` / `CDP_PORT`(8080 / 8443 / 9222),访问地址与 bridge 模式保持一致;显式设置即可覆盖。HTTPS 只需 `ENABLE_HTTPS=true`(不需要 `compose.https.yaml`,它的端口映射会被丢弃)。
 * 仅回环的内部端口 —— `SELKIES_INTERNAL_PORT`(8081)、`CDP_INTERNAL_PORT`(9221)和 `CDP_GATEWAY_INTERNAL_PORT`(9220)—— 同样占用宿主机回环(context 浏览器自行选择空闲端口)。若与你自己的应用冲突,在 `.env` 里换掉;端口绑定失败会导致容器退出。
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` 与 `hostname` 不再生效。`PORT_FORWARDS` 仍可用,但通过宿主机的 DNS 解析(容器名无法解析)—— 通常直接让浏览器访问 `localhost:<端口>` 即可。
-* 若宿主机自己在 `:0` 上跑着 X server,入口脚本会自动换用下一个空闲 display。Xvfb 只监听文件系统 socket,宿主机进程无法接入容器里无认证的 display。
+* 使用 `DISPLAY_BACKEND=x11` 时,若宿主机自己在 `:0` 上跑着 X server,入口脚本会自动换用下一个空闲 display。Xvfb 只监听文件系统 socket,宿主机进程无法接入容器里无认证的 display。
 
 ## 服务开关、健康检查与重启
 
@@ -505,7 +504,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 
 [![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
-每个 pull request 以及每次推送到 `main` 都会运行 [`ci.yaml`](.github/workflows/ci.yaml):静态检查(hadolint、`docker build --check`、shellcheck、`node --check`、`py_compile`)、完整镜像构建、运行时冒烟测试(CDP 端点、Web UI、CDP 网关、Wayland 桌面)。推送 `v*` 标签(或手动运行该 workflow)时构建并发布 `linux/amd64` 镜像(Dockerfile 只支持这一种架构):
+每个 pull request 以及每次推送到 `main` 都会运行 [`ci.yaml`](.github/workflows/ci.yaml):静态检查(hadolint、`docker build --check`、shellcheck、`node --check`、`py_compile`)、完整镜像构建、运行时冒烟测试(CDP 端点、Web UI、CDP 网关、Wayland 与 X11 桌面)。推送 `v*` 标签(或手动运行该 workflow)时构建并发布 `linux/amd64` 镜像(Dockerfile 只支持这一种架构):
 
 * **GHCR**:`ghcr.io/agentene/browser`(使用内置 `GITHUB_TOKEN`)
 * **Docker Hub**:`agentene/browser`(与 GHCR 同为 `<owner>/<repo>` 路径;需要仓库 secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`,且该账号有权推送到此命名空间;未配置则跳过)

@@ -34,7 +34,7 @@ curl -sf http://127.0.0.1:9222/json/version   # then: docker rm -f cdp-smoke
 ```
 
 CI's `verify` job additionally smoke-tests the web UI, the CDP gateway and
-the Wayland desktop (see `.github/workflows/ci.yaml`).
+the Wayland (default) and X11 desktops (see `.github/workflows/ci.yaml`).
 
 ## Repo layout
 

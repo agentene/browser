@@ -90,7 +90,7 @@ wayland_start_labwc() {
     # compositing from the injected NVIDIA stack (software, at best WebGL
     # with readback), while on X11 it composites on the GPU via Vulkan.
     if [ -e /dev/nvidiactl ] && ! gpu_has_mesa_node; then
-        log "WARNING: DISPLAY_BACKEND=wayland with an NVIDIA GPU renders chromium in software; DISPLAY_BACKEND=x11 (the default) keeps it on the GPU"
+        log "WARNING: DISPLAY_BACKEND=wayland with an NVIDIA GPU renders chromium in software; set DISPLAY_BACKEND=x11 to keep it on the GPU"
     fi
     log "starting labwc (headless Wayland desktop, ${labwc_env[*]: -1})"
     # The startup command (-s) reports labwc's auto-picked socket back here.

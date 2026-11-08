@@ -34,11 +34,12 @@
 #   (selkies.sh exports the image's media defaults as native SELKIES_* env
 #   vars — only video starts with the session, Turbo is off; every other
 #   native SELKIES_* setting, e.g. SELKIES_ENCODER, passes through as-is)
-#   DISPLAY_BACKEND=x11          desktop the browser windows live on: x11 =
-#                                Xvfb (+ picom), captured by Selkies through
-#                                XShm; wayland = labwc, a headless Wayland
-#                                compositor + window manager that Selkies
-#                                captures by screencopy. With a GPU the
+#   DISPLAY_BACKEND=wayland      desktop the browser windows live on: wayland =
+#                                labwc, a headless Wayland compositor +
+#                                window manager that Selkies captures by
+#                                screencopy; x11 = Xvfb (+ picom), captured
+#                                by Selkies through XShm (pick it with an
+#                                NVIDIA GPU, see display-wayland.sh). With a GPU the
 #                                wayland frames stay on it from chromium to
 #                                the encoder (dmabuf, zero-copy) instead of
 #                                being copied through the software X server
@@ -158,7 +159,7 @@ config_display() {
     # Desktop the headed browser windows live on (display-x11.sh /
     # display-wayland.sh); only meaningful with ENABLE_SELKIES=true, which
     # owns the display either way.
-    DISPLAY_BACKEND="${DISPLAY_BACKEND:-x11}"
+    DISPLAY_BACKEND="${DISPLAY_BACKEND:-wayland}"
     case "${DISPLAY_BACKEND}" in
         x11|wayland) : ;;
         *) die "DISPLAY_BACKEND='${DISPLAY_BACKEND}' must be x11 or wayland" ;;

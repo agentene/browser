@@ -2,12 +2,12 @@
 # docker-entrypoint.sh — one-shot supervisor for this image's services.
 #
 # Starts, in order:
-#   1. Xvfb            virtual X11 display (Selkies captures it)
+#   1. labwc           headless Wayland compositor + window manager
+#                       (Selkies captures it by screencopy)
+#      or, with DISPLAY_BACKEND=x11:
+#      Xvfb            virtual X11 display (Selkies captures it)
 #      picom           compositing manager for that display (keeps popup
 #                       menu shadows visible)
-#      or, with DISPLAY_BACKEND=wayland:
-#      labwc           headless Wayland compositor + window manager
-#                       (Selkies captures it by screencopy)
 #   2. PulseAudio      audio server (Selkies captures it via pcmflux)
 #   3. Selkies         HTML5 remote desktop on 127.0.0.1:${SELKIES_INTERNAL_PORT:-8081}
 #   4. Chromium        Chrome for Testing with a CDP endpoint on loopback

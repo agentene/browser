@@ -330,11 +330,11 @@ jobs:
           docker exec ondemand-smoke grep -q 'idle for 1 min' /tmp/cdp-gateway.log
           echo "on-demand main browser smoke test OK"
 
-      - name: Smoke test — Wayland desktop (DISPLAY_BACKEND=wayland)
+      - name: Smoke test — Wayland desktop (the default DISPLAY_BACKEND)
         run: |
           set -euo pipefail
           docker run -d --name wayland-smoke -p 9224:9222 -p 8081:80 \
-            -e DISPLAY_BACKEND=wayland localhost/ci:${{ env.IMAGE_NAME }}
+            localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec wayland-smoke cat /tmp/labwc.log || true; docker logs wayland-smoke || true; docker rm -f wayland-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9224/json/version >/dev/null \
@@ -349,6 +349,24 @@ jobs:
             | grep -q '^cdp-main:'
           docker exec wayland-smoke sh -c '! pgrep -x Xvfb'
           echo "Wayland smoke test OK"
+
+      - name: Smoke test — X11 desktop (DISPLAY_BACKEND=x11)
+        run: |
+          set -euo pipefail
+          docker run -d --name x11-smoke -p 9227:9222 -p 8083:80 \
+            -e DISPLAY_BACKEND=x11 localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker exec x11-smoke cat /tmp/xvfb.log || true; docker logs x11-smoke || true; docker rm -f x11-smoke >/dev/null' EXIT
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9227/json/version >/dev/null \
+              && curl -sf http://127.0.0.1:8083/ >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser' >/dev/null
+          curl -sf http://127.0.0.1:8083/ | grep -ci '<html' >/dev/null
+          # the headed main browser must run on Xvfb (no labwc)
+          docker exec x11-smoke pgrep -x Xvfb >/dev/null
+          docker exec x11-smoke sh -c '! pgrep -x labwc'
+          echo "X11 smoke test OK"
 
   release-tag:
     # When a merge to main changes the pinned CHROME_VERSION, tag the new
