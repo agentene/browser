@@ -36,7 +36,7 @@ x11_pick_display() {
 # working size: a browser larger than the screen stays cropped ("screen
 # cannot be larger than ..." in the selkies log). Create the screen at the
 # SCREEN_GEOMETRY_MAX ceiling instead and preset the working size right after
-# (x11_preset_size) — the same shape the official selkies-session brings its
+# (x11_preset_size) — the same shape the official `selkies session` brings its
 # display up in (XVFB_ARGS 8192x4096 + a RandR preset).
 x11_start_xvfb() {
     XVFB_SCREEN="${SCREEN_GEOMETRY_MAX}"
@@ -57,12 +57,12 @@ x11_start_xvfb() {
 }
 
 # Preset the working size through the same RandR path a browser resize
-# takes (mode creation + screen size; selkies-resize defaults to 60 Hz where
+# takes (mode creation + screen size; `selkies resize` defaults to 60 Hz where
 # nothing configured one). Cosmetic on failure: the display then stays at
 # the ceiling until the first client resize.
 x11_preset_size() {
     [ "${XVFB_SCREEN}" != "${SCREEN_GEOMETRY}" ] || return 0
-    if ! "${DROP[@]}" selkies-resize "${SCREEN_WIDTH}x${SCREEN_HEIGHT}" >/tmp/display-preset.log 2>&1; then
+    if ! "${DROP[@]}" selkies resize "${SCREEN_WIDTH}x${SCREEN_HEIGHT}" >/tmp/display-preset.log 2>&1; then
         log "WARN: presetting ${SCREEN_WIDTH}x${SCREEN_HEIGHT} failed (see /tmp/display-preset.log); the display stays at ${XVFB_SCREEN} until a client resizes it"
     fi
 }

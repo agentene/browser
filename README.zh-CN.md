@@ -243,7 +243,7 @@ location /desk/ {
 | --- | --- | --- |
 | `CHROME_VERSION` | `157.0.8103.38` | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) 版本(默认钉 Stable 通道;CfT known-good 列表中的任意版本均可) |
 | `NODE_VERSION` | `26` | Node.js 主版本(由 [`update-chrome-node.mjs`](#版本联动脚本) 保持同步) |
-| `SELKIES_VERSION` | `2.1.0` | Selkies 上游 release;其 wheel 及 pixelflux/pcmflux 依赖 wheel 从 GitHub release 下载,摄像头/手柄 interposer 由同一 tag 的源码编译(见 `Dockerfile`) |
+| `SELKIES_VERSION` | `2.2.1` | Selkies 上游 release;其 wheel 及 pixelflux/pcmflux 依赖 wheel 从 GitHub release 下载,摄像头/手柄 interposer 由同一 tag 的源码编译(见 `Dockerfile`) |
 | `TZ` | `UTC` | 容器时区,以 `ENV TZ` 暴露(运行时可覆盖) |
 
 ```bash

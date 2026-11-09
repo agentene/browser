@@ -51,7 +51,7 @@ services:
         NODE_VERSION: "${NODE_VERSION:-26}"
         # Selkies upstream release; its wheels (and the pixelflux/pcmflux
         # dependency wheels) are fetched from the GitHub releases
-        SELKIES_VERSION: "${SELKIES_VERSION:-2.1.0}"
+        SELKIES_VERSION: "${SELKIES_VERSION:-2.2.1}"
     image: agentene/browser:latest
     container_name: agentene-browser
     hostname: agentene-browser

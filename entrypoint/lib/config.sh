@@ -155,7 +155,7 @@ config_display() {
     SCREEN_HEIGHT="$(printf '%s' "${SCREEN_GEOMETRY}" | cut -dx -f2)"
     # RandR ceiling (WxHxD) the Xvfb screen is created at, giving Selkies'
     # browser-driven resize room to grow past SCREEN_GEOMETRY; matches the
-    # official selkies-session framebuffer (8192x4096).
+    # official `selkies session` framebuffer (8192x4096).
     SCREEN_GEOMETRY_MAX="8192x4096x24"
 
     ENABLE_SELKIES="${ENABLE_SELKIES:-true}"

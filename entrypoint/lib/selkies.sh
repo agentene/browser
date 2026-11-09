@@ -95,7 +95,8 @@ selkies_backend_args() {
     # ext-image-copy-capture, which pixelflux prefers, but labwc fails to
     # import the GPU buffers pixelflux allocates for it (EGL_BAD_MATCH every
     # frame, the stream never starts) — verified with pixelflux 2.2.1 on an
-    # AMD GPU.
+    # AMD GPU, and still so with 2.2.3 (repeated capture failures, black
+    # picture).
     export PIXELFLUX_HOST_CAPTURE=zwlr
     # Without the browser-driven resize selkies sizes a captured host to its
     # own default (1024x768) when a stream starts; pin it to the
