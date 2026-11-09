@@ -28,12 +28,13 @@
   const WIDTH_KEY = 'cdp-console-panel-width';
   const EDGE_PX = 48; // how close to the right edge the pointer brings up the handle
 
-  async function call(method, path) {
+  async function call(method, path, body) {
     const res = await fetch(API + path, {
       method,
       cache: 'no-store',
       credentials: 'same-origin',
-      headers: { 'X-CDP-Console': '1' },
+      headers: { 'X-CDP-Console': '1', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
@@ -440,7 +441,7 @@
   const browsers = new Map();
   const views = new Map(); // name -> the card's DOM parts, see liveCard()
   let max = 0;
-  let raiseNew = null; // new windows come to the front of the desktop; null: no desktop
+  let serverSettings = {}; // the server-side settings on offer (settings.mjs): {section: {key: value}}
 
   function renderSummary() {
     const n = [...browsers.values()].filter((b) => !b.main).length;
@@ -451,16 +452,17 @@
     $('.error').textContent = err ? String(err.message || err) : '';
   }
 
-  // The desktop's "new windows to the front" switch; the gateway's 'desktop'
+  // The desktop's "new windows to the front" switch; the gateway's 'settings'
   // op confirms a flip, a failed one flips back.
   const raiseRow = $('.raise-row');
   const raiseBox = $('.switch');
   function renderRaiseNew() {
-    raiseRow.hidden = raiseNew === null;
-    raiseBox.checked = !!raiseNew;
+    const on = serverSettings.desktop?.raiseNewWindows;
+    raiseRow.hidden = on === undefined; // no desktop
+    raiseBox.checked = !!on;
   }
   raiseBox.addEventListener('change', () => {
-    call('PUT', `/desktop/raise-new-windows/${raiseBox.checked}`).catch((err) => {
+    call('PATCH', '/settings', { desktop: { raiseNewWindows: raiseBox.checked } }).catch((err) => {
       showError(err);
       renderRaiseNew();
     });
@@ -624,15 +626,15 @@
   function apply(op) {
     if (op.t === 'snapshot') {
       max = op.max;
-      raiseNew = op.raiseNew;
+      serverSettings = op.settings ?? {};
       browsers.clear();
       views.clear();
       body.replaceChildren();
       for (const b of op.browsers) browsers.set(b.name, { ...b, tabs: new Map(b.tabs.map((t) => [t.id, t])) });
       return [...browsers.keys()];
     }
-    if (op.t === 'desktop') {
-      raiseNew = op.raiseNew;
+    if (op.t === 'settings') {
+      serverSettings = op.settings;
       return [];
     }
     if (op.t === 'gone') {

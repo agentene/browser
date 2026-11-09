@@ -37,8 +37,8 @@ display_wayland_start() {
 # to a small centered one.
 #
 # New windows: labwc focuses and raises every window it maps, with no
-# option against it. For DESKTOP_RAISE_NEW_WINDOWS=false (and the CDP
-# console's switch) a rule lowers each window right as it maps, before its
+# option against it. With the CDP console's "new windows to the front" off
+# (desktop.raiseNewWindows, settings.sh) a rule lowers each window right as it maps, before its
 # first frame, and the keyboard focus follows the pointer, which (every
 # window maximized) means the window still in front keeps it. The config
 # comes in both variants; the switch helper points rc.xml at one and makes
@@ -74,10 +74,9 @@ wayland_write_config() {
 </labwc_config>
 LABWCRC
     done
-    DISPLAY_BACKEND=wayland "${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh" \
-        "${DESKTOP_RAISE_NEW_WINDOWS}" || die "cannot write the labwc config in /tmp/labwc"
-    # the CDP gateway flips the switch as the run user
-    give_to_run_user /tmp/labwc /tmp/desktop-raise-new-windows
+    settings_apply_desktop
+    # the CDP gateway repoints rc.xml as the run user
+    give_to_run_user /tmp/labwc
     # The transparent cursor theme that keeps the pointer out of the
     # captured frames (rationale in the helper).
     python3 "${ENTRYPOINT_HELPERS}/labwc-cursor-theme.py" /tmp/labwc/icons/hidden

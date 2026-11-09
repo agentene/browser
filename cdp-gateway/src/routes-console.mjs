@@ -5,8 +5,8 @@
 //   POST   /console/api/main/start|stop     on-demand main browser
 //   POST   /console/api/<name>/focus[/<id>] bring a browser (tab) to the front
 //   DELETE /console/api/<context>           destroy a context
-//   PUT    /console/api/desktop/raise-new-windows/true|false
-//                                           whether new windows come to the front
+//   GET    /console/api/settings            the server-side settings (settings.mjs)
+//   PATCH  /console/api/settings            change some: {section: {key: value}}
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -14,9 +14,10 @@ import { notifyChange } from './changes.mjs';
 import { ROOT } from './config.mjs';
 import { consoleDenied } from './console-auth.mjs';
 import { contexts } from './contexts.mjs';
-import { focus, setRaiseNewWindows } from './desktop.mjs';
+import { focus } from './desktop.mjs';
 import { mainBrowser } from './main-browser.mjs';
-import { send } from './respond.mjs';
+import { readJson, send } from './respond.mjs';
+import { settingsView, updateSettings } from './settings.mjs';
 
 const FILES = {
   '/console/': ['dashboard.html', 'text/html; charset=UTF-8'],
@@ -42,13 +43,17 @@ export async function consoleRoute(req, res, url) {
     send(res, 200, await fs.readFile(path.join(ROOT, file)), type);
     return true;
   }
-  const r = p.match(/^\/console\/api\/desktop\/raise-new-windows\/(true|false)$/);
-  if (r && req.method === 'PUT') {
-    try {
-      await setRaiseNewWindows(r[1] === 'true');
-      send(res, 200, { ok: true });
-    } catch (err) {
-      send(res, 409, { error: err.message });
+  if (p === '/console/api/settings') {
+    if (req.method === 'GET') {
+      send(res, 200, settingsView());
+    } else if (req.method === 'PATCH') {
+      try {
+        send(res, 200, await updateSettings(await readJson(req)));
+      } catch (err) {
+        send(res, err.status ?? 500, { error: err.message });
+      }
+    } else {
+      send(res, 405, { error: 'GET or PATCH' });
     }
     return true;
   }

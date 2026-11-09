@@ -34,11 +34,11 @@ export const VIEWER_PORT = intEnv('CDP_GATEWAY_VIEWER_PORT', 0);
 export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
 export const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
 export const CONTEXTS_HEADLESS = env.CDP_CONTEXTS_HEADLESS === '1';
-// desktop-raise-new-windows.sh, which applies DESKTOP_RAISE_NEW_WINDOWS on
-// the desktop (the console's switch) and keeps it in RAISE_SETTING; empty
-// when the browsers have no desktop
+// desktop-raise-new-windows.sh, which hands the console's "new windows to
+// the front" to the desktop; empty when the browsers have no desktop
 export const RAISE_SWITCH = env.CDP_GATEWAY_RAISE_SWITCH || '';
-export const RAISE_SETTING = '/tmp/desktop-raise-new-windows';
+// the console's persisted settings (settings.mjs)
+export const SETTINGS_FILE = env.CDP_GATEWAY_SETTINGS_FILE || '/browser/settings/settings.json';
 // Selkies' master password: console requests that came in through the web
 // port (nginx marks them, see console-auth.mjs) must carry it. Empty = no login.
 export const WEB_PASSWORD = env.CDP_CONSOLE_WEB_PASSWORD || '';

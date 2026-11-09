@@ -9,7 +9,9 @@ display_x11_start() {
     x11_start_xvfb
     x11_preset_size
     x11_start_compositor
-    x11_set_new_windows
+    # whether new windows come to the front; the screen follower
+    # (chromium.sh) applies it, no window manager runs here
+    settings_apply_desktop
 }
 
 # X clients try the display's ABSTRACT socket (@/tmp/.X11-unix/X<n>) before
@@ -36,7 +38,7 @@ x11_pick_display() {
 # working size: a browser larger than the screen stays cropped ("screen
 # cannot be larger than ..." in the selkies log). Create the screen at the
 # SCREEN_GEOMETRY_MAX ceiling instead and preset the working size right after
-# (x11_preset_size) — the same shape the official selkies-session brings its
+# (x11_preset_size) — the same shape the official `selkies session` brings its
 # display up in (XVFB_ARGS 8192x4096 + a RandR preset).
 x11_start_xvfb() {
     XVFB_SCREEN="${SCREEN_GEOMETRY_MAX}"
@@ -57,12 +59,12 @@ x11_start_xvfb() {
 }
 
 # Preset the working size through the same RandR path a browser resize
-# takes (mode creation + screen size; selkies-resize defaults to 60 Hz where
+# takes (mode creation + screen size; `selkies resize` defaults to 60 Hz where
 # nothing configured one). Cosmetic on failure: the display then stays at
 # the ceiling until the first client resize.
 x11_preset_size() {
     [ "${XVFB_SCREEN}" != "${SCREEN_GEOMETRY}" ] || return 0
-    if ! "${DROP[@]}" selkies-resize "${SCREEN_WIDTH}x${SCREEN_HEIGHT}" >/tmp/display-preset.log 2>&1; then
+    if ! "${DROP[@]}" selkies resize "${SCREEN_WIDTH}x${SCREEN_HEIGHT}" >/tmp/display-preset.log 2>&1; then
         log "WARN: presetting ${SCREEN_WIDTH}x${SCREEN_HEIGHT} failed (see /tmp/display-preset.log); the display stays at ${XVFB_SCREEN} until a client resizes it"
     fi
 }
@@ -84,15 +86,4 @@ x11_start_compositor() {
     start_service /tmp/picom.log "${DROP[@]}" picom --config /tmp/picom.conf
     sleep 0.5
     kill -0 "${SERVICE_PID}" 2>/dev/null || log "WARNING: picom exited early; popup menus will render without shadows (see /tmp/picom.log)"
-}
-
-# Whether new windows come to the front (DESKTOP_RAISE_NEW_WINDOWS; the CDP
-# console's switch changes it later). No window manager runs here: the
-# screen follower (chromium.sh) applies it, reading the setting the helper
-# writes.
-x11_set_new_windows() {
-    DISPLAY_BACKEND=x11 "${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh" \
-        "${DESKTOP_RAISE_NEW_WINDOWS}" || die "cannot write /tmp/desktop-raise-new-windows"
-    # the CDP gateway flips the switch as the run user
-    give_to_run_user /tmp/desktop-raise-new-windows
 }

@@ -62,6 +62,8 @@ ENTRYPOINT_HELPERS="${ENTRYPOINT_HOME}/helpers"
 . "${ENTRYPOINT_HOME}/lib/config.sh"
 # shellcheck source=entrypoint/lib/privileges.sh
 . "${ENTRYPOINT_HOME}/lib/privileges.sh"
+# shellcheck source=entrypoint/lib/settings.sh
+. "${ENTRYPOINT_HOME}/lib/settings.sh"
 # shellcheck source=entrypoint/lib/supervisor.sh
 . "${ENTRYPOINT_HOME}/lib/supervisor.sh"
 # shellcheck source=entrypoint/lib/gpu.sh
@@ -87,6 +89,7 @@ main() {
     config_load
     nginx_prepare
     privileges_setup
+    settings_init
     supervisor_init
     gpu_detect
 

@@ -2,7 +2,7 @@
 
 # Selkies upstream release: the wheels installed in the image (Step 2) and the
 # device interposers built below come from the same tag.
-ARG SELKIES_VERSION=2.1.0
+ARG SELKIES_VERSION=2.2.1
 
 # === BUILD the Selkies device interposers ===
 # LD_PRELOAD libraries that hand the viewer's webcam and gamepads to Chromium
@@ -187,14 +187,17 @@ RUN apt-get update && \
 # the GitHub release assets are the ones fetched here and installed
 # together; pip resolves
 # the remaining dependencies from PyPI as prebuilt manylinux wheels, so no
-# compiler is needed. Installs the `selkies`, `selkies-resize` and
-# `selkies-gpu-probe` console commands.
+# compiler is needed. Installs the one `selkies` console command; its tools
+# are subcommands (`selkies resize`, `selkies gpu-probe`, `selkies session`
+# — the hyphenated console scripts are gone since 2.2.0).
 # ubuntu:26.04 ships Python 3.14 -> SELKIES_PYTAG=cp314; if the base image's
 # Python ever moves, bump SELKIES_PYTAG (the selkies wheel itself is
 # py3-none-any). python3-pip is installed and purged within this step.
+# The GitHub release CDN answers these assets with intermittent 504s
+# in bursts of half a minute and more, hence retries spread over ~100 s.
 ARG SELKIES_VERSION
-ARG PIXELFLUX_VERSION=2.2.1
-ARG PCMFLUX_VERSION=2.2.0
+ARG PIXELFLUX_VERSION=2.2.3
+ARG PCMFLUX_VERSION=2.2.1
 ARG SELKIES_PYTAG=cp314
 RUN apt-get update && \
     apt-get install -y --no-install-recommends python3-pip && \
@@ -219,7 +222,7 @@ RUN apt-get update && \
     python3 -c "import pixelflux, pcmflux" && \
     selkies --help >/dev/null && \
     selkies --version | grep -qx "selkies ${SELKIES_VERSION}" && \
-    command -v selkies-resize selkies-gpu-probe >/dev/null && \
+    selkies resize --help >/dev/null && \
     python3 -c "import importlib.resources as r; assert (r.files('selkies.selkies_web') / 'index.html').is_file(), 'web client missing'"
 
 # The device interposers built in the first stage (see there); the entrypoint

@@ -238,7 +238,7 @@ chromium_device_interposers() {
 # at SCREEN_GEOMETRY: a larger screen showed it in one corner next to black,
 # a smaller one cropped it. The helper refits chromium's main windows on
 # every screen change. It also stands in for the window manager in
-# deciding whether new windows come to the front (DESKTOP_RAISE_NEW_WINDOWS),
+# deciding whether new windows come to the front (settings.sh),
 # which chromium only hands over when the follower is up before it: it
 # checks for a window manager once. Once started it is supervised like
 # every service. X11 only: labwc does both on the Wayland desktop.
