@@ -184,7 +184,9 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 * 「Show」把对应浏览器窗口提到 Selkies 画面最前;
 * 「Delete」强制关闭隔离 context 并断开它的客户端。
 
-每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。控制台页面的状态只通过 `/console/ws` WebSocket 获取:连上时先收到一份全量快照,之后只收变化;页面上的操作则是 `/console/api/` 下的普通 HTTP 请求。控制台(以及下面的侧边栏)支持英文和简体中文:默认跟随浏览器语言,标题栏的 *中文* / *EN* 按钮可以切换(按浏览器记住)。
+每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。控制台页面的状态只通过 `/console/ws` WebSocket 获取:连上时先收到一份全量快照,之后只收变化;页面上的操作则是 `/console/api/` 下的普通 HTTP 请求。控制台(以及下面的侧边栏)支持英文和简体中文:默认跟随浏览器语言,可在设置菜单(标题栏的齿轮按钮)里切换(按浏览器记住)。
+
+桌面上新打开的浏览器窗口(例如新隔离 context 的窗口)默认会切到最前,和一般窗口管理器的行为一样。在同一个设置菜单里关闭 *新窗口切到最前*,之后新窗口就会开在当前最前窗口的后面,自动化任务不会抢走你正在看的窗口;「Show」仍然可以把任意窗口切到最前。开关只影响之后新打开的窗口,保持到容器重启为止;`DESKTOP_RAISE_NEW_WINDOWS=false` 把它设为默认。浏览器以有头模式运行时才显示这个开关。Wayland 下由 labwc 在新窗口映射时、画出第一帧之前把它放到底层;X11 下由屏幕跟随进程代替缺失的窗口管理器(Chromium 改为请求它激活窗口,而不是自己置顶),因此不存在事后再切回去的过程。
 
 同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API 和 WebSocket(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,两者都要求**主密码**(WebSocket 还只接受同源页面的连接):用只读密码登录的用户看不到拉手。只要 Selkies 和 CDP 端点同时启用,侧边栏就会出现。
 
@@ -322,6 +324,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `TZ`                | `UTC`          | 容器时区(任意 IANA 时区,如 `Asia/Shanghai`)                                                                                                                                                                          |
 | `DISPLAY_BACKEND`   | `wayland`      | 有头浏览器所在的桌面:`wayland` = labwc,一个无头 Wayland 合成器 + 窗口管理器,由 Selkies 在 GPU 上采集 —— 挂了 GPU 时,动画页面的 CPU 占用降低数倍,见 [Wayland 桌面](#wayland-桌面display_backendwayland);`x11` = Xvfb(+ picom)—— 使用 NVIDIA GPU 时请选它 |
 | `SCREEN_GEOMETRY`   | `1920x1080x24` | Xvfb 屏幕尺寸 `宽x高x深`(`wayland` 时为 labwc 输出的尺寸);同时决定 Selkies 串流分辨率                                                                                                                                 |
+| `DESKTOP_RAISE_NEW_WINDOWS` | `true` | `false` = 桌面上新打开的窗口(例如新隔离 context 的浏览器)留在当前最前窗口之后,不抢占前台;CDP 控制台的开关可在运行时切换,见 [CDP 网关](#cdp-网关带登录态的隔离-context) |
 | `RUN_USER`          | *(空)*         | 桌面栈(Xvfb 或 labwc、picom、PulseAudio、selkies、chromium、CDP 网关)与 nginx *worker* 以该用户而非 root 运行 —— 已存在的用户名(如 `browser`)或 `uid[:gid]`;PID 1 与 nginx master 保持 root。见[权限降级(`RUN_USER`)](#权限降级run_user) |
 
 ### 权限降级(`RUN_USER`)
@@ -504,21 +507,25 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 
 [![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
-每个 pull request 以及每次推送到 `main` 都会运行 [`ci.yaml`](.github/workflows/ci.yaml):静态检查(hadolint、`docker build --check`、shellcheck、`node --check`、`py_compile`)、完整镜像构建、运行时冒烟测试(CDP 端点、Web UI、CDP 网关、Wayland 与 X11 桌面)。推送 `v*` 标签(或手动运行该 workflow)时构建并发布 `linux/amd64` 镜像(Dockerfile 只支持这一种架构):
+每个 pull request 以及每次推送到 `main` 都会运行 [`ci.yaml`](.github/workflows/ci.yaml):静态检查(hadolint、`docker build --check`、shellcheck、`node --check`、`py_compile`)、完整镜像构建、运行时冒烟测试(CDP 端点、Web UI、CDP 网关、Wayland 与 X11 桌面)。只有 `main` 会发布版本 —— `dev` 与特性分支只做测试。合入 `main` 的变更构成一次发布时(见下文),同一次 CI 运行会打标签,并构建、发布 `linux/amd64` 镜像(Dockerfile 只支持这一种架构):
 
 * **GHCR**:`ghcr.io/agentene/browser`(使用内置 `GITHUB_TOKEN`)
 * **Docker Hub**:`agentene/browser`(与 GHCR 同为 `<owner>/<repo>` 路径;需要仓库 secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`,且该账号有权推送到此命名空间;未配置则跳过)
 
-版本规则:项目自身版本 `X.Y.Z`(semver)记录在 [`VERSION`](VERSION) 文件中,手动升级;其后拼接内置的 Chrome for Testing 版本。Git 发布标签为 `v<X.Y.Z>-<chrome 版本>`,例如 `v0.1.0-150.0.7871.100`,发布以下镜像标签:
+版本规则:项目自身版本 `X.Y.Z`(semver)记录在 [`VERSION`](VERSION) 文件中,手动升级。Git 发布标签分两类:
+
+* **代码版本 `v<X.Y.Z>`**(例如 `v0.1.0`)—— `VERSION` 的变更合入 `main` 时打出(通常是 `dev` → `main` 的合并)。镜像内置该提交上钉住的 Chrome for Testing。
+* **Chrome 版本 `v<X.Y.Z>-<chrome 版本>`**(例如 `v0.1.0-150.0.7871.100`)—— 每日 Chrome 升级合入时打出;`X.Y.Z` 不变,后缀记录同一份代码重新构建所用的 Chrome。
+
+两者发布相同的镜像标签:
 
 | 镜像标签 | 示例 | 含义 |
 | --- | --- | --- |
-| `<X.Y.Z>-<chrome 版本>` | `0.1.0-150.0.7871.100` | 精确版本 —— 需要可复现部署时钉这个 |
-| `<X.Y.Z>` | `0.1.0` | 该项目版本下最新的 Chrome 构建 |
+| `<X.Y.Z>-<chrome 版本>` | `0.1.0-150.0.7871.100` | 精确构建:项目版本 + 该提交钉住的 Chrome for Testing —— 需要可复现部署时钉这个 |
+| `<X.Y.Z>` | `0.1.0` | 该项目版本下最新的构建(随每次 Chrome 升级移动) |
 | `latest` | | 最新发布 |
-| `sha-<短哈希>` | `sha-2c2f6bb` | 构建镜像所用的提交 |
 
-Chrome 升级保持 `X.Y.Z` 不变、只改后缀(`v0.1.0-150.0.7871.100` → `v0.1.0-151.0.…`);代码改动通过升级 `VERSION` 发布。`publish` job 会拒绝与所在提交的 `VERSION` + Chrome 版本不一致的标签。手动运行 workflow(无标签)时只发布 `sha-<短哈希>` 标签。
+合入 `main` 时既没改 `VERSION` 也没改 Chrome 版本,则不发布任何版本(运行中会留下 notice)—— 所以请在 `dev` 上先升级 `VERSION` 再合并。`publish` job 会拒绝既不是所在提交的 `v<VERSION>`、也不是 `v<VERSION>-<chrome 版本>` 的标签,以及所在提交不在 `main` 上的标签。发布版本不推 `sha-<短哈希>` 标签;只有在 `main` 上手动运行 workflow(无标签)时才推,且只推这一个。
 
 ### 上游版本自动更新
 
@@ -528,18 +535,18 @@ Chrome 升级保持 `X.Y.Z` 不变、只改后缀(`v0.1.0-150.0.7871.100` → `v
 2. 自动开启一个包含变更 diff 的 bump PR;
 3. `ci.yaml` 在该 PR 上运行(lint + 完整构建 + 冒烟测试);
 4. CI 全绿后 PR 以 squash 方式自动合并;
-5. `ci.yaml` 中的 `release-tag` job 推送标签 `v<X.Y.Z>-<chrome 版本>`;
-6. 标签事件触发 `publish` job → 镜像发布到 GHCR / Docker Hub;
+5. `ci.yaml` 中的 `release-tag` job 推送 Chrome 版本标签 `v<X.Y.Z>-<chrome 版本>`;
+6. 同一次运行中的 `publish` job 构建镜像 → 发布到 GHCR / Docker Hub;
 7. `ci.yaml` 中的 `cleanup-update-branch` job 删除已合并的 `chore/chrome-update` 分支(若新一轮 bump 已复用该分支则保留)。
 
-合入 main 的 `VERSION` 变更同样由该 job 发布。每个 `VERSION` + Chrome 组合只发布一次:标签已存在时 job 跳过并给出警告 —— 要在同一 Chrome 上再次发布,请升级 `VERSION`。
+合入 main 的 `VERSION` 变更同样由该 job 打成代码版本标签 `v<X.Y.Z>`(一次合并同时改了 `VERSION` 和 Chrome 版本时,以代码版本为准)。每个标签只发布一次:标签已存在时 job 跳过并给出警告 —— 要再次发布代码改动,请升级 `VERSION`。
 
 要实现全自动,需一次性配置:
 
-* **仓库 secret `CHROME_UPDATE_TOKEN`** —— 经典 PAT(需 `repo` 权限)或 fine-grained PAT(需 *Contents* + *Pull requests* 读写)。它在两处不可或缺:GitHub 对用内置 `GITHUB_TOKEN` 创建的 PR 绝不触发 `on: pull_request`(bump PR 将没有 CI 检查);且 `GITHUB_TOKEN` 产生的事件不会触发任何 workflow(用它推送的发布标签永远不会启动 publish job)。不配置该 secret 时 bump PR 照常开启、等待人工合并(关闭再重开该 PR 可强制触发 CI),但推送的标签不会自动发布 —— 需在本机重推标签或手动运行 workflow。
+* **仓库 secret `CHROME_UPDATE_TOKEN`** —— 经典 PAT(需 `repo` 权限)或 fine-grained PAT(需 *Contents* + *Pull requests* 读写)。需要它是因为 GitHub 对用内置 `GITHUB_TOKEN` 创建的 PR 绝不触发 `on: pull_request`(bump PR 将没有 CI 检查)。不配置该 secret 时 bump PR 照常开启、等待人工合并(关闭再重开该 PR 可强制触发 CI)。打标签与发布不依赖它:它们就在合并本身的 CI 运行中完成。
 * **Settings → General → Pull Requests → "Allow auto-merge"** 打开,PR 才能在检查通过后自行合并。
 
-不配置 secret 时流程仍然完整,只是加了人工闸门:PR 照常开启,你验证后手动合并,打标签与发布随后自动完成。手动推送的标签只要是所在提交的 `v<VERSION>-<chrome 版本>` 也会发布;手动改 Chrome 版本或 `VERSION` 合入 main 也会同样被自动打标签并发布。
+不配置 secret 时流程仍然完整,只是加了人工闸门:PR 照常开启,你验证后手动合并,打标签与发布随后自动完成。手动推送的标签只要是 `main` 上某个提交的 `v<VERSION>` 或 `v<VERSION>-<chrome 版本>` 也会发布;手动改 Chrome 版本或 `VERSION` 合入 main 也会同样被自动打标签并发布。
 
 ## 安全注意事项
 

@@ -20,13 +20,13 @@ runtime smoke tests.
 | `Dockerfile` | Single-stage ubuntu:26.04 image: Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
 | `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages labwc (or Xvfb → picom) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
 | `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `audio`, `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
-| `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, chromium prefs seeding, the orderly Browser.close the supervisor's stop hook runs) — formerly heredocs in the entrypoint |
+| `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, the new-windows-to-the-front switch, chromium prefs seeding, the orderly Browser.close the supervisor's stop hook runs) — formerly heredocs in the entrypoint |
 | `.shellcheckrc` | Lets shellcheck follow the module `source` statements |
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | The commonly changed runtime knobs, documented (the full reference is the READMEs' Configuration section + `entrypoint/lib/config.sh`) |
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies and CDP are both on), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
-| `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Release tags are `v<VERSION>-<chrome-version>` — see [Releases](#releases) |
+| `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Release tags are `v<VERSION>` (code) and `v<VERSION>-<chrome-version>` (Chrome bump) — see [Releases](#releases) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland, X11) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
 | `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release (ci.yaml's `cleanup-update-branch` then deletes `chore/chrome-update`) |
@@ -209,7 +209,7 @@ node update-chrome-node.mjs --node 22        # force the Node major
 
 ## Releases
 
-Version scheme — two parts, joined by `-`:
+Version scheme — two parts, joined by `-` on Chrome releases:
 
 * **Project version** `X.Y.Z` (semver) lives in the root `VERSION` file and
   is changed by hand, in the PR that makes the change: patch for fixes,
@@ -218,21 +218,34 @@ Version scheme — two parts, joined by `-`:
   image-affecting change should be released.
 * **Chrome version** — the 4-part `ARG CHROME_VERSION` pin (only
   `update-chrome-node.mjs` touches it). A Chrome bump does NOT change
-  `VERSION`; it only changes the suffix.
+  `VERSION`; it only adds a suffixed release.
 
-Git release tag: `v<VERSION>-<chrome-version>`, e.g. `v0.1.0-150.0.7871.100`.
-Docker image tags: `<VERSION>-<chrome-version>` (e.g. `0.1.0-150.0.7871.100`),
-plus the floating `<VERSION>` (e.g. `0.1.0`) and `latest`, and
-`sha-<short>`. A tag is immutable: one `VERSION` + Chrome pair is released
-once — to re-release on the same Chrome, bump `VERSION`.
+Two kinds of git release tag:
 
-Routine releases are fully automated — do not hand-tag. Merging to main a
-change of `VERSION` or of the `ARG CHROME_VERSION` pin makes the
-`release-tag` job in `ci.yaml` push `v<VERSION>-<chrome-version>` (skipped
-with a warning if that tag already exists), which triggers the `publish` job
-(GHCR always; Docker Hub when the `DOCKERHUB_*` secrets exist). `publish`
-refuses a tag that does not equal `v<VERSION>-<CHROME_VERSION>` of its own
-commit, so a manual tag must follow the same scheme. The daily
+* **Code release** `v<VERSION>` (e.g. `v0.1.0`) — a merge to main that
+  changes `VERSION` (the `dev` → `main` merge). Wins if the same merge also
+  moves the Chrome pin.
+* **Chrome release** `v<VERSION>-<chrome-version>` (e.g.
+  `v0.1.0-150.0.7871.100`) — a merge to main that changes only the
+  `ARG CHROME_VERSION` pin (the daily bump).
+
+Both publish the same Docker image tags: `<VERSION>-<chrome-version>` (the
+Chrome pinned at that commit), the floating `<VERSION>` and `latest` — no
+`sha-<short>` (only a tagless manual dispatch on main publishes that).
+
+A tag is immutable: each is released once (an existing tag is skipped with a
+warning) — to re-release a code change, bump `VERSION`.
+
+Releases are cut from `main` only: develop on `dev` / feature branches, bump
+`VERSION` there, and the merge to `main` is the release (a merge that
+changes neither `VERSION` nor the Chrome pin releases nothing). Routine
+releases are fully automated — do not hand-tag. In the main-push CI run, the
+`release-tag` job pushes the tag (with `GITHUB_TOKEN`, so it triggers no
+second run) and the `publish` job builds the image right after it (GHCR
+always; Docker Hub when the `DOCKERHUB_*` secrets exist). `publish` refuses a
+tag that is neither `v<VERSION>` nor `v<VERSION>-<CHROME_VERSION>` of its own
+commit, or whose commit is not on `main`, so a manual tag must follow the
+same scheme. The daily
 `chrome-update.yaml` cron opens the bump PR and auto-merges it once CI is
 green; the `cleanup-update-branch` job in `ci.yaml` then deletes the merged
 `chore/chrome-update` branch.

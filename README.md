@@ -184,7 +184,9 @@ The CDP console lives at **`http://localhost:9222/console/`**, on the CDP port, 
 * *Show* raises that browser window in the Selkies stream.
 * *Delete* force-closes an isolated context and disconnects its client.
 
-Each isolated context gets its own browser frame color, matching its console card, so windows on the desktop are easy to tell apart. The console pages get their state only over the `/console/ws` WebSocket: a full snapshot on connect, then changes; their actions are plain HTTP calls under `/console/api/`. The console (and the sidebar below) speaks English and Simplified Chinese: it follows the browser's language, and the *中文* / *EN* button in its header switches it (remembered per browser).
+Each isolated context gets its own browser frame color, matching its console card, so windows on the desktop are easy to tell apart. The console pages get their state only over the `/console/ws` WebSocket: a full snapshot on connect, then changes; their actions are plain HTTP calls under `/console/api/`. The console (and the sidebar below) speaks English and Simplified Chinese: it follows the browser's language, and the settings menu (the gear in its header) switches it (remembered per browser).
+
+A browser window that opens on the desktop — e.g. the window of a new isolated context — comes to the front by default, as window managers do. Turn off *New windows to the front* in the same settings menu and new windows open behind the one in front instead, so an automation run does not take over the window you are watching; *Show* still brings any window forward. It applies to the windows opened from then on and holds until the container restarts; `DESKTOP_RAISE_NEW_WINDOWS=false` makes it the default. The switch only shows when the browsers run headed. On Wayland labwc lowers the new window as it maps, before its first frame; on X11 the screen follower stands in for the missing window manager (Chromium asks it to activate a window instead of raising its own), so nothing gets switched back after the fact.
 
 The same console also sits **next to the live desktop**: move the pointer to the right edge of the Selkies page and click the handle that appears (on touch screens it always shows). Drag the sidebar's left edge to resize it, up to half the page or 1000px, whichever is less (remembered per browser); its cards follow the width, side by side once there is room. The sidebar has the cards and actions of `/console/`; *Show* raises the window right in the stream you are watching. nginx injects the sidebar script (`cdp-gateway/panel.js`) into the Selkies page and proxies its API and WebSocket (`cdp-console/` next to the page, so `SELKIES_SUBFOLDER` works) to the gateway. With a Selkies login set, both require the **master** password (the WebSocket also only accepts pages of the same origin): users signed in with a view-only password get no handle. The sidebar is there whenever both Selkies and the CDP endpoint are on.
 
@@ -322,6 +324,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `TZ`                 | `UTC`          | container timezone (any IANA zone, e.g. `Asia/Shanghai`)                                                                                                                                                                                                                         |
 | `DISPLAY_BACKEND`    | `wayland`      | desktop the headed browsers live on: `wayland` = labwc, a headless Wayland compositor + window manager that Selkies captures on the GPU — several times less CPU for animated pages when a GPU is passed in, see [Wayland desktop](#wayland-desktop-display_backendwayland); `x11` = Xvfb (+ picom) — use it with an NVIDIA GPU |
 | `SCREEN_GEOMETRY`    | `1920x1080x24` | Xvfb screen size `WxHxD` (with `wayland`: the size of labwc's output); also sizes the Selkies stream                                                                                                                                                                             |
+| `DESKTOP_RAISE_NEW_WINDOWS` | `true`  | `false` = a window that opens on the desktop (e.g. a new isolated context's browser) stays behind the one in front instead of taking its place; the CDP console's switch changes it at runtime, see [CDP gateway](#cdp-gateway-isolated-contexts-with-your-logins) |
 | `RUN_USER`           | *(empty)*      | run the desktop stack (Xvfb or labwc, picom, PulseAudio, selkies, chromium, the CDP gateway) and the nginx *workers* as this user instead of root — an existing username (e.g. `browser`) or `uid[:gid]`; PID 1 and the nginx master stay root. See [Privilege drop (`RUN_USER`)](#privilege-drop-run_user) |
 
 ### Privilege drop (`RUN_USER`)
@@ -504,21 +507,25 @@ node update-chrome-node.mjs --node 22        # force the Node major instead of t
 
 [![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
-Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland and X11 desktops). Pushing a `v*` tag (or a manual run of the workflow) builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for):
+Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland and X11 desktops). Releases are cut from `main` only — `dev` and feature branches are only tested. When a merge to `main` is a release (see below), the same CI run tags it and builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for):
 
 * **GHCR**: `ghcr.io/agentene/browser` (uses the built-in `GITHUB_TOKEN`)
 * **Docker Hub**: `agentene/browser` (same `<owner>/<repo>` path as GHCR; needs the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets of an account allowed to push there; skipped otherwise)
 
-Version scheme: the project's own version `X.Y.Z` (semver) lives in [`VERSION`](VERSION) and is bumped by hand; the bundled Chrome for Testing version is appended to it. Git release tags are `v<X.Y.Z>-<chrome-version>`, e.g. `v0.1.0-150.0.7871.100`, and publish these image tags:
+Version scheme: the project's own version `X.Y.Z` (semver) lives in [`VERSION`](VERSION) and is bumped by hand. There are two kinds of git release tags:
+
+* **Code release `v<X.Y.Z>`** (e.g. `v0.1.0`) — tagged when a change of `VERSION` is merged to `main` (typically the `dev` → `main` merge). The image ships whatever Chrome for Testing is pinned at that commit.
+* **Chrome release `v<X.Y.Z>-<chrome-version>`** (e.g. `v0.1.0-150.0.7871.100`) — tagged when the daily Chrome bump is merged; `X.Y.Z` stays, the suffix records the Chrome the same code was rebuilt on.
+
+Both kinds publish the same image tags:
 
 | Image tag | Example | Meaning |
 | --- | --- | --- |
-| `<X.Y.Z>-<chrome-version>` | `0.1.0-150.0.7871.100` | exact release — pin this for reproducible deployments |
-| `<X.Y.Z>` | `0.1.0` | newest Chrome build of that project version |
+| `<X.Y.Z>-<chrome-version>` | `0.1.0-150.0.7871.100` | exact build: project version + the Chrome for Testing pinned at that commit — pin this for reproducible deployments |
+| `<X.Y.Z>` | `0.1.0` | newest build of that project version (moves with every Chrome bump) |
 | `latest` | | newest release |
-| `sha-<short>` | `sha-2c2f6bb` | the commit the image was built from |
 
-A Chrome bump keeps `X.Y.Z` and only changes the suffix (`v0.1.0-150.0.7871.100` → `v0.1.0-151.0.…`); a code change is released by bumping `VERSION`. The `publish` job rejects a tag that does not match its commit's `VERSION` + Chrome pin. A manual run of the workflow (no tag) publishes only the `sha-<short>` tag.
+A merge to `main` that changes neither `VERSION` nor the Chrome pin releases nothing (the run leaves a notice) — so bump `VERSION` on `dev` before merging it. The `publish` job rejects a tag that is neither `v<VERSION>` nor `v<VERSION>-<chrome-version>` of its commit, or whose commit is not on `main`. Releases publish no `sha-<short>` tag; only a manual run of the workflow on `main` (no tag) does, and nothing else.
 
 ### Automatic upstream updates
 
@@ -528,18 +535,18 @@ A Chrome bump keeps `X.Y.Z` and only changes the suffix (`v0.1.0-150.0.7871.100`
 2. a bump PR is opened with the diff,
 3. `ci.yaml` runs on the PR (lint + full build + smoke tests),
 4. the PR squashes via auto-merge once CI is green,
-5. the `release-tag` job in `ci.yaml` pushes tag `v<X.Y.Z>-<chrome-version>`,
-6. the tag event runs the `publish` job → the image lands on GHCR / Docker Hub,
+5. the `release-tag` job in `ci.yaml` pushes the Chrome release tag `v<X.Y.Z>-<chrome-version>`,
+6. the `publish` job in the same run builds the image → it lands on GHCR / Docker Hub,
 7. the `cleanup-update-branch` job in `ci.yaml` deletes the merged `chore/chrome-update` branch (kept if a newer bump already reuses it).
 
-The same job also releases a merged change of `VERSION`. Each `VERSION` + Chrome pair is released once: if the tag already exists, the job skips with a warning — bump `VERSION` to release again on the same Chrome.
+The same job tags a merged change of `VERSION` as the code release `v<X.Y.Z>` (if one merge changes both `VERSION` and the Chrome pin, the code release wins). Every tag is released once: if it already exists, the job skips with a warning — bump `VERSION` to release a code change again.
 
 For the fully automatic path, configure once:
 
-* **Repo secret `CHROME_UPDATE_TOKEN`** — a PAT with `repo` scope (classic) or a fine-grained token with *Contents* + *Pull requests* read/write. It is needed twice: GitHub never fires `on: pull_request` for PRs created with the built-in `GITHUB_TOKEN` (the bump PR would carry no CI checks), and events created by `GITHUB_TOKEN` never trigger workflows (a release tag pushed with it would never start the publish job). Without the PAT the bump PR still opens and waits for a manual merge (close & reopen it to force CI), but the pushed tag does not auto-publish — re-push the tag from a machine or run the workflow manually.
+* **Repo secret `CHROME_UPDATE_TOKEN`** — a PAT with `repo` scope (classic) or a fine-grained token with *Contents* + *Pull requests* read/write. It is needed because GitHub never fires `on: pull_request` for PRs created with the built-in `GITHUB_TOKEN` (the bump PR would carry no CI checks). Without the PAT the bump PR still opens and waits for a manual merge (close & reopen it to force CI). Tagging and publishing do not need it: they run in the CI run of the merge itself.
 * **Settings → General → Pull Requests → "Allow auto-merge"** enabled, so the PR can merge itself once checks pass.
 
-Without the secret everything still works, just human-gated: the PR opens, you verify, you merge — tagging and publishing then run automatically. A manual tag also publishes, as long as it is `v<VERSION>-<chrome-version>` of the tagged commit; a manual Chrome or `VERSION` bump merged to main is auto-tagged and released the same way.
+Without the secret everything still works, just human-gated: the PR opens, you verify, you merge — tagging and publishing then run automatically. A manual tag also publishes, as long as it is `v<VERSION>` or `v<VERSION>-<chrome-version>` of a commit on `main`; a manual Chrome or `VERSION` bump merged to main is auto-tagged and released the same way.
 
 ## Security considerations
 

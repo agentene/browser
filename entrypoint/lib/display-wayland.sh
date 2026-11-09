@@ -35,28 +35,49 @@ display_wayland_start() {
 # refuses the interactive move/resize chromium asks for when its tab strip
 # or edges are dragged — on a maximized window that move first restores it
 # to a small centered one.
+#
+# New windows: labwc focuses and raises every window it maps, with no
+# option against it. For DESKTOP_RAISE_NEW_WINDOWS=false (and the CDP
+# console's switch) a rule lowers each window right as it maps, before its
+# first frame, and the keyboard focus follows the pointer, which (every
+# window maximized) means the window still in front keeps it. The config
+# comes in both variants; the switch helper points rc.xml at one and makes
+# labwc reload it.
 wayland_write_config() {
-    local labwc_mouse button
+    local labwc_mouse button raise focus rule
     labwc_mouse='<mouse><context name="Client">'
     for button in Left Middle Right; do
         labwc_mouse+="<mousebind button=\"${button}\" action=\"Press\"><action name=\"Focus\"/><action name=\"Raise\"/></mousebind>"
     done
     labwc_mouse+='</context></mouse>'
     mkdir -p /tmp/labwc
-    cat >/tmp/labwc/rc.xml <<LABWCRC
+    for raise in true false; do
+        focus="" rule=""
+        if [ "${raise}" = "false" ]; then
+            focus='<focus><followMouse>yes</followMouse><followMouseRequiresMovement>no</followMouseRequiresMovement></focus>'
+            rule='<windowRule identifier="*"><action name="Lower"/></windowRule>'
+        fi
+        cat >"/tmp/labwc/rc-raise-new-windows-${raise}.xml" <<LABWCRC
 <?xml version="1.0"?>
 <labwc_config>
   <core><decoration>client</decoration></core>
+  ${focus}
   <keyboard>
     <keybind key="A-Tab"><action name="NextWindow"/></keybind>
   </keyboard>
   ${labwc_mouse}
   <windowRules>
+    ${rule}
     <windowRule identifier="*"><action name="Maximize"/></windowRule>
     <windowRule identifier="*" fixedPosition="yes"/>
   </windowRules>
 </labwc_config>
 LABWCRC
+    done
+    DISPLAY_BACKEND=wayland "${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh" \
+        "${DESKTOP_RAISE_NEW_WINDOWS}" || die "cannot write the labwc config in /tmp/labwc"
+    # the CDP gateway flips the switch as the run user
+    give_to_run_user /tmp/labwc /tmp/desktop-raise-new-windows
     # The transparent cursor theme that keeps the pointer out of the
     # captured frames (rationale in the helper).
     python3 "${ENTRYPOINT_HELPERS}/labwc-cursor-theme.py" /tmp/labwc/icons/hidden

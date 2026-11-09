@@ -5,6 +5,8 @@
 //   POST   /console/api/main/start|stop     on-demand main browser
 //   POST   /console/api/<name>/focus[/<id>] bring a browser (tab) to the front
 //   DELETE /console/api/<context>           destroy a context
+//   PUT    /console/api/desktop/raise-new-windows/true|false
+//                                           whether new windows come to the front
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -12,7 +14,7 @@ import { notifyChange } from './changes.mjs';
 import { ROOT } from './config.mjs';
 import { consoleDenied } from './console-auth.mjs';
 import { contexts } from './contexts.mjs';
-import { focus } from './desktop.mjs';
+import { focus, setRaiseNewWindows } from './desktop.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { send } from './respond.mjs';
 
@@ -38,6 +40,16 @@ export async function consoleRoute(req, res, url) {
   if (FILES[p]) {
     const [file, type] = FILES[p];
     send(res, 200, await fs.readFile(path.join(ROOT, file)), type);
+    return true;
+  }
+  const r = p.match(/^\/console\/api\/desktop\/raise-new-windows\/(true|false)$/);
+  if (r && req.method === 'PUT') {
+    try {
+      await setRaiseNewWindows(r[1] === 'true');
+      send(res, 200, { ok: true });
+    } catch (err) {
+      send(res, 409, { error: err.message });
+    }
     return true;
   }
   const a = p.match(/^\/console\/api\/([\w.-]+)(?:\/(focus|start|stop)(?:\/([^/]+))?)?$/);

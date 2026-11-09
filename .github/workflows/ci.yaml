@@ -4,20 +4,25 @@
 #                 (entrypoint), node --check, py_compile (python helpers)
 #   verify      : docker build + runtime smoke tests (CDP endpoint, Selkies web,
 #                 CDP gateway, Wayland desktop)
-#   release-tag : on merges to main that change VERSION or the CHROME_VERSION
-#                 pin — pushes tag v<VERSION>-<chrome-version> (e.g.
-#                 v0.1.0-150.0.7871.100), which re-triggers this workflow's
-#                 publish job
+#   release-tag : on merges to main (the only place a release is cut — dev
+#                 and feature branches never release) — a VERSION change (code
+#                 release, the dev -> main merge) tags v<VERSION> (e.g.
+#                 v0.1.0); a CHROME_VERSION pin change alone (the daily Chrome
+#                 bump) tags v<VERSION>-<chrome-version> (e.g.
+#                 v0.1.0-150.0.7871.100)
 #   cleanup-update-branch : on the merge of chrome-update.yaml's bump PR —
 #                 deletes its head branch chore/chrome-update
-#   publish     : on `v*` tags and manual dispatch — checks that a tag matches
-#                 VERSION + the Chrome pin, then pushes to GHCR (always) and
-#                 Docker Hub (when DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are set; same
-#                 <owner>/<repo> path as GHCR)
+#   publish     : builds + pushes the image to GHCR (always) and Docker Hub
+#                 (when DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are set; same
+#                 <owner>/<repo> path as GHCR). Runs in the same main-push run
+#                 right after release-tag created a tag; also on a hand-pushed
+#                 `v*` tag and on a manual dispatch of main. A tag must be
+#                 v<VERSION> or v<VERSION>-<chrome-version> of its commit, and
+#                 that commit must be on main.
 #
 # Together with chrome-update.yaml (daily Chrome for Testing watch) this
 # closes the loop: upstream release -> re-pin PR -> CI here -> auto-merge ->
-# tag -> publish (+ delete the bump branch). See README "Automatic upstream updates".
+# tag + publish (+ delete the bump branch). See README "Automatic upstream updates".
 #
 # Required secrets for Docker Hub publishing (GHCR needs none, it uses the
 # built-in GITHUB_TOKEN): DOCKERHUB_USERNAME, DOCKERHUB_TOKEN.
@@ -32,7 +37,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Superseded PR/branch runs are cancelled, but every main push gets its own
+  # group (keyed by sha): a main run may be cutting a release, and cancelling
+  # it after release-tag pushed the tag would leave that tag without an image.
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -61,7 +69,7 @@ jobs:
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
             docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 
-      - name: VERSION file (X.Y.Z — the release tag is v<VERSION>-<chrome-version>)
+      - name: VERSION file (X.Y.Z — release tags are v<VERSION> / v<VERSION>-<chrome-version>)
         run: |
           grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION \
             || { echo "::error file=VERSION::VERSION must hold one X.Y.Z line, got: $(cat VERSION)"; exit 1; }
@@ -376,12 +384,19 @@ jobs:
           echo "X11 smoke test OK"
 
   release-tag:
-    # When a merge to main changes VERSION (the project's X.Y.Z) or the
-    # pinned CHROME_VERSION, tag v<VERSION>-<chrome-version> so the publish
-    # job releases it (the tag push re-triggers ci.yaml with refs/tags/v*,
-    # where the publish job runs). Runs after verify so a broken image is
-    # never tagged. Chrome bumps keep VERSION and only change the suffix;
-    # code releases bump VERSION. Manual bumps to main release the same way.
+    # Two kinds of release, told apart by what a merge to main changed:
+    #   * code release   — VERSION changed (typically a dev -> main merge):
+    #                      tag v<VERSION>, e.g. v0.2.0. Wins when the same
+    #                      merge also moved the Chrome pin.
+    #   * Chrome release — only the ARG CHROME_VERSION pin changed (the daily
+    #                      chrome-update.yaml bump): tag
+    #                      v<VERSION>-<chrome-version>, e.g.
+    #                      v0.2.0-151.0.7922.50 — VERSION stays, the suffix
+    #                      records the Chrome rebuild.
+    # The tag is pushed with the built-in GITHUB_TOKEN, whose events trigger
+    # no workflow run — publish picks the tag up from this job's output in the
+    # same run instead (no PAT needed, no double build). Runs after verify so
+    # a broken image is never tagged.
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -390,30 +405,20 @@ jobs:
       # job-level permissions replace the workflow-level ones; this job only
       # pushes a git tag, it does not touch packages.
       contents: write
-    env:
-      # The tag MUST be pushed with the PAT: events created by the built-in
-      # GITHUB_TOKEN never trigger workflow runs, so a GITHUB_TOKEN-pushed tag
-      # would leave the publish job dead. Without the PAT the tag is still
-      # created, but publishing then needs a manual trigger.
-      HAS_PAT: ${{ secrets.CHROME_UPDATE_TOKEN != '' }}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 2 # HEAD~1 needed to diff the incoming change
-          token: ${{ secrets.CHROME_UPDATE_TOKEN || github.token }}
 
-      - name: Tag the release (v<VERSION>-<chrome-version>)
+      - name: Tag the release (v<VERSION> or v<VERSION>-<chrome-version>)
+        id: tag
         run: |
           set -euo pipefail
           BEFORE="$(git rev-parse --verify -q HEAD~1 || true)"
           if [ -z "$BEFORE" ]; then
             echo "no parent commit to diff against — skipping"
-            exit 0
-          fi
-          if git diff --quiet "$BEFORE" HEAD -- VERSION \
-              && ! git diff "$BEFORE" HEAD -- Dockerfile \
-                   | grep -qE '^[-+]ARG CHROME_VERSION='; then
-            echo "VERSION and CHROME_VERSION pin unchanged — nothing to release"
             exit 0
           fi
           VERSION="$(tr -d '[:space:]' < VERSION)"
@@ -422,22 +427,31 @@ jobs:
             || { echo "ERROR: VERSION is not X.Y.Z: '${VERSION}'"; exit 1; }
           [[ "$CHROME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { echo "ERROR: cannot read CHROME_VERSION: '${CHROME}'"; exit 1; }
-          TAG="v${VERSION}-${CHROME}"
-          # A tag is immutable: the same VERSION + Chrome pair is released
-          # once. To re-release a changed image on the same Chrome, bump
-          # VERSION (patch) instead.
+          if ! git diff --quiet "$BEFORE" HEAD -- VERSION; then
+            TAG="v${VERSION}"
+            MSG="Release ${VERSION} (Chrome for Testing ${CHROME})"
+            HINT="bump VERSION to release this change"
+          elif git diff "$BEFORE" HEAD -- Dockerfile \
+                 | grep -qE '^[-+]ARG CHROME_VERSION='; then
+            TAG="v${VERSION}-${CHROME}"
+            MSG="Release ${VERSION} rebuilt on Chrome for Testing ${CHROME}"
+            HINT="this VERSION + Chrome pair is already released"
+          else
+            echo "::notice::VERSION and CHROME_VERSION pin unchanged — nothing released (bump VERSION to release a code change)"
+            exit 0
+          fi
+          # A tag is immutable: each v<VERSION> and each
+          # v<VERSION>-<chrome-version> is released once.
           if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null; then
-            echo "::warning::${TAG} already exists — bump VERSION to release this change"
+            echo "::warning::${TAG} already exists — ${HINT}"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release ${VERSION} (Chrome for Testing ${CHROME})"
+          git tag -a "$TAG" -m "$MSG"
           git push origin "$TAG"
-          echo "pushed ${TAG} — the tag push triggers the publish job"
-          if [ "${HAS_PAT}" != "true" ]; then
-            echo "::warning::CHROME_UPDATE_TOKEN is not set, so this tag was pushed with GITHUB_TOKEN and the publish job will NOT auto-trigger. Re-push the tag from a machine (git push origin :refs/tags/${TAG} && git fetch origin tag ${TAG} && git push origin ${TAG}) or run ci.yaml manually on the tag."
-          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "pushed ${TAG} — the publish job builds it next"
 
   cleanup-update-branch:
     # Once chrome-update.yaml's bump PR is merged, delete its head branch
@@ -493,20 +507,30 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
-    needs: verify
-    # Only publish version tags and manual runs; plain branch pushes are
-    # already covered by the verify job above.
+    needs: [verify, release-tag]
+    # Publish only what main released:
+    #   * a main push where release-tag just created a tag (the normal path),
+    #   * a hand-pushed `v*` tag (checked below to sit on main),
+    #   * a manual dispatch of main (no tag -> sha-<short> only).
+    # !cancelled() lets it run while release-tag is skipped (tag runs).
     if: >
-      startsWith(github.ref, 'refs/tags/v') ||
-      github.event_name == 'workflow_dispatch'
+      !cancelled() && needs.verify.result == 'success' && (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main'
+          && needs.release-tag.outputs.tag != '') ||
+        startsWith(github.ref, 'refs/tags/v') ||
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     timeout-minutes: 60
     # Bind secrets to env so step-level `if` can reference them (the secrets
     # context is not available in steps[*].if).
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      # The release tag: from release-tag (main push) or the pushed tag itself.
+      RELEASE_TAG: ${{ needs.release-tag.outputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history: the on-main check below
 
       - uses: docker/setup-buildx-action@v4
 
@@ -516,17 +540,30 @@ jobs:
           set -euo pipefail
           VERSION="$(tr -d '[:space:]' < VERSION)"
           CHROME="$(grep -m1 '^ARG CHROME_VERSION=' Dockerfile | cut -d= -f2)"
-          echo "version=${VERSION}-${CHROME}" >> "$GITHUB_OUTPUT"
-          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
-            echo "not a tag run — publishing sha-<short> only"
-            exit 0
-          fi
-          WANT="v${VERSION}-${CHROME}"
-          if [ "${GITHUB_REF_NAME}" != "$WANT" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not match this commit's VERSION + CHROME_VERSION (expected ${WANT}); release tags are v<X.Y.Z>-<chrome-version>"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build=${VERSION}-${CHROME}" >> "$GITHUB_OUTPUT"
+          # Releases come from main only — refuse a tag pushed on dev or a
+          # feature branch.
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::${GITHUB_SHA} is not on main — only commits merged to main are released"
             exit 1
           fi
-          echo "releasing ${WANT}"
+          if [ -z "${RELEASE_TAG}" ]; then
+            echo "no release tag — publishing sha-<short> only"
+            exit 0
+          fi
+          # Both kinds publish the same image tags (see Docker meta below):
+          # v<VERSION>          code release   (dev -> main merge)
+          # v<VERSION>-<chrome> Chrome release (daily Chrome bump)
+          case "${RELEASE_TAG}" in
+            "v${VERSION}") KIND=code ;;
+            "v${VERSION}-${CHROME}") KIND=chrome ;;
+            *)
+              echo "::error::tag ${RELEASE_TAG} does not match this commit (expected v${VERSION} or v${VERSION}-${CHROME}); release tags are v<X.Y.Z> or v<X.Y.Z>-<chrome-version>"
+              exit 1 ;;
+          esac
+          echo "tag=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "releasing ${RELEASE_TAG} (${KIND} release)"
 
       - name: Compute image list (GHCR always, Docker Hub when configured)
         id: images
@@ -561,14 +598,19 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ steps.images.outputs.images }}
-          # Release tag v<X.Y.Z>-<chrome-version> (checked above), e.g.
-          # v0.1.0-150.0.7871.100 -> 0.1.0-150.0.7871.100 + 0.1.0 + latest
-          # (priority=1000: the full tag becomes the OCI version label).
+          # A release (either kind, checked above) publishes
+          #   <VERSION>-<chrome-version>  e.g. 0.2.0-150.0.7871.100 (the Chrome
+          #                               pinned at that commit)
+          #   <VERSION>                   e.g. 0.2.0
+          #   latest
+          # and no sha-<short> (priority=1000: <VERSION>-<chrome-version> becomes
+          # the OCI version label). Only a tagless manual run on main publishes
+          # sha-<short>, and nothing else.
           tags: |
-            type=raw,value=${{ steps.release.outputs.version }},enable=${{ github.ref_type == 'tag' }},priority=1000
-            type=match,pattern=^v(\d+\.\d+\.\d+)-,group=1
-            type=sha
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=${{ steps.release.outputs.build }},enable=${{ steps.release.outputs.tag != '' }},priority=1000
+            type=raw,value=${{ steps.release.outputs.version }},enable=${{ steps.release.outputs.tag != '' }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.tag != '' }}
+            type=sha,enable=${{ steps.release.outputs.tag == '' }}
 
       - name: Build and push
         uses: docker/build-push-action@v7

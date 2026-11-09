@@ -48,6 +48,12 @@
 #   SCREEN_GEOMETRY=1920x1080x24 Xvfb screen size (the working size; also
 #                                sizes the Selkies stream); the initial
 #                                output size with DISPLAY_BACKEND=wayland
+#   DESKTOP_RAISE_NEW_WINDOWS=true  false = a window that opens on the
+#                                desktop (e.g. an isolated CDP context's
+#                                browser) stays behind the one in front
+#                                instead of taking its place; the CDP
+#                                console's switch changes it at runtime,
+#                                until the next container start
 #   TZ=UTC                      container timezone (default UTC; -e TZ=...
 #                               overrides at runtime, no rebuild needed)
 #   CHROMIUM_LANG=en-US         browser UI locale + Accept-Language (default
@@ -163,6 +169,11 @@ config_display() {
     case "${DISPLAY_BACKEND}" in
         x11|wayland) : ;;
         *) die "DISPLAY_BACKEND='${DISPLAY_BACKEND}' must be x11 or wayland" ;;
+    esac
+    DESKTOP_RAISE_NEW_WINDOWS="${DESKTOP_RAISE_NEW_WINDOWS:-true}"
+    case "${DESKTOP_RAISE_NEW_WINDOWS}" in
+        true|false) : ;;
+        *) die "DESKTOP_RAISE_NEW_WINDOWS='${DESKTOP_RAISE_NEW_WINDOWS}' must be true or false" ;;
     esac
 }
 
