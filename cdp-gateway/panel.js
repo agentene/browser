@@ -90,6 +90,42 @@
       .spacer { flex:1; }
       .actions { margin-left:auto; display:flex; align-items:center; gap:6px; }
       .actions [hidden] { display:none; }
+      /* settings: the header's gear and its menu */
+      .settings { position:relative; }
+      .settings-btn {
+        display:inline-flex; align-items:center; justify-content:center; width:30px; height:28px; padding:0;
+        border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--muted); cursor:pointer;
+      }
+      .settings-btn:hover, .settings-btn[aria-expanded="true"] { border-color:var(--accent); color:var(--accent); }
+      .settings-menu {
+        position:absolute; right:0; top:calc(100% + 6px); z-index:20; width:min(300px, calc(100vw - 32px));
+        display:grid; gap:12px; padding:12px 14px; background:var(--card); color:var(--text);
+        border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.2);
+        font-size:13px; line-height:1.45; text-align:left;
+      }
+      .settings-menu[hidden], .setting[hidden] { display:none; }
+      .settings-title { margin:0; font-weight:600; }
+      .setting { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:default; }
+      label.setting { cursor:pointer; }
+      .setting-hint { display:block; margin-top:2px; color:var(--muted); font-size:12px; }
+      .seg { display:inline-flex; flex:none; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+      .seg button {
+        border:none; border-radius:0; padding:3px 10px; background:transparent; color:var(--muted);
+        font:inherit; font-size:12px; cursor:pointer;
+      }
+      .seg button + button { border-left:1px solid var(--line); }
+      .seg button[aria-pressed="true"], .seg button[aria-pressed="true"]:hover { background:var(--accent); color:#fff; }
+      .switch {
+        appearance:none; -webkit-appearance:none; flex:none; position:relative; width:36px; height:20px; margin:0;
+        border-radius:999px; background:color-mix(in srgb, var(--muted) 45%, transparent); cursor:pointer; transition:background .15s;
+      }
+      .switch::before {
+        content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%;
+        background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.3); transition:transform .15s;
+      }
+      .switch:checked { background:var(--accent); }
+      .switch:checked::before { transform:translateX(16px); }
+      .settings-btn:focus-visible, .seg button:focus-visible, .switch:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
       .error { color:var(--danger); font-size:12px; padding:6px 14px 0; }
       .error:empty { display:none; }
       /* cards side by side once the panel is wide enough for two */
@@ -183,7 +219,20 @@
       <header>
         <h2></h2><span class="summary"></span>
         <span class="spacer"></span>
-        <button class="lang" type="button"></button>
+        <div class="settings">
+          <button class="settings-btn" type="button" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+          <div class="settings-menu" role="dialog" hidden>
+            <p class="settings-title"></p>
+            <div class="setting">
+              <span class="lang-label"></span>
+              <span class="seg" role="group"><button type="button" data-lang="en" lang="en">English</button><button type="button" data-lang="zh" lang="zh-CN">中文</button></span>
+            </div>
+            <label class="setting raise-row" hidden>
+              <span><span class="raise-label"></span><span class="setting-hint raise-hint"></span></span>
+              <input class="switch" type="checkbox" role="switch">
+            </label>
+          </div>
+        </div>
         <button class="close">×</button>
       </header>
       <div class="error"></div>
@@ -193,14 +242,12 @@
   const handle = $('.handle'), panel = $('.panel'), body = $('.body');
 
   // --- language ---------------------------------------------------------------
-  // English and Simplified Chinese: the viewer's choice (the header's toggle,
+  // English and Simplified Chinese: the viewer's choice (the settings menu,
   // remembered per browser), else the browser's languages.
   const STRINGS = {
     en: {
       title: 'CDP Console',
       loading: 'loading…',
-      langLabel: '中文',
-      langTitle: '切换到中文',
       mainBrowser: 'Main browser',
       startTitle: 'Start the main browser on the desktop',
       starting: 'Starting…',
@@ -228,12 +275,14 @@
       reconnecting: (s) => `Lost the connection to the CDP gateway, reconnecting in ${s}s…`,
       resizeTitle: 'Drag to resize',
       close: 'Close',
+      settings: 'Settings',
+      language: 'Language',
+      raiseNew: 'New windows to the front',
+      raiseNewHint: 'Off: windows that open later (e.g. a new isolated context) stay behind the one in front; Show brings one forward.',
     },
     zh: {
       title: 'CDP 控制台',
       loading: '加载中…',
-      langLabel: 'EN',
-      langTitle: 'Switch to English',
       mainBrowser: '主浏览器',
       startTitle: '在桌面上启动主浏览器',
       starting: '启动中…',
@@ -261,6 +310,10 @@
       reconnecting: (s) => `与 CDP 网关的连接已断开，${s} 秒后重连…`,
       resizeTitle: '拖动调整宽度',
       close: '关闭',
+      settings: '设置',
+      language: '语言',
+      raiseNew: '新窗口切到最前',
+      raiseNewHint: '关闭后，之后新打开的窗口（如新的隔离上下文）留在当前窗口之后，可用“显示”切过去。',
     },
   };
   const LANG_KEY = 'cdp-console-lang';
@@ -285,15 +338,40 @@
     $('.resizer').title = t('resizeTitle');
     $('h2').textContent = t('title');
     $('.close').setAttribute('aria-label', t('close'));
-    const toggle = $('.lang');
-    toggle.textContent = t('langLabel');
-    toggle.title = t('langTitle');
+    settingsBtn.title = t('settings');
+    settingsBtn.setAttribute('aria-label', t('settings'));
+    settingsMenu.setAttribute('aria-label', t('settings'));
+    $('.settings-title').textContent = t('settings');
+    $('.lang-label').textContent = t('language');
+    for (const b of settings.querySelectorAll('[data-lang]')) b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+    $('.raise-label').textContent = t('raiseNew');
+    $('.raise-hint').textContent = t('raiseNewHint');
     for (const v of views.values()) v.card.remove();
     views.clear();
     browsers.forEach((b, name) => update(name));
     renderSummary();
   }
-  $('.lang').addEventListener('click', () => setLang(lang === 'zh' ? 'en' : 'zh', true));
+
+  // Settings: the header's gear opens a menu with the console's language and
+  // the desktop's "new windows to the front" switch (only with a desktop).
+  const settings = $('.settings');
+  const settingsBtn = $('.settings-btn');
+  const settingsMenu = $('.settings-menu');
+  function setMenu(open) {
+    settingsMenu.hidden = !open;
+    settingsBtn.setAttribute('aria-expanded', String(open));
+  }
+  settingsBtn.addEventListener('click', () => setMenu(settingsMenu.hidden));
+  document.addEventListener('pointerdown', (e) => {
+    if (!settingsMenu.hidden && !e.composedPath().includes(settings)) setMenu(false);
+  });
+  settings.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || settingsMenu.hidden) return;
+    e.stopPropagation(); // the menu closes first, not what it sits in
+    setMenu(false);
+    settingsBtn.focus();
+  });
+  for (const b of settings.querySelectorAll('[data-lang]')) b.addEventListener('click', () => setLang(b.dataset.lang, true));
 
   // --- open / close ----------------------------------------------------------
   // The live state streams in only while the panel is open.
@@ -304,6 +382,7 @@
       connect();
     } else {
       disconnect();
+      setMenu(false);
       if (root.activeElement) root.activeElement.blur(); // hand the keyboard back to the remote desktop
     }
   }
@@ -361,6 +440,7 @@
   const browsers = new Map();
   const views = new Map(); // name -> the card's DOM parts, see liveCard()
   let max = 0;
+  let raiseNew = null; // new windows come to the front of the desktop; null: no desktop
 
   function renderSummary() {
     const n = [...browsers.values()].filter((b) => !b.main).length;
@@ -370,6 +450,21 @@
   function showError(err) {
     $('.error').textContent = err ? String(err.message || err) : '';
   }
+
+  // The desktop's "new windows to the front" switch; the gateway's 'desktop'
+  // op confirms a flip, a failed one flips back.
+  const raiseRow = $('.raise-row');
+  const raiseBox = $('.switch');
+  function renderRaiseNew() {
+    raiseRow.hidden = raiseNew === null;
+    raiseBox.checked = !!raiseNew;
+  }
+  raiseBox.addEventListener('change', () => {
+    call('PUT', `/desktop/raise-new-windows/${raiseBox.checked}`).catch((err) => {
+      showError(err);
+      renderRaiseNew();
+    });
+  });
 
   // Switch the browser to a tab and raise its window; highlighted right
   // away, the gateway's next 'current' confirms it.
@@ -529,11 +624,16 @@
   function apply(op) {
     if (op.t === 'snapshot') {
       max = op.max;
+      raiseNew = op.raiseNew;
       browsers.clear();
       views.clear();
       body.replaceChildren();
       for (const b of op.browsers) browsers.set(b.name, { ...b, tabs: new Map(b.tabs.map((t) => [t.id, t])) });
       return [...browsers.keys()];
+    }
+    if (op.t === 'desktop') {
+      raiseNew = op.raiseNew;
+      return [];
     }
     if (op.t === 'gone') {
       browsers.delete(op.name);
@@ -575,6 +675,7 @@
       }
       touched.forEach(update);
       renderSummary();
+      renderRaiseNew();
     };
     ws.onclose = () => {
       ws = null;

@@ -181,6 +181,10 @@ services:
       # Xvfb screen geometry WxHxD (wayland: labwc's output size); also sizes
       # the Selkies stream
       SCREEN_GEOMETRY: "${SCREEN_GEOMETRY:-1920x1080x24}"
+      # false = a window that opens on the desktop (e.g. a new isolated CDP
+      # context's browser) stays behind the one in front; the CDP console's
+      # switch changes it at runtime
+      DESKTOP_RAISE_NEW_WINDOWS: "${DESKTOP_RAISE_NEW_WINDOWS:-true}"
 
       # --- Privilege drop ---
       # Run the desktop stack (Xvfb/labwc, picom, PulseAudio, selkies, chromium,

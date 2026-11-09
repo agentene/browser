@@ -2,13 +2,40 @@
 // one is in front, and bringing one to the front.
 
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { browserPid, portOf } from './browsers.mjs';
 import { notifyChange } from './changes.mjs';
-import { CONTEXTS_HEADLESS, ROOT, WAYLAND, appId } from './config.mjs';
+import { CONTEXTS_HEADLESS, RAISE_SETTING, RAISE_SWITCH, ROOT, WAYLAND, appId } from './config.mjs';
 import { fetchJson, pageTargets } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
-import { run, sleep } from './util.mjs';
+import { log, run, sleep } from './util.mjs';
+
+// Whether windows that open on the desktop come to the front, or stay behind
+// the one in front (DESKTOP_RAISE_NEW_WINDOWS); null without a desktop.
+// labwc / the X11 screen follower apply it as each window opens, the
+// switch helper hands it to them. Show (focus below) raises either way.
+let raiseNew = null;
+if (RAISE_SWITCH) {
+  try {
+    raiseNew = readFileSync(RAISE_SETTING, 'utf8').trim() !== 'false';
+  } catch {
+    raiseNew = true; // what the desktop does without the setting
+  }
+}
+
+export function raiseNewWindows() {
+  return raiseNew;
+}
+
+export async function setRaiseNewWindows(on) {
+  if (raiseNew === null) throw new Error('the browsers have no desktop');
+  if (await run(RAISE_SWITCH, [String(on)]) !== 0) throw new Error(`${path.basename(RAISE_SWITCH)} ${on} failed`);
+  if (raiseNew === on) return;
+  raiseNew = on;
+  log(on ? 'new windows come to the front of the desktop' : 'new windows open behind the one in front');
+  notifyChange();
+}
 
 // The browser whose window is in front on the desktop, or null. Wayland: the
 // one labwc has focused — one wlrctl call per browser until it matches. X11:

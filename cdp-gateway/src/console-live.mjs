@@ -1,7 +1,9 @@
 // Console live state (WebSocket /console/ws), the console pages' only source
 // of state. A new subscriber gets a snapshot, then only what changed,
 // batched per tick as {ops: [...]}:
-//   {t:'snapshot', max, browsers:[{name, ...fields, tabs, current, thumb}]}
+//   {t:'snapshot', max, raiseNew, browsers:[{name, ...fields, tabs, current, thumb}]}
+//   {t:'desktop', raiseNew}                new windows come to the front (or
+//                                          not); null: there is no desktop
 //   {t:'browser', name, ...fields}         a new browser (all fields) or changed fields
 //   {t:'gone', name}                       a context is gone
 //   {t:'tabs', name, set:[tab], del:[id]}  new or changed tabs, closed tabs
@@ -16,7 +18,7 @@ import { browserNames, portOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
 import { MAX_CONTEXTS } from './config.mjs';
 import { contexts } from './contexts.mjs';
-import { frontBrowser, unwatchFront, watchFront } from './desktop.mjs';
+import { frontBrowser, raiseNewWindows, unwatchFront, watchFront } from './desktop.mjs';
 import { NO_TABS, browserTabs } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { Screencast } from './screencast.mjs';
@@ -33,6 +35,7 @@ const subscribers = new Set();
 const views = new Map(); // name -> what subscribers were last told: { fields, tabs, current, thumb, cast }
 let tickTimer = null;
 let anyFront = false;
+let raiseNewSent = raiseNewWindows();
 let tickRunning = Promise.resolve();
 let tickQueued = null;
 
@@ -68,6 +71,10 @@ function browserFields(name, front) {
 
 async function tick() {
   const ops = [];
+  if (raiseNewWindows() !== raiseNewSent) {
+    raiseNewSent = raiseNewWindows();
+    ops.push({ t: 'desktop', raiseNew: raiseNewSent });
+  }
   const names = browserNames();
   const front = await frontBrowser(names);
   anyFront = !!front;
@@ -127,6 +134,7 @@ function snapshot() {
   return {
     t: 'snapshot',
     max: MAX_CONTEXTS,
+    raiseNew: raiseNewSent,
     browsers: [...views].map(([name, v]) => ({
       name, ...v.fields, tabs: [...v.tabs.values()], current: v.current, thumb: v.thumb,
     })),

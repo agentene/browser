@@ -237,9 +237,11 @@ chromium_device_interposers() {
 # re-maximize it, so after Selkies' browser-driven resize the window stayed
 # at SCREEN_GEOMETRY: a larger screen showed it in one corner next to black,
 # a smaller one cropped it. The helper refits chromium's main windows on
-# every screen change. Started before chromium so the first window is
-# caught at map time. Once started it is supervised like every service.
-# X11 only: labwc keeps the windows maximized on the Wayland desktop.
+# every screen change. It also stands in for the window manager in
+# deciding whether new windows come to the front (DESKTOP_RAISE_NEW_WINDOWS),
+# which chromium only hands over when the follower is up before it: it
+# checks for a window manager once. Once started it is supervised like
+# every service. X11 only: labwc does both on the Wayland desktop.
 chromium_start_follower() {
     if [ "${CHROMIUM_HEADLESS}" != "0" ] || [ "${DISPLAY_BACKEND}" != "x11" ]; then
         return 0
@@ -247,6 +249,8 @@ chromium_start_follower() {
     log "starting chromium screen follower on display ${DISPLAY}"
     start_service /tmp/chromium-follow-screen.log \
         "${DROP[@]}" python3 -u "${ENTRYPOINT_HELPERS}/chromium-follow-screen.py"
+    wait_until 50 0.1 grep -qx ready /tmp/chromium-follow-screen.log \
+        || die "the chromium screen follower did not come up within 5s; see /tmp/chromium-follow-screen.log"
 }
 
 chromium_prepare_profile() {
