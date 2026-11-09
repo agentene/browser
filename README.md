@@ -504,21 +504,25 @@ node update-chrome-node.mjs --node 22        # force the Node major instead of t
 
 [![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
-Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland and X11 desktops). Pushing a `v*` tag (or a manual run of the workflow) builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for):
+Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland and X11 desktops). Releases are cut from `main` only — `dev` and feature branches are only tested. When a merge to `main` is a release (see below), the same CI run tags it and builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for):
 
 * **GHCR**: `ghcr.io/agentene/browser` (uses the built-in `GITHUB_TOKEN`)
 * **Docker Hub**: `agentene/browser` (same `<owner>/<repo>` path as GHCR; needs the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets of an account allowed to push there; skipped otherwise)
 
-Version scheme: the project's own version `X.Y.Z` (semver) lives in [`VERSION`](VERSION) and is bumped by hand; the bundled Chrome for Testing version is appended to it. Git release tags are `v<X.Y.Z>-<chrome-version>`, e.g. `v0.1.0-150.0.7871.100`, and publish these image tags:
+Version scheme: the project's own version `X.Y.Z` (semver) lives in [`VERSION`](VERSION) and is bumped by hand. There are two kinds of git release tags:
+
+* **Code release `v<X.Y.Z>`** (e.g. `v0.1.0`) — tagged when a change of `VERSION` is merged to `main` (typically the `dev` → `main` merge). The image ships whatever Chrome for Testing is pinned at that commit.
+* **Chrome release `v<X.Y.Z>-<chrome-version>`** (e.g. `v0.1.0-150.0.7871.100`) — tagged when the daily Chrome bump is merged; `X.Y.Z` stays, the suffix records the Chrome the same code was rebuilt on.
+
+Both kinds publish the same image tags:
 
 | Image tag | Example | Meaning |
 | --- | --- | --- |
-| `<X.Y.Z>-<chrome-version>` | `0.1.0-150.0.7871.100` | exact release — pin this for reproducible deployments |
-| `<X.Y.Z>` | `0.1.0` | newest Chrome build of that project version |
+| `<X.Y.Z>-<chrome-version>` | `0.1.0-150.0.7871.100` | exact build: project version + the Chrome for Testing pinned at that commit — pin this for reproducible deployments |
+| `<X.Y.Z>` | `0.1.0` | newest build of that project version (moves with every Chrome bump) |
 | `latest` | | newest release |
-| `sha-<short>` | `sha-2c2f6bb` | the commit the image was built from |
 
-A Chrome bump keeps `X.Y.Z` and only changes the suffix (`v0.1.0-150.0.7871.100` → `v0.1.0-151.0.…`); a code change is released by bumping `VERSION`. The `publish` job rejects a tag that does not match its commit's `VERSION` + Chrome pin. A manual run of the workflow (no tag) publishes only the `sha-<short>` tag.
+A merge to `main` that changes neither `VERSION` nor the Chrome pin releases nothing (the run leaves a notice) — so bump `VERSION` on `dev` before merging it. The `publish` job rejects a tag that is neither `v<VERSION>` nor `v<VERSION>-<chrome-version>` of its commit, or whose commit is not on `main`. Releases publish no `sha-<short>` tag; only a manual run of the workflow on `main` (no tag) does, and nothing else.
 
 ### Automatic upstream updates
 
@@ -528,18 +532,18 @@ A Chrome bump keeps `X.Y.Z` and only changes the suffix (`v0.1.0-150.0.7871.100`
 2. a bump PR is opened with the diff,
 3. `ci.yaml` runs on the PR (lint + full build + smoke tests),
 4. the PR squashes via auto-merge once CI is green,
-5. the `release-tag` job in `ci.yaml` pushes tag `v<X.Y.Z>-<chrome-version>`,
-6. the tag event runs the `publish` job → the image lands on GHCR / Docker Hub,
+5. the `release-tag` job in `ci.yaml` pushes the Chrome release tag `v<X.Y.Z>-<chrome-version>`,
+6. the `publish` job in the same run builds the image → it lands on GHCR / Docker Hub,
 7. the `cleanup-update-branch` job in `ci.yaml` deletes the merged `chore/chrome-update` branch (kept if a newer bump already reuses it).
 
-The same job also releases a merged change of `VERSION`. Each `VERSION` + Chrome pair is released once: if the tag already exists, the job skips with a warning — bump `VERSION` to release again on the same Chrome.
+The same job tags a merged change of `VERSION` as the code release `v<X.Y.Z>` (if one merge changes both `VERSION` and the Chrome pin, the code release wins). Every tag is released once: if it already exists, the job skips with a warning — bump `VERSION` to release a code change again.
 
 For the fully automatic path, configure once:
 
-* **Repo secret `CHROME_UPDATE_TOKEN`** — a PAT with `repo` scope (classic) or a fine-grained token with *Contents* + *Pull requests* read/write. It is needed twice: GitHub never fires `on: pull_request` for PRs created with the built-in `GITHUB_TOKEN` (the bump PR would carry no CI checks), and events created by `GITHUB_TOKEN` never trigger workflows (a release tag pushed with it would never start the publish job). Without the PAT the bump PR still opens and waits for a manual merge (close & reopen it to force CI), but the pushed tag does not auto-publish — re-push the tag from a machine or run the workflow manually.
+* **Repo secret `CHROME_UPDATE_TOKEN`** — a PAT with `repo` scope (classic) or a fine-grained token with *Contents* + *Pull requests* read/write. It is needed because GitHub never fires `on: pull_request` for PRs created with the built-in `GITHUB_TOKEN` (the bump PR would carry no CI checks). Without the PAT the bump PR still opens and waits for a manual merge (close & reopen it to force CI). Tagging and publishing do not need it: they run in the CI run of the merge itself.
 * **Settings → General → Pull Requests → "Allow auto-merge"** enabled, so the PR can merge itself once checks pass.
 
-Without the secret everything still works, just human-gated: the PR opens, you verify, you merge — tagging and publishing then run automatically. A manual tag also publishes, as long as it is `v<VERSION>-<chrome-version>` of the tagged commit; a manual Chrome or `VERSION` bump merged to main is auto-tagged and released the same way.
+Without the secret everything still works, just human-gated: the PR opens, you verify, you merge — tagging and publishing then run automatically. A manual tag also publishes, as long as it is `v<VERSION>` or `v<VERSION>-<chrome-version>` of a commit on `main`; a manual Chrome or `VERSION` bump merged to main is auto-tagged and released the same way.
 
 ## Security considerations
 
