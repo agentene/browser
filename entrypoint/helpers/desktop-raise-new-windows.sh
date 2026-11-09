@@ -5,9 +5,9 @@
 # automation run starts does not cover the one someone is watching. Applies
 # to the windows opened from then on.
 #
-# The entrypoint runs it at start (DESKTOP_RAISE_NEW_WINDOWS), the CDP
-# gateway whenever the console's switch is flipped. The setting itself is
-# /tmp/desktop-raise-new-windows (true/false):
+# The entrypoint runs it at start with the saved setting (settings.sh), the
+# CDP gateway whenever the console's switch is flipped. What the desktop
+# reads is /tmp/desktop-raise-new-windows (true/false):
 #   x11      the screen follower (chromium-follow-screen.py) reads it each
 #            time a window is created or asks to be activated
 #   wayland  labwc cannot read it, so its config comes in one variant per

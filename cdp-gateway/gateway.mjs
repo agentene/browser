@@ -30,7 +30,7 @@
 // Also serves /json/* (with URLs rewritten to the public host:port the
 // client dialed) and a small dashboard under /console/: its state (a
 // snapshot, then changes) comes only over the /console/ws WebSocket, its
-// actions are POST/DELETE /console/api/<name>…; plus the sidebar script
+// actions are POST/DELETE /console/api/<name>… and PATCH /console/api/settings; plus the sidebar script
 // nginx injects into the Selkies page (panel.js; nginx proxies /cdp-console/
 // on the web port to /console/ here).
 //
@@ -48,6 +48,7 @@
 //   idle.mjs            CHROMIUM_IDLE_TIMEOUT
 //   browsers.mjs        main + contexts by name (port, pid, target owner)
 //   desktop.mjs         window in front, bringing a window to the front
+//   settings.mjs        the console's persisted settings (/browser/settings)
 //   console-live.mjs    the console's live state over /console/ws
 //   screencast.mjs      console thumbnails
 //   console-auth.mjs    who may use the console

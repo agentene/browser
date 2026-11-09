@@ -9,7 +9,9 @@ display_x11_start() {
     x11_start_xvfb
     x11_preset_size
     x11_start_compositor
-    x11_set_new_windows
+    # whether new windows come to the front; the screen follower
+    # (chromium.sh) applies it, no window manager runs here
+    settings_apply_desktop
 }
 
 # X clients try the display's ABSTRACT socket (@/tmp/.X11-unix/X<n>) before
@@ -84,15 +86,4 @@ x11_start_compositor() {
     start_service /tmp/picom.log "${DROP[@]}" picom --config /tmp/picom.conf
     sleep 0.5
     kill -0 "${SERVICE_PID}" 2>/dev/null || log "WARNING: picom exited early; popup menus will render without shadows (see /tmp/picom.log)"
-}
-
-# Whether new windows come to the front (DESKTOP_RAISE_NEW_WINDOWS; the CDP
-# console's switch changes it later). No window manager runs here: the
-# screen follower (chromium.sh) applies it, reading the setting the helper
-# writes.
-x11_set_new_windows() {
-    DISPLAY_BACKEND=x11 "${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh" \
-        "${DESKTOP_RAISE_NEW_WINDOWS}" || die "cannot write /tmp/desktop-raise-new-windows"
-    # the CDP gateway flips the switch as the run user
-    give_to_run_user /tmp/desktop-raise-new-windows
 }

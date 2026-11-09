@@ -47,7 +47,7 @@ cdp_gateway_start() {
     local viewer_port=""
     [ "${ENABLE_SELKIES}" = "true" ] && viewer_port="${SELKIES_INTERNAL_PORT}"
 
-    # The console's switch for DESKTOP_RAISE_NEW_WINDOWS: the helper that
+    # The console's "new windows to the front" (settings.sh): the helper that
     # applies it, when the browsers have a desktop to open windows on.
     local raise_switch=""
     [ "${CDP_CONTEXTS_HEADLESS}" = "0" ] && raise_switch="${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh"
@@ -63,6 +63,7 @@ cdp_gateway_start() {
         CDP_MAIN_CHROMIUM_PID="${CHROMIUM_PID}" CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \
         CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT}" CDP_GATEWAY_VIEWER_PORT="${viewer_port}" \
         CDP_GATEWAY_MAIN_FLAGS_FILE="${CHROMIUM_MAIN_FLAGS_FILE}" \
-        CDP_GATEWAY_RAISE_SWITCH="${raise_switch}" "${CHROMIUM_ENV[@]}" \
+        CDP_GATEWAY_RAISE_SWITCH="${raise_switch}" CDP_GATEWAY_SETTINGS_FILE="${SETTINGS_FILE}" \
+        "${CHROMIUM_ENV[@]}" \
         "${DROP[@]}" node /usr/local/lib/cdp-gateway/gateway.mjs
 }
