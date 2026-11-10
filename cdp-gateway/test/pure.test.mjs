@@ -144,6 +144,10 @@ test('cdpOriginDenied: CDP clients and address-bar visits pass, web pages do not
   // an <img> / link / form GET from another site carries no Origin
   assert.equal(cdpOriginDenied(req({ 'sec-fetch-site': 'cross-site' }), none)[0], 403);
   assert.equal(cdpOriginDenied(req({ 'sec-fetch-site': 'same-site' }), none)[0], 403);
+  // a DNS-rebound page's same-origin GET carries no Origin either — only its
+  // Sec-Fetch-Site tells it apart from a client's request (S2)
+  assert.equal(cdpOriginDenied(req({ 'sec-fetch-site': 'same-origin' }), none)[0], 403);
+  assert.equal(cdpOriginDenied(req({ host: 'evil.example:9222', 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors' }), none)[0], 403);
 });
 
 test('cdpOriginDenied: CDP_ALLOW_ORIGINS lists origins, * allows any', () => {
