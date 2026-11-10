@@ -171,6 +171,14 @@ services:
       # SwiftShader software; off = force software; strict = never
       # SwiftShader (WebGL then requires the GPU).
       CHROMIUM_GPU: "${CHROMIUM_GPU:-auto}"
+      # Chromium's own sandbox: auto = on when RUN_USER is set and the
+      # container may create user namespaces (docker's default seccomp
+      # profile forbids it: add security_opt, see the README), --no-sandbox
+      # otherwise; off = always --no-sandbox
+      CHROMIUM_SANDBOX: "${CHROMIUM_SANDBOX:-auto}"
+      # true = the browsers may open file:// URLs; blocked by default so a
+      # CDP client cannot read the container's files through the browser
+      CHROMIUM_ALLOW_FILE_URLS: "${CHROMIUM_ALLOW_FILE_URLS:-false}"
 
       # --- CDP gateway ---
       # Every isolated CDP context (browser.newContext(), playwright-cli
@@ -179,6 +187,11 @@ services:
       # closes. Dashboard: http://host:${CDP_PORT}/console/
       # Most isolated contexts alive at once (each is a whole browser)
       CDP_CONTEXTS_MAX: "${CDP_CONTEXTS_MAX:-4}"
+      # Web page origins that may use the CDP API (comma-separated, * = any),
+      # like chromium's --remote-allow-origins; empty = none: any request
+      # with an Origin header (a page's WebSocket or fetch) is refused.
+      # CDP clients such as Playwright send none.
+      CDP_ALLOW_ORIGINS: "${CDP_ALLOW_ORIGINS:-}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: wayland = labwc, a headless

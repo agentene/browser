@@ -2,7 +2,7 @@
 
 export async function fetchJson(port, pathname, method = 'GET') {
   const res = await fetch(`http://127.0.0.1:${port}${pathname}`, { method });
-  if (!res.ok) throw new Error(`GET ${pathname} on :${port} -> HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`${method} ${pathname} on :${port} -> HTTP ${res.status}`);
   return res.json();
 }
 
@@ -17,12 +17,18 @@ export function rewriteHost(value, port, publicHost) {
   return JSON.parse(JSON.stringify(value).replaceAll(`127.0.0.1:${port}`, publicHost));
 }
 
-export async function pageTargets(port) {
+// Every target chromium lists (pages, iframes, workers, ...); [] when it
+// does not answer.
+export async function allTargets(port) {
   try {
-    return (await fetchJson(port, '/json/list')).filter((t) => t.type === 'page');
+    return await fetchJson(port, '/json/list');
   } catch {
     return [];
   }
+}
+
+export async function pageTargets(port) {
+  return (await allTargets(port)).filter((t) => t.type === 'page');
 }
 
 export const NO_TABS = { tabs: [], current: null };

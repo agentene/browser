@@ -346,8 +346,10 @@
   }
 
   async function call(method, path, body) {
-    const json = body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-    const res = await fetch(path, { method, ...json });
+    // X-CDP-Console: the gateway takes no console write without it, which no
+    // cross-site form can send (console-auth.mjs)
+    const headers = { 'X-CDP-Console': '1', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) };
+    const res = await fetch(path, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   }
 

@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { appId, intEnv } from '../src/config.mjs';
-import { consoleDenied, consoleOriginDenied } from '../src/console-auth.mjs';
+import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
+import { consoleDenied, consoleOriginDenied, passwordDigest } from '../src/console-auth.mjs';
 import { rewriteHost } from '../src/devtools-http.mjs';
 import { connectionsTo } from '../src/idle.mjs';
 import { adjustPrefs, cloned } from '../src/profile.mjs';
@@ -43,30 +44,74 @@ test('rewriteHost swaps the loopback host:port everywhere, nothing else', () => 
 const basic = (user, pw) => `Basic ${Buffer.from(`${user}:${pw}`).toString('base64')}`;
 const req = (headers, method = 'GET') => ({ method, headers });
 
-test('consoleDenied: the CDP port (no web marker) is open', () => {
-  assert.equal(consoleDenied(req({}), 'pw'), null);
-  assert.equal(consoleDenied(req({}, 'DELETE'), 'pw'), null);
+const PW = passwordDigest('pw');
+
+test('passwordDigest: SHA-256 hex', () => {
+  assert.equal(passwordDigest('pw'), '30c952fab122c3f9759f02a6d95c3758b246b4fee239957b2d4fee46e26170c4');
+});
+
+test('consoleDenied: reads on the CDP port (no web marker) need nothing', () => {
+  assert.equal(consoleDenied(req({}), PW), null);
+  assert.equal(consoleDenied(req({}, 'HEAD'), PW), null);
 });
 
 test('consoleDenied: the web port needs the master password', () => {
   const via = { 'x-cdp-console-via': 'web' };
-  assert.equal(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'pw') }), 'pw'), null);
-  assert.equal(consoleDenied(req({ ...via, authorization: basic('anyone', 'pw') }), 'pw'), null);
-  assert.equal(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'p:w') }), 'p:w'), null);
-  assert.deepEqual(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'wrong') }), 'pw'), [401, 'unauthorized']);
-  assert.deepEqual(consoleDenied(req(via), 'pw'), [401, 'unauthorized']);
-  assert.deepEqual(consoleDenied(req({ ...via, authorization: 'Bearer pw' }), 'pw'), [401, 'unauthorized']);
+  assert.equal(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'pw') }), PW), null);
+  assert.equal(consoleDenied(req({ ...via, authorization: basic('anyone', 'pw') }), PW), null);
+  assert.equal(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'p:w') }), passwordDigest('p:w')), null);
+  assert.deepEqual(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'wrong') }), PW), [401, 'unauthorized']);
+  assert.deepEqual(consoleDenied(req(via), PW), [401, 'unauthorized']);
+  assert.deepEqual(consoleDenied(req({ ...via, authorization: 'Bearer pw' }), PW), [401, 'unauthorized']);
   const noColon = `Basic ${Buffer.from('pw').toString('base64')}`;
-  assert.deepEqual(consoleDenied(req({ ...via, authorization: noColon }), 'pw'), [401, 'unauthorized']);
+  assert.deepEqual(consoleDenied(req({ ...via, authorization: noColon }), PW), [401, 'unauthorized']);
+  // upper-case or malformed digests compare as bytes: a malformed one never matches
+  assert.deepEqual(consoleDenied(req({ ...via, authorization: basic('u', 'pw') }), 'zz'), [401, 'unauthorized']);
   // no password configured: no login
   assert.equal(consoleDenied(req(via), ''), null);
 });
 
-test('consoleDenied: writes through the web port need X-CDP-Console', () => {
+test('consoleDenied: every write needs X-CDP-Console, on either port', () => {
   const via = { 'x-cdp-console-via': 'web', authorization: basic('u', 'pw') };
-  assert.deepEqual(consoleDenied(req(via, 'POST'), 'pw'), [403, 'missing X-CDP-Console header']);
-  assert.equal(consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'POST'), 'pw'), null);
-  assert.equal(consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'DELETE'), 'pw'), null);
+  assert.deepEqual(consoleDenied(req(via, 'POST'), PW), [403, 'missing X-CDP-Console header']);
+  assert.equal(consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'POST'), PW), null);
+  assert.equal(consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'DELETE'), PW), null);
+  // the CDP port: no password, but the same CSRF guard (a cross-site form POST)
+  for (const method of ['POST', 'PATCH', 'DELETE']) {
+    assert.deepEqual(consoleDenied(req({}, method), PW), [403, 'missing X-CDP-Console header']);
+    assert.equal(consoleDenied(req({ 'x-cdp-console': '1' }, method), PW), null);
+  }
+});
+
+test('cdpOriginDenied: CDP clients and address-bar visits pass, web pages do not', () => {
+  const none = parseAllowedOrigins('');
+  // Playwright / Puppeteer / curl: no Origin, no Sec-Fetch-*
+  assert.equal(cdpOriginDenied(req({ host: 'h:9222' }), none), null);
+  // Node's own fetch / WebSocket (undici): Sec-Fetch-Mode only
+  assert.equal(cdpOriginDenied(req({ 'sec-fetch-mode': 'cors' }), none), null);
+  assert.equal(cdpOriginDenied(req({ 'sec-fetch-mode': 'websocket' }), none), null);
+  // /json/version typed into a browser's address bar
+  assert.equal(cdpOriginDenied(req({ 'sec-fetch-site': 'none' }), none), null);
+  // a page's WebSocket or fetch (cross-site, same-site, or DNS-rebound same-origin)
+  assert.equal(cdpOriginDenied(req({ origin: 'https://evil.example' }), none)[0], 403);
+  assert.equal(cdpOriginDenied(req({ origin: 'http://h:9222', host: 'h:9222' }), none)[0], 403);
+  assert.equal(cdpOriginDenied(req({ origin: 'null' }), none)[0], 403);
+  // an <img> / link / form GET from another site carries no Origin
+  assert.equal(cdpOriginDenied(req({ 'sec-fetch-site': 'cross-site' }), none)[0], 403);
+  assert.equal(cdpOriginDenied(req({ 'sec-fetch-site': 'same-site' }), none)[0], 403);
+});
+
+test('cdpOriginDenied: CDP_ALLOW_ORIGINS lists origins, * allows any', () => {
+  const allowed = parseAllowedOrigins(' http://tools.example:8000/ , devtools://devtools/ ');
+  assert.deepEqual([...allowed], ['http://tools.example:8000', 'devtools://devtools']);
+  assert.equal(cdpOriginDenied(req({ origin: 'http://tools.example:8000' }), allowed), null);
+  assert.equal(cdpOriginDenied(req({ origin: 'HTTP://TOOLS.example:8000' }), allowed), null);
+  assert.equal(cdpOriginDenied(req({ origin: 'devtools://devtools' }), allowed), null);
+  assert.equal(cdpOriginDenied(req({ origin: 'http://tools.example:8001' }), allowed)[0], 403);
+  assert.equal(cdpOriginDenied(req({ origin: 'https://tools.example:8000' }), allowed)[0], 403);
+  assert.equal(parseAllowedOrigins('http://a, *'), '*');
+  assert.equal(cdpOriginDenied(req({ origin: 'https://anything' }), '*'), null);
+  assert.equal(normalizeOrigin('http://a.example:80'), 'http://a.example');
 });
 
 test('consoleOriginDenied: same host:port or no Origin only', () => {

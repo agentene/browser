@@ -79,6 +79,20 @@
 #                                0 = never
 #   CHROMIUM_EXTRA_ARGS=""      extra chromium flags (word-split), appended
 #                               after the entrypoint's own so they win
+#   CHROMIUM_SANDBOX=auto        chromium's own sandbox (main and context
+#                                browsers): auto = on when the browsers run
+#                                unprivileged (RUN_USER) AND the container
+#                                allows user namespaces (docker's default
+#                                seccomp profile does not — see the README),
+#                                --no-sandbox otherwise; off = always
+#                                --no-sandbox. Chromium cannot sandbox itself
+#                                as root.
+#   CHROMIUM_ALLOW_FILE_URLS=false  true = the browsers may open file:// URLs.
+#                                Blocked by default (managed policy
+#                                URLBlocklist): a CDP client could otherwise
+#                                read whatever the browser's user can,
+#                                /browser/settings/auth.json (the login's
+#                                session secret) and /proc/*/environ included
 #   CDP_INTERNAL_PORT=9221      chromium loopback DevTools port (behind nginx)
 #   (the CDP gateway always sits between nginx and chromium: every isolated
 #   CDP context — Target.createBrowserContext, e.g. a playwright-cli session
@@ -89,6 +103,16 @@
 #   CDP_CONTEXTS_MAX=4           most isolated contexts alive at once (each is
 #                                a whole browser); more get a CDP error
 #   CDP_GATEWAY_INTERNAL_PORT=9220 gateway loopback port (behind nginx)
+#   CDP_ALLOW_ORIGINS=""         web page origins allowed to use the CDP API
+#                                (comma-separated, * = any), like chromium's
+#                                --remote-allow-origins: the gateway refuses
+#                                every CDP request that carries an Origin
+#                                header (a browser page's WebSocket or fetch)
+#                                or comes cross-site, so no site a user has
+#                                open can drive the browser. CDP clients
+#                                (Playwright, Puppeteer, ...) send no Origin;
+#                                e.g. devtools://devtools for a DevTools
+#                                frontend
 #   CHROMIUM_HEADLESS=1          run the browser headless instead (default 0:
 #                                the browser window opens on the desktop
 #                                and is visible live in the Selkies stream)
@@ -265,6 +289,18 @@ config_chromium() {
     # off = always software (the historical behavior); strict = hardware
     # only, never allow SwiftShader.
     CHROMIUM_GPU="${CHROMIUM_GPU:-auto}"
+    # The browsers' own sandbox (chromium.sh): auto = when possible.
+    CHROMIUM_SANDBOX="${CHROMIUM_SANDBOX:-auto}"
+    case "${CHROMIUM_SANDBOX}" in
+        auto|off) : ;;
+        *) die "CHROMIUM_SANDBOX='${CHROMIUM_SANDBOX}' must be auto or off" ;;
+    esac
+    # file:// URLs (a managed policy blocks them unless true; chromium.sh).
+    CHROMIUM_ALLOW_FILE_URLS="${CHROMIUM_ALLOW_FILE_URLS:-false}"
+    case "${CHROMIUM_ALLOW_FILE_URLS}" in
+        true|false) : ;;
+        *) die "CHROMIUM_ALLOW_FILE_URLS='${CHROMIUM_ALLOW_FILE_URLS}' must be true or false" ;;
+    esac
 }
 
 config_cdp_gateway() {
@@ -278,6 +314,13 @@ config_cdp_gateway() {
     # The profile clones (wiped on every start) sit on the /browser mount next
     # to the profile, so they are reflinks where the filesystem supports it.
     CDP_CONTEXTS_DIR="/browser/contexts"
+    # Web page origins that may use the CDP API (the gateway's cdp-origin.mjs
+    # parses the list); empty = none.
+    CDP_ALLOW_ORIGINS="${CDP_ALLOW_ORIGINS:-}"
+    case "${CDP_ALLOW_ORIGINS}" in
+        *[!A-Za-z0-9.:/_*,\ \[\]-]*)
+            die "CDP_ALLOW_ORIGINS='${CDP_ALLOW_ORIGINS}' must be a comma-separated list of origins like https://tools.example:8443 (or *)" ;;
+    esac
     # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
     # needs the web UI to sit in and the gateway to talk to.
     CDP_CONSOLE_PANEL_ACTIVE=false

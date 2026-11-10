@@ -14,7 +14,12 @@
 #
 # Sets for cdp-gateway.sh: CHROME_BIN, CHROMIUM_COMMON_FLAGS,
 # CHROMIUM_TAIL_FLAGS, CHROMIUM_ENV, CHROMIUM_LOCALE_POSIX, CHROMIUM_PID
-# (empty when on demand), CHROMIUM_MAIN_FLAGS_FILE.
+# (empty when on demand), CHROMIUM_MAIN_FLAGS_FILE. Also CHROMIUM_SANDBOXED
+# (true|false, for the log).
+
+# Chrome for Testing's managed policy directory (compiled into the binary);
+# the browsers started by the gateway read it as well.
+CHROMIUM_POLICY_DIR=/etc/opt/chrome_for_testing/policies/managed
 
 chromium_start() {
     CHROME_BIN="${CHROME_BIN:-/opt/chrome-for-testing/chrome}"
@@ -22,6 +27,8 @@ chromium_start() {
 
     chromium_resolve_gpu
     chromium_resolve_headless
+    chromium_resolve_sandbox
+    chromium_write_policy
     chromium_build_flags
     chromium_build_env
     chromium_start_follower
@@ -50,6 +57,51 @@ chromium_resolve_gpu() {
         GPU_HW=false
     fi
     log "chromium: GPU mode=${CHROMIUM_GPU}${GPU_RENDER_NODE:+ (${GPU_RENDER_NODE})}"
+}
+
+# --- sandbox (CHROMIUM_SANDBOX) -------------------------------------------------
+# Chromium sandboxes its renderers in user + PID + network namespaces (plus
+# seccomp-BPF). Inside a container that needs two things: an unprivileged
+# browser (chromium refuses to sandbox itself as root — RUN_USER) and
+# permission to create user namespaces, which docker's default seccomp
+# profile withholds (a profile that allows them, or seccomp=unconfined,
+# grants it). The setuid helper is no way around it: it needs CAP_SYS_ADMIN
+# for the same namespaces (verified: "setuid sandbox: failed to move to new
+# namespaces"), so the image ships none. auto probes, as the run user, what
+# chromium would do first; without it the browsers run with --no-sandbox, as
+# before. Sets CHROMIUM_SANDBOXED.
+chromium_resolve_sandbox() {
+    CHROMIUM_SANDBOXED=false
+    # shellcheck disable=SC2153 # CHROMIUM_SANDBOX is set by config.sh
+    if [ "${CHROMIUM_SANDBOX}" = "off" ]; then
+        log "chromium: sandbox off (CHROMIUM_SANDBOX=off)"
+    elif [ -z "${RUN_USER}" ]; then
+        log "chromium: no sandbox — the browsers run as root (set RUN_USER, e.g. browser, to sandbox them)"
+    elif "${DROP[@]}" unshare --user --map-root-user true 2>/dev/null; then
+        CHROMIUM_SANDBOXED=true
+        log "chromium: sandboxed (user namespaces, as ${RUN_NAME})"
+    else
+        log "chromium: no sandbox — the container may not create user namespaces (docker's default seccomp profile); see the README's CHROMIUM_SANDBOX"
+    fi
+}
+
+# --- managed policy (CHROMIUM_ALLOW_FILE_URLS) ---------------------------------
+# A CDP client drives the browser, and the browser reads files as its user:
+# file:///browser/settings/auth.json (the login's session secret),
+# /proc/<pid>/environ (passwords handed in by environment), the profile ...
+# Blocked by policy unless allowed — it also covers the context browsers,
+# whatever their flags. Written at every start, so the knob can change.
+chromium_write_policy() {
+    local policy="${CHROMIUM_POLICY_DIR}/agentene.json"
+    if [ "${CHROMIUM_ALLOW_FILE_URLS}" = "true" ]; then
+        rm -f "${policy}"
+        log "chromium: file:// URLs allowed (CHROMIUM_ALLOW_FILE_URLS=true)"
+        return 0
+    fi
+    { mkdir -p "${CHROMIUM_POLICY_DIR}" \
+        && printf '{\n  "URLBlocklist": ["file://*"]\n}\n' >"${policy}" \
+        && chmod 644 "${policy}"; } \
+        || die "cannot write the chromium policy ${policy} (read-only root filesystem?); set CHROMIUM_ALLOW_FILE_URLS=true to run without it"
 }
 
 # desktop_ready: true when the display a headed browser needs exists.
@@ -100,7 +152,7 @@ chromium_mode_flags() {
 }
 
 chromium_build_flags() {
-    CHROMIUM_COMMON_FLAGS=(--no-sandbox
+    CHROMIUM_COMMON_FLAGS=(
         # shared memory goes to /tmp instead of /dev/shm, so docker's 64 MB
         # default /dev/shm is enough and no --shm-size / shm_size is needed
         # (verified: 12 heavy tabs, 0 KB used in /dev/shm, no crash)
@@ -114,6 +166,8 @@ chromium_build_flags() {
         # for ~5 s (verified headed and headless, X11 and Wayland), which
         # slows Playwright's rAF-based actionability checks on static pages
         --disable-field-trial-config)
+    # (chromium_resolve_sandbox)
+    [ "${CHROMIUM_SANDBOXED}" = "true" ] || CHROMIUM_COMMON_FLAGS=(--no-sandbox "${CHROMIUM_COMMON_FLAGS[@]}")
 
     CHROMIUM_TAIL_FLAGS=()
     # Hardware GL via the Vulkan/ANGLE backend. Explicit on purpose:

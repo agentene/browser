@@ -11,7 +11,37 @@ import {
 } from './config.mjs';
 import { cloneProfile, preparePrefs } from './profile.mjs';
 import { copyCookies, restoreLocalStorage, snapshotLocalStorage } from './storage-sync.mjs';
-import { freePort, killGroup, log, sleep } from './util.mjs';
+import { freePort, killGroup, log } from './util.mjs';
+
+const STARTUP_TIMEOUT_MS = 15_000;
+
+// Resolves with the browser WebSocket path chromium prints on stderr once its
+// DevTools port is open ("DevTools listening on ws://127.0.0.1:<port>/...").
+function devtoolsAnnounced(proc, port, logPath) {
+  const listening = new RegExp(`DevTools listening on ws://127\\.0\\.0\\.1:${port}(/devtools/browser/\\S+)\\r?\n`); // the whole line: a chunk may end mid-path
+  return new Promise((resolve, reject) => {
+    let tail = '';
+    const onData = (chunk) => {
+      const text = tail + chunk;
+      const m = listening.exec(text);
+      if (m) done(null, m[1]);
+      else tail = text.slice(-512); // a line split across chunks
+    };
+    const onExit = () => done(new Error(`chromium exited during startup, see ${logPath}`));
+    const timer = setTimeout(() => {
+      done(new Error(`chromium did not open its DevTools port ${port} within ${STARTUP_TIMEOUT_MS / 1000}s, see ${logPath}`));
+    }, STARTUP_TIMEOUT_MS);
+    function done(err, wsPath) {
+      clearTimeout(timer);
+      proc.stderr.off('data', onData);
+      proc.off('exit', onExit);
+      if (err) reject(err);
+      else resolve(wsPath);
+    }
+    proc.stderr.on('data', onData);
+    proc.once('exit', onExit);
+  });
+}
 
 class Context {
   constructor(registry, index, client) {
@@ -49,33 +79,24 @@ class Context {
     // the Wayland app_id focus() raises this context's windows by
     if (WAYLAND && !CONTEXTS_HEADLESS) flags.push(`--class=${appId(this.name)}`);
     const logPath = path.join(this.dir, 'chromium.log');
-    const logFile = createWriteStream(logPath);
+    const logFile = createWriteStream(logPath, { flags: 'a' });
     await new Promise((resolve) => logFile.once('open', resolve));
-    this.proc = spawn(CHROME_BIN, flags, {
+    const proc = spawn(CHROME_BIN, flags, {
       detached: true, // own process group: destroy() takes renderers down too
-      stdio: ['ignore', logFile, logFile],
+      stdio: ['ignore', logFile, 'pipe'], // stderr: read below, then into the log
     });
-    this.proc.once('exit', (code, signal) => {
+    this.proc = proc;
+    proc.stderr.pipe(logFile);
+    proc.once('exit', (code, signal) => {
       log(`${this.name}: chromium exited (code=${code} signal=${signal})`);
       this.proc = null;
       this.onExit?.();
     });
-
     // chromium announces the browser endpoint on stderr once it is listening;
-    // finding it in this process's own log also proves nothing else grabbed
-    // the port in between
-    const listening = new RegExp(`DevTools listening on ws://127\\.0\\.0\\.1:${port}(/devtools/browser/\\S+)`);
-    for (let i = 0; i < 150 && !this.port; i++) {
-      if (!this.proc) throw new Error(`chromium exited during startup, see ${logPath}`);
-      const m = listening.exec(await fs.readFile(logPath, 'utf8').catch(() => ''));
-      if (m) {
-        this.port = port;
-        this.browserWsPath = m[1];
-      } else {
-        await sleep(100);
-      }
-    }
-    if (!this.port) throw new Error(`chromium did not open its DevTools port ${port} within 15s, see ${logPath}`);
+    // seeing it from this very process also proves nothing else grabbed the
+    // port in between
+    this.browserWsPath = await devtoolsAnnounced(proc, port, logPath);
+    this.port = port;
 
     const cookies = await copyCookies(this.browserWsUrl());
     const origins = await restoreLocalStorage(this.browserWsUrl(), localStorageSnapshot);
