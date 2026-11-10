@@ -15,6 +15,10 @@ class FakeClient extends EventEmitter {
     this.emit('sent');
   }
 
+  close() {
+    this.terminate();
+  }
+
   terminate() {
     if (this.readyState === WebSocket.CLOSED) return;
     this.readyState = WebSocket.CLOSED;
@@ -43,5 +47,22 @@ test('frames sent before the upstream is open keep their type, both ways', async
   assert.deepEqual(client.sent, [['{"id":1,"result":{}}', false], ['{"id":2,"result":{}}', false]]);
   client.terminate();
   assert.equal(openRelays(), before);
+  server.close();
+});
+
+test('Browser.close on a page WebSocket closes that connection only, never reaching chromium', async () => {
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await once(server, 'listening');
+  const got = [];
+  server.on('connection', (ws) => ws.on('message', (data) => got.push(data.toString())));
+  const client = new FakeClient();
+  relay(client, `ws://127.0.0.1:${server.address().port}/devtools/page/X`);
+  client.emit('message', Buffer.from('{"id":1,"method":"Browser.crash"}'), false);
+  assert.match(client.sent[0][0], /"error".*Browser\.crash refused/);
+  client.emit('message', Buffer.from('{"id":2,"method":"Browser.close"}'), false);
+  assert.deepEqual(client.sent[1], ['{"id":2,"result":{}}', false]);
+  assert.equal(client.readyState, WebSocket.CLOSED);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(got, []);
   server.close();
 });

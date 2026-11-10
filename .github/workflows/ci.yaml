@@ -261,6 +261,30 @@ jobs:
           ws.close();
           console.log('CDP gateway smoke test OK');
           EOF
+          # a client's Browser.close (Puppeteer's browser.close()) ends only its
+          # own connection — on a browser and on a page WebSocket — while the
+          # shared browser (and with it the container) stays up
+          # (CDP_ALLOW_BROWSER_CLOSE=false)
+          docker exec -i gateway-smoke node --input-type=module - <<'EOF'
+          const closeOn = async (url) => {
+            const ws = new WebSocket(url);
+            await new Promise((r) => { ws.onopen = r; });
+            const reply = new Promise((r) => { ws.onmessage = (e) => r(JSON.parse(e.data)); });
+            const closed = new Promise((r) => { ws.onclose = r; });
+            ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+            if (JSON.stringify((await reply).result) !== '{}') throw new Error('Browser.close not answered');
+            await closed;
+          };
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          await closeOn(v.webSocketDebuggerUrl);
+          const page = (await (await fetch('http://127.0.0.1:9222/json/list')).json()).find((t) => t.type === 'page');
+          await closeOn(page.webSocketDebuggerUrl);
+          await new Promise((r) => setTimeout(r, 2000));
+          const after = await (await fetch('http://127.0.0.1:9221/json/version')).json();
+          if (after.webSocketDebuggerUrl !== v.webSocketDebuggerUrl.replace('9222', '9221')) throw new Error('the main browser restarted');
+          console.log('Browser.close smoke test OK');
+          EOF
+          [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' gateway-smoke)" = "true 0" ]
 
       - name: Smoke test — CDP console sidebar on the web UI
         run: |

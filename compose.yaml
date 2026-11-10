@@ -192,6 +192,11 @@ services:
       # with an Origin header (a page's WebSocket or fetch) is refused.
       # CDP clients such as Playwright send none.
       CDP_ALLOW_ORIGINS: "${CDP_ALLOW_ORIGINS:-}"
+      # Whether a CDP client's Browser.close (Puppeteer's browser.close())
+      # closes the shared browser — and with CHROMIUM_AUTOSTART=true the
+      # whole container. false: only that client's connection (and its
+      # isolated context) is closed; Browser.crash* are refused.
+      CDP_ALLOW_BROWSER_CLOSE: "${CDP_ALLOW_BROWSER_CLOSE:-false}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: wayland = labwc, a headless

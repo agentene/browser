@@ -113,6 +113,14 @@
 #                                (Playwright, Puppeteer, ...) send no Origin;
 #                                e.g. devtools://devtools for a DevTools
 #                                frontend
+#   CDP_ALLOW_BROWSER_CLOSE=false whether a CDP client's Browser.close (e.g.
+#                                Puppeteer's browser.close()) reaches the
+#                                shared main browser. false: the gateway
+#                                answers it and ends only that client's
+#                                connection (and its isolated context);
+#                                Browser.crash* are refused. true: passed
+#                                through — the browser exits, and with
+#                                CHROMIUM_AUTOSTART=true the container too
 #   CHROMIUM_HEADLESS=1          run the browser headless instead (default 0:
 #                                the browser window opens on the desktop
 #                                and is visible live in the Selkies stream)
@@ -320,6 +328,13 @@ config_cdp_gateway() {
     case "${CDP_ALLOW_ORIGINS}" in
         *[!A-Za-z0-9.:/_*,\ \[\]-]*)
             die "CDP_ALLOW_ORIGINS='${CDP_ALLOW_ORIGINS}' must be a comma-separated list of origins like https://tools.example:8443 (or *)" ;;
+    esac
+    # Whether a client's Browser.close reaches the shared browser (the
+    # gateway's browser-exit.mjs).
+    CDP_ALLOW_BROWSER_CLOSE="${CDP_ALLOW_BROWSER_CLOSE:-false}"
+    case "${CDP_ALLOW_BROWSER_CLOSE}" in
+        true|false) ;;
+        *) die "CDP_ALLOW_BROWSER_CLOSE='${CDP_ALLOW_BROWSER_CLOSE}' must be true or false" ;;
     esac
     # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
     # needs the web UI to sit in and the gateway to talk to.

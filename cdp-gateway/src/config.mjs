@@ -46,6 +46,9 @@ export const WEB_PASSWORD_SHA256 = (env.CDP_CONSOLE_WEB_PASSWORD_SHA256 || '').t
 // CDP_ALLOW_ORIGINS: the web page origins that may use the CDP API, like
 // chromium's --remote-allow-origins (cdp-origin.mjs); parsed there.
 export const ALLOW_ORIGINS_RAW = env.CDP_ALLOW_ORIGINS || '';
+// CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close / Browser.crash
+// reaches the shared browser (browser-exit.mjs)
+export const ALLOW_BROWSER_CLOSE = env.CDP_ALLOW_BROWSER_CLOSE === 'true';
 
 // The gateway's install dir: dashboard.html, panel.js and the Python helpers
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { browserExitAction, mayEndBrowser } from '../src/browser-exit.mjs';
 import { appId, intEnv } from '../src/config.mjs';
 import { broadcast, MAX_BUFFERED } from '../src/console-live.mjs';
 import { listedAppIds } from '../src/desktop.mjs';
@@ -195,6 +196,17 @@ test('connectionsTo counts established connections on the local port', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('browserExitAction / mayEndBrowser: Browser.close is answered, crashes refused, unless allowed', () => {
+  assert.equal(browserExitAction('Browser.close', false), 'close');
+  assert.equal(browserExitAction('Browser.crash', false), 'refuse');
+  assert.equal(browserExitAction('Browser.crashGpuProcess', false), 'refuse');
+  assert.equal(browserExitAction('Browser.getVersion', false), null);
+  assert.equal(browserExitAction('Browser.close', true), null);
+  assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Browser.close"}'), false), true);
+  assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Page.navigate"}'), false), false);
+  assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Browser.close"}'), true), false);
 });
 
 test('originTabs: one tab per http(s) origin', () => {

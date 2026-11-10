@@ -152,7 +152,7 @@ await browser.close();  // 只关闭 CDP 会话,不关浏览器
 
 * 默认 context 使用**持久化配置目录**,登录态和 cookies 在多次运行间保留。
 * `curl http://localhost:9222/json/version` 是最快速的健康检查。
-* Puppeteer 同样适用:`puppeteer.connect({ browserURL: "http://localhost:9222" })`。
+* Puppeteer 同样适用:`puppeteer.connect({ browserURL: "http://localhost:9222" })`。它的 `browser.close()` 会发送 CDP `Browser.close`,这会关掉所有客户端共享的浏览器(由于容器托管着它,容器也会随之退出);网关会代为应答,只关闭该客户端自己的连接,效果等同于 `browser.disconnect()`。设置 `CDP_ALLOW_BROWSER_CLOSE=true` 则原样转发。
 * 设置了 [CDP API Key](#登录与-cdp-api-key) 之后,通过请求头携带:`chromium.connectOverCDP(url, { headers: { Authorization: "Bearer <key>" } })`(Puppeteer:`connect({ browserURL, headers })`;`examples/connect-playwright.mjs` 读取 `CDP_API_KEY`)。未设置时端点保持开放,与以前一样。
 * 网页无法使用 CDP API:凡是带 `Origin` 请求头的 CDP 请求(某个浏览器里网页发起的 WebSocket 握手或 `fetch`)或跨站请求,网关一律拒绝(403),与 Chromium 的 `--remote-allow-origins` 规则一致。因此无论是否设置了 API Key,你(或容器自己的浏览器)打开的任何网站都无法接管浏览器。Playwright、Puppeteer 等 CDP 客户端不发送 `Origin`,不受影响;在地址栏打开 `/json/version` 也不受影响。需要放行某个页面(例如 DevTools 前端 `devtools://devtools`)时,把它的 origin 写进 `CDP_ALLOW_ORIGINS`。少数非浏览器客户端也会发送 `Origin` —— 例如 Python 的 `websocket-client`,除非传入 `suppress_origin=True` —— 它们会收到 403,与 Chromium 111 起自身的行为一致;网关日志里会写明被拒绝的 origin。
 * `/json/new` 只接受 `PUT`,与 Chromium 本身一致(`GET` 返回 405),因此一个链接或图片无法打开标签页。
@@ -336,6 +336,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDP_CONTEXTS_MAX`          | `4`                         | 同时存在的隔离 context 上限(每个都是完整浏览器);超出后新建 context 返回 CDP 错误                                                        |
 | `CDP_ALLOW_ORIGINS`         | *(空)*                      | 允许使用 CDP API 的网页 origin,逗号分隔(`*` = 任意),与 Chromium 的 `--remote-allow-origins` 相同;空 = 都不允许 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |
+| `CDP_ALLOW_BROWSER_CLOSE`   | `false`                     | 客户端的 `Browser.close`(Puppeteer 的 `browser.close()`)是否关闭共享的浏览器 —— `CHROMIUM_AUTOSTART=true` 时连同整个容器;`false` = 只关闭该客户端自己的连接(及其隔离 context),`Browser.crash*` 一律拒绝 |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | 网关回环端口(nginx 后面)                                                                                                                |
 | `AUTH_INTERNAL_PORT`        | `9219`                      | 内置鉴权服务的回环端口(nginx 后面;`ENABLE_AUTH=true`) |
 

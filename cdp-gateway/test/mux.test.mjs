@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
 import { after, before, test } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
+import { REFUSED_MESSAGE } from '../src/browser-exit.mjs';
 import { INTERNAL_ID_BASE } from '../src/config.mjs';
 import { contexts } from '../src/contexts.mjs';
 import { Mux, openMuxes } from '../src/mux.mjs';
@@ -233,6 +234,22 @@ test('a closed client closes its mux and the upstream connection', async () => {
   await upstreamGone;
   assert.equal(mux.closed, true);
   assert.equal(openMuxes(), before);
+});
+
+test('Browser.close ends only this client\'s connection; the crash commands are refused', async () => {
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', mainUrl);
+  await client.command({ id: 40, method: 'Browser.getVersion', params: {} });
+  assert.deepEqual(await client.command({ id: 41, method: 'Browser.crash', params: {} }),
+    { id: 41, error: { code: -32000, message: `Browser.crash ${REFUSED_MESSAGE}` } });
+  assert.equal(mux.closed, false);
+  const closed = once(client, 'close');
+  // on a browser-target session too
+  assert.deepEqual(await client.command({ id: 42, sessionId: 'S9', method: 'Browser.close', params: {} }),
+    { id: 42, sessionId: 'S9', result: {} });
+  await closed;
+  assert.equal(mux.closed, true);
+  assert.ok(!received.some((m) => m.method === 'Browser.close' || m.method === 'Browser.crash'), 'never reached chromium');
 });
 
 test('a browser-target session keeps its command order while its stand-in opens', async () => {

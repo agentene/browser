@@ -13,10 +13,12 @@
 // disconnecting destroys the context.
 //
 // Default-context traffic is not even parsed: a client message that names no
-// Target.* method goes to the main chromium as it came, and so does a main
-// chromium message while the gateway awaits no reply there itself.
+// Target.* method (nor a Browser.close, browser-exit.mjs) goes to the main
+// chromium as it came, and so does a main chromium message while the gateway
+// awaits no reply there itself.
 
 import WebSocket from 'ws';
+import { REFUSED_MESSAGE, browserExitAction, mayEndBrowser } from './browser-exit.mjs';
 import { openWs } from './cdp-client.mjs';
 import { INTERNAL_ID_BASE, WS_OPTIONS } from './config.mjs';
 import { contexts } from './contexts.mjs';
@@ -152,7 +154,7 @@ export class Mux {
     // nothing to route or rewrite without a context, unless it is one of the
     // Target.* commands the gateway handles (their method name is a JSON
     // string, so it always appears as "Target.)
-    if (!this.context && !this.attaching && !data.includes('"Target.')) {
+    if (!this.context && !this.attaching && !data.includes('"Target.') && !mayEndBrowser(data)) {
       this.toMain(data);
       return;
     }
@@ -164,6 +166,11 @@ export class Mux {
     }
     const { method, params = {}, sessionId } = msg;
 
+    const exit = browserExitAction(method);
+    if (exit) {
+      this.endBrowser(msg, exit);
+      return;
+    }
     if (sessionId) {
       this.fromClientSession(msg);
       return;
@@ -214,6 +221,20 @@ export class Mux {
       return;
     }
     this.sendMain(msg);
+  }
+
+  // A client's Browser.close / Browser.crash (browser-exit.mjs): the shared
+  // browser stays up. A close succeeds and ends this client's connection —
+  // its isolated context with it —, as a closing browser would.
+  endBrowser(msg, action) {
+    if (action === 'refuse') {
+      log(`mux ${this.clientAddr}: ${msg.method} refused`);
+      if (msg.id !== undefined) this.replyError(msg, `${msg.method} ${REFUSED_MESSAGE}`);
+      return;
+    }
+    log(`mux ${this.clientAddr}: Browser.close: closing this client's connection, not the shared browser`);
+    if (msg.id !== undefined) this.reply(msg, {});
+    this.close('client sent Browser.close');
   }
 
   // A command on a session: the context chromium's, the main chromium's, or
