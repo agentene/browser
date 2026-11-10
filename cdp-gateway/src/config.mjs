@@ -24,10 +24,9 @@ export const CHROME_BIN = env.CHROME_BIN;
 export const FLAGS_FILE = env.CDP_GATEWAY_FLAGS_FILE || '/tmp/cdp-gateway-chromium-flags';
 export const MAIN_FLAGS_FILE = env.CDP_GATEWAY_MAIN_FLAGS_FILE || '/tmp/cdp-gateway-main-flags';
 export const MAIN_LOG = '/tmp/chromium.log';
-// CHROMIUM_AUTOSTART=false: the gateway owns the main browser (main-browser.mjs)
-export const MAIN_ON_DEMAND = env.CHROMIUM_AUTOSTART === 'false';
-// the entrypoint-supervised main browser's pid (CHROMIUM_AUTOSTART=true)
-export const MAIN_SUPERVISED_PID = env.CDP_MAIN_CHROMIUM_PID;
+// The gateway always owns the main browser (main-browser.mjs);
+// CHROMIUM_AUTOSTART=true starts it with the gateway, false on demand only.
+export const MAIN_AUTOSTART = env.CHROMIUM_AUTOSTART !== 'false';
 export const IDLE_TIMEOUT_MS = intEnv('CHROMIUM_IDLE_TIMEOUT', 0) * 60_000;
 // Selkies' loopback port: an open connection there is someone watching
 export const VIEWER_PORT = intEnv('CDP_GATEWAY_VIEWER_PORT', 0);

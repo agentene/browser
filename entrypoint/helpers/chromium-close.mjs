@@ -5,8 +5,8 @@
 // cookies and the session to the profile first. A SIGTERM also exits 0 but
 // drops what is still in memory (a cookie set a second before `docker stop`
 // was gone after the restart), so the supervisor runs this before it signals
-// the services (supervisor_cleanup), whoever started the browser — the
-// entrypoint or, with CHROMIUM_AUTOSTART=false, the CDP gateway.
+// the services (supervisor_cleanup), before the CDP gateway (whose child the
+// browser is) gets its signal.
 //
 // Exit status: 0 = closed (or nothing listening), 1 = still running at the
 // deadline or no orderly close possible; the caller's signals take over.

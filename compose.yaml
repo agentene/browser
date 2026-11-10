@@ -165,10 +165,12 @@ services:
       CHROMIUM_LANG: "${CHROMIUM_LANG:-en-US}"
       # Page opened at startup, e.g. "https://example.com"
       CHROMIUM_START_URL: "${CHROMIUM_START_URL:-about:blank}"
-      # false = no main browser at container start: the CDP gateway starts it on the first CDP client or from the CDP
-      # console ("Start browser"), and closing it keeps the container running
+      # The CDP gateway owns the main browser: true = started with the
+      # container; false = only on the first CDP client or from the CDP
+      # console ("Start browser"). Either way closing it (or a crash) keeps
+      # the container running, and the next client starts it again
       CHROMIUM_AUTOSTART: "${CHROMIUM_AUTOSTART:-true}"
-      # With CHROMIUM_AUTOSTART=false: minutes the main browser may sit idle
+      # Minutes the main browser may sit idle
       # (no CDP client, no isolated context, nobody watching the stream)
       # before the gateway closes it again; 0 = never
       CHROMIUM_IDLE_TIMEOUT: "${CHROMIUM_IDLE_TIMEOUT:-0}"
@@ -202,8 +204,8 @@ services:
       # CDP clients such as Playwright send none.
       CDP_ALLOW_ORIGINS: "${CDP_ALLOW_ORIGINS:-}"
       # Whether a CDP client's Browser.close (Puppeteer's browser.close())
-      # closes the shared browser — and with CHROMIUM_AUTOSTART=true the
-      # whole container. false: only that client's connection (and its
+      # closes the shared browser (the container keeps running; the next
+      # client starts it again). false: only that client's connection (and its
       # isolated context) is closed; Browser.crash* are refused.
       CDP_ALLOW_BROWSER_CLOSE: "${CDP_ALLOW_BROWSER_CLOSE:-false}"
 
@@ -233,17 +235,16 @@ services:
       # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
       # or 401 when a login is on (502 = Selkies not up). With
       # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
-      # probed instead — /json/list with CHROMIUM_AUTOSTART=false, which
-      # (unlike /json/version) does not start the main browser; 401 there
-      # means a CDP API key is set (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
+      # probed instead — /json/list, which (unlike /json/version) does not
+      # start a stopped main browser; 401 there means a CDP API key is set
+      # (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
       # exits and docker restarts the container). $$ = evaluated in the
       # container at check time, not by compose.
       test:
         - CMD-SHELL
         - >-
           if [ "$${ENABLE_SELKIES:-true}" = false ]; then
-          if [ "$${CHROMIUM_AUTOSTART:-true}" = false ]; then probe=json/list; else probe=json/version; fi;
-          case "$$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/$$probe")" in
+          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/json/list)" in
           2??|401) true ;; *) false ;; esac;
           else
           case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}/)" in

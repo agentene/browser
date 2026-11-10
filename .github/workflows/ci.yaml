@@ -559,6 +559,37 @@ jobs:
           docker exec ondemand-smoke grep -q 'idle for 1 min' /tmp/cdp-gateway.log
           echo "on-demand main browser smoke test OK"
 
+      - name: Smoke test — main browser closed with CHROMIUM_AUTOSTART=true
+        run: |
+          set -euo pipefail
+          docker run -d --name autostart-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker exec autostart-smoke cat /tmp/cdp-gateway.log || true; docker logs autostart-smoke || true; docker rm -f autostart-smoke >/dev/null' EXIT
+          nchrome() { docker exec autostart-smoke sh -c 'pgrep -c -x chrome || true'; }
+          up() { [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' autostart-smoke)" = "true 0" ]; }
+          # started with the container, by the gateway
+          for i in $(seq 1 60); do
+            docker exec autostart-smoke curl -sf http://127.0.0.1:9221/json/version >/dev/null && break
+            sleep 1
+          done
+          docker exec autostart-smoke curl -sf http://127.0.0.1:9221/json/version >/dev/null
+          # the browser closing itself leaves the container (and the gateway) running
+          docker exec -i autostart-smoke node --input-type=module - <<'EOF'
+          const v = await (await fetch('http://127.0.0.1:9221/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+          EOF
+          for i in $(seq 1 20); do [ "$(nchrome)" = 0 ] && break; sleep 0.5; done
+          [ "$(nchrome)" = 0 ]
+          sleep 2
+          up
+          # the next CDP client starts it again
+          curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser and .webSocketDebuggerUrl' >/dev/null
+          [ "$(nchrome)" != 0 ]
+          up
+          echo "autostart main browser smoke test OK"
+
       - name: Smoke test — Wayland desktop (the default DISPLAY_BACKEND)
         run: |
           set -euo pipefail

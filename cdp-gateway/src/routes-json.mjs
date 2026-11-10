@@ -27,7 +27,7 @@ export async function jsonRoute(req, res, url) {
     return true;
   }
   const host = publicHost(req);
-  // what a CDP client connects with starts an on-demand main browser; mere
+  // what a CDP client connects with starts a stopped main browser; mere
   // listings and target lookups do not
   if (/^\/json\/(version|protocol)\/?$/.test(p) || isNew) await mainBrowser.ensure();
   if (p === '/json/version' || p === '/json/version/') {

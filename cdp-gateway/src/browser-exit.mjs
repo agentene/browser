@@ -1,8 +1,7 @@
 // CDP commands that end the shared browser (CDP_ALLOW_BROWSER_CLOSE).
 //
-// The main browser is shared by every client, every isolated context hangs
-// off it, and with CHROMIUM_AUTOSTART=true the container itself exits with
-// it — so one client's Browser.close (Puppeteer's browser.close() sends it,
+// The main browser is shared by every client and every isolated context hangs
+// off it — so one client's Browser.close (Puppeteer's browser.close() sends it,
 // on a browser or a page WebSocket alike) would take everyone down. Unless
 // CDP_ALLOW_BROWSER_CLOSE=true, the gateway answers it instead: it succeeds
 // and ends that client's own connection (and so its isolated context), which

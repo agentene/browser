@@ -8,14 +8,15 @@
 # Everything the entrypoint adds goes BEFORE CHROMIUM_EXTRA_ARGS, so user
 # flags win (chromium honors the last occurrence of a repeated switch).
 #
-# With CHROMIUM_AUTOSTART=false the main browser is not started here: its
-# command line goes to CHROMIUM_MAIN_FLAGS_FILE and the CDP gateway starts it
-# on demand, as its own child (so closing it does not stop the container).
+# The main browser is not started here: its command line goes to
+# CHROMIUM_MAIN_FLAGS_FILE and the CDP gateway starts it as its own child —
+# right away with CHROMIUM_AUTOSTART=true, on demand with false. The gateway
+# is the supervised service, so the browser closing or crashing never stops
+# the container; the next CDP client or the console starts it again.
 #
 # Sets for cdp-gateway.sh: CHROME_BIN, CHROMIUM_COMMON_FLAGS,
-# CHROMIUM_TAIL_FLAGS, CHROMIUM_ENV, CHROMIUM_LOCALE_POSIX, CHROMIUM_PID
-# (empty when on demand), CHROMIUM_MAIN_FLAGS_FILE. Also CHROMIUM_SANDBOXED
-# (true|false, for the log).
+# CHROMIUM_TAIL_FLAGS, CHROMIUM_ENV, CHROMIUM_LOCALE_POSIX,
+# CHROMIUM_MAIN_FLAGS_FILE. Also CHROMIUM_SANDBOXED (true|false, for the log).
 
 # Chrome for Testing's managed policy directory (compiled into the binary);
 # the browsers started by the gateway read it as well.
@@ -324,33 +325,26 @@ chromium_prepare_profile() {
 # STOP_HOOKS entry (supervisor.sh): close the main browser through CDP before
 # the services get their signals, so the cookies and the session it holds in
 # memory reach the profile (see the helper for why a signal is not enough).
-# Covers an on-demand browser too: the supervisor would SIGKILL the gateway
-# before it finished closing it. Bounded well inside docker stop's 10s.
+# The gateway would close it as well, but the supervisor may SIGKILL the
+# gateway before it finished. Bounded well inside docker stop's 10s.
 chromium_close() {
     timeout 8 node "${ENTRYPOINT_HELPERS}/chromium-close.mjs" "${CDP_INTERNAL_PORT}" 6000 \
         || log "WARNING: chromium did not close in time; stopping it with a signal (recent cookies may be lost)"
 }
 
+# Hands the main browser's command line to the CDP gateway, which launches it
+# (cdp-gateway.sh).
 chromium_launch() {
-    CHROMIUM_PID=""
     CHROMIUM_MAIN_FLAGS_FILE=/tmp/cdp-gateway-main-flags
     STOP_HOOKS+=(chromium_close)
+    # NUL-separated, read by the gateway; the log file is pre-created for
+    # the (possibly dropped) gateway, which appends a run per start
+    printf '%s\0' "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
+    : >/tmp/chromium.log
+    give_to_run_user /tmp/chromium.log
     if [ "${CHROMIUM_AUTOSTART}" = "false" ]; then
-        # NUL-separated, read by the gateway; the log file is pre-created for
-        # the (possibly dropped) gateway, which appends a run per start
-        printf '%s\0' "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
-        : >/tmp/chromium.log
-        give_to_run_user /tmp/chromium.log
         log "chromium: on demand (CHROMIUM_AUTOSTART=false) — the CDP gateway starts it on the first CDP client or from the console"
-        return 0
+    else
+        log "chromium: started by the CDP gateway (headless=${CHROMIUM_HEADLESS}) with CDP on 127.0.0.1:${CDP_INTERNAL_PORT}"
     fi
-    log "starting chromium (headless=${CHROMIUM_HEADLESS}) with CDP on 127.0.0.1:${CDP_INTERNAL_PORT}"
-    start_service /tmp/chromium.log \
-        env "${CHROMIUM_ENV[@]}" "${DROP[@]}" "${CHROME_BIN}" "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}"
-    # shellcheck disable=SC2034 # read by cdp-gateway.sh
-    CHROMIUM_PID="${SERVICE_PID}"
-
-    # Wait for the loopback DevTools endpoint before forwarding.
-    wait_until 100 0.2 curl -fsS "http://127.0.0.1:${CDP_INTERNAL_PORT}/json/version" >/dev/null 2>&1 \
-        || log "WARNING: chromium DevTools endpoint not up yet; nginx forwards anyway (see /tmp/chromium.log)"
 }

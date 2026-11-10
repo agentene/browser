@@ -1,4 +1,4 @@
-// CHROMIUM_IDLE_TIMEOUT: close an on-demand main browser nobody has used for
+// CHROMIUM_IDLE_TIMEOUT: close the main browser nobody has used for
 // IDLE_TIMEOUT_MS. In use: a CDP client connected (browser or page
 // WebSocket), an isolated context alive or starting, a Selkies viewer
 // connected.
@@ -38,7 +38,7 @@ function busy() {
 }
 
 export function watchIdle() {
-  if (!mainBrowser.onDemand || !IDLE_TIMEOUT_MS) return;
+  if (!IDLE_TIMEOUT_MS) return;
   setInterval(() => {
     if (!mainBrowser.running) return;
     if (busy()) {

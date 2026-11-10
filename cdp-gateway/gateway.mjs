@@ -22,10 +22,11 @@
 //   * Target.disposeBrowserContext(alias) or the client disconnecting
 //     destroys the context: process killed, cloned profile deleted.
 //
-// With CHROMIUM_AUTOSTART=false the gateway also owns the main browser:
-// nothing runs until the first CDP client or the console's "Start", and the
-// browser may exit (window closed, "Stop") without taking the container
-// down. CHROMIUM_IDLE_TIMEOUT closes it again after that many idle minutes.
+// The gateway also owns the main browser: started with the gateway
+// (CHROMIUM_AUTOSTART=true) or only by the first CDP client or the console's
+// "Start" (false), and it may exit (window closed, "Stop", a crash) without
+// taking the container down — the next client starts it again.
+// CHROMIUM_IDLE_TIMEOUT closes it after that many idle minutes.
 //
 // Also serves /json/* (with URLs rewritten to the public host:port the
 // client dialed) and a small dashboard under /console/: its state (a
@@ -47,7 +48,7 @@
 //   contexts.mjs        isolated contexts: a chromium each, and their registry
 //   profile.mjs         profile cloning and the clone's Preferences
 //   storage-sync.mjs    live cookies + localStorage from main into a context
-//   main-browser.mjs    the main browser (supervised, or on demand)
+//   main-browser.mjs    the main browser (at start, or on demand)
 //   idle.mjs            CHROMIUM_IDLE_TIMEOUT
 //   browsers.mjs        main + contexts by name (port, pid, target owner)
 //   desktop.mjs         window in front, bringing a window to the front

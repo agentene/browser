@@ -10,10 +10,12 @@
 #                       menu shadows visible)
 #   2. PulseAudio      audio server (Selkies captures it via pcmflux)
 #   3. Selkies         HTML5 remote desktop on 127.0.0.1:${SELKIES_INTERNAL_PORT:-8081}
-#   4. Chromium        Chrome for Testing with a CDP endpoint on loopback
+#   4. Chromium        Chrome for Testing with a CDP endpoint on loopback,
+#                       launched by the CDP gateway as its own child (at
+#                       start, or on demand with CHROMIUM_AUTOSTART=false)
 #      CDP gateway     the gateway in front of it (always on with the CDP
-#                       endpoint); with CHROMIUM_AUTOSTART=false the gateway starts the
-#                       main browser on demand instead, as its own child
+#                       endpoint); the supervised service — the browser may
+#                       exit and be started again without the container
 #      auth service    the built-in login + CDP API key nginx checks every
 #                       request with (ENABLE_AUTH=true)
 #   5. nginx           the public front door (web UI over HTTP/HTTPS, the CDP

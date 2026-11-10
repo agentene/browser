@@ -1,11 +1,12 @@
 // The main browser.
 //
-// By default (CHROMIUM_AUTOSTART=true) the entrypoint supervises the main
-// chromium: it is always up, and its exit restarts the container. With
-// CHROMIUM_AUTOSTART=false it is this process's child instead, started on
-// demand — by the first CDP client (ensure() in http.mjs / upgrade.mjs) or
-// the console — from the command line the entrypoint left in
-// MAIN_FLAGS_FILE; when it exits the gateway just marks it stopped.
+// Always this process's child, launched from the command line the entrypoint
+// left in MAIN_FLAGS_FILE: right when the gateway starts with
+// CHROMIUM_AUTOSTART=true (server.mjs), otherwise on demand only. Either way
+// a stopped one is started again by the next CDP client (ensure() in
+// routes-json.mjs / upgrade.mjs) or the console. When it exits — window
+// closed, Stop, a crash, a client's Browser.close — the gateway just marks it
+// stopped: the gateway, not the browser, is what the container supervises.
 
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
@@ -14,16 +15,14 @@ import path from 'node:path';
 import { CdpClient } from './cdp-client.mjs';
 import { notifyChange } from './changes.mjs';
 import {
-  CHROME_BIN, MAIN_FLAGS_FILE, MAIN_LOG, MAIN_ON_DEMAND, MAIN_PORT, MAIN_PROFILE, MAIN_SUPERVISED_PID,
-  readFlags,
+  CHROME_BIN, MAIN_FLAGS_FILE, MAIN_LOG, MAIN_PORT, MAIN_PROFILE, readFlags,
 } from './config.mjs';
 import { devtoolsUp, fetchJson } from './devtools-http.mjs';
 import { killGroup, log, sleep } from './util.mjs';
 
 class MainBrowser {
   constructor() {
-    this.onDemand = MAIN_ON_DEMAND;
-    this.state = this.onDemand ? 'stopped' : 'running'; // | 'starting'
+    this.state = 'stopped'; // | 'starting' | 'running'
     this.proc = null;
     this.starting = null; // the launch in progress, shared by concurrent callers
     this.lastActive = Date.now(); // last time idle.mjs saw it in use
@@ -34,7 +33,7 @@ class MainBrowser {
   }
 
   pid() {
-    return this.onDemand ? this.proc?.pid : MAIN_SUPERVISED_PID;
+    return this.proc?.pid;
   }
 
   // Resolves once the main browser's DevTools endpoint answers.

@@ -199,7 +199,10 @@ node update-chrome-node.mjs --node 22        # force the Node major
   browsers get the main browser's flags via `chromium_mode_flags` +
   `CHROMIUM_COMMON_FLAGS`/`CHROMIUM_TAIL_FLAGS` — new chromium flags belong
   in one of those so context browsers inherit them. The gateway is in
-  `pids`; context chromiums are its children and are cleaned up by it.
+  `pids`; the main chromium (started at once with `CHROMIUM_AUTOSTART=true`,
+  on demand with `false`) and the context chromiums are its children and are
+  cleaned up by it — the browser exiting never stops the container, the
+  next client starts it again.
 * **Two display backends (`DISPLAY_BACKEND=wayland|x11`, default wayland).**
   `wayland` replaces Xvfb/picom with labwc on the wlroots *headless*
   backend, which Selkies captures as an external compositor

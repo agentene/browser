@@ -2,7 +2,7 @@
 // Selkies page (nginx proxies /cdp-console/ on the web port here), and the
 // console's actions, POST/DELETE /console/api/<name>… (its state comes over
 // the /console/ws WebSocket, console-live.mjs):
-//   POST   /console/api/main/start|stop     on-demand main browser
+//   POST   /console/api/main/start|stop     the main browser
 //   POST   /console/api/<name>/focus[/<id>] bring a browser (tab) to the front
 //   DELETE /console/api/<context>           destroy a context (and end the
 //                                           CDP connection that owns it)
@@ -63,7 +63,6 @@ export async function consoleRoute(req, res, url) {
   const [, name, action, targetId] = a;
   if ((action === 'start' || action === 'stop') && req.method === 'POST' && !targetId) {
     if (name !== 'main') send(res, 404, { error: 'only the main browser can be started or stopped' });
-    else if (!mainBrowser.onDemand) send(res, 409, { error: 'the main browser is supervised by the container (CHROMIUM_AUTOSTART=true)' });
     else {
       if (action === 'start') await mainBrowser.ensure();
       else await mainBrowser.stop();

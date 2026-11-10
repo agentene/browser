@@ -28,7 +28,7 @@ export function cookieKey(c) {
 // The cookie database is copied while the main browser runs, so it may lag
 // behind the in-memory jar by a flush interval; overlay the live cookies
 // (HttpOnly included) from the main browser to close that gap. Clients
-// reach contexts through the main browser, which starts an on-demand one; if
+// reach contexts through the main browser, which starts a stopped one; if
 // it was stopped in between, its orderly exit left them all on disk.
 export async function copyCookies(contextWsUrl) {
   if (!mainBrowser.running) return 0;

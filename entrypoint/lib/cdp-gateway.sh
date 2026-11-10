@@ -7,9 +7,10 @@
 # the main profile (logins included), destroyed again when the context is
 # disposed or the client disconnects. Details in
 # /usr/local/lib/cdp-gateway/gateway.mjs and the README ("CDP gateway").
-# Needs chromium.sh to have run first (flags, env, main browser pid). With
-# CHROMIUM_AUTOSTART=false the gateway also owns the main browser: it starts
-# it on demand from CHROMIUM_MAIN_FLAGS_FILE and outlives it.
+# Needs chromium.sh to have run first (flags, env). The gateway also owns the
+# main browser: it starts it from CHROMIUM_MAIN_FLAGS_FILE — right away with
+# CHROMIUM_AUTOSTART=true, on demand with false — and outlives it, so the
+# browser closing or crashing does not stop the container.
 
 cdp_gateway_start() {
     # Isolated contexts live until their client leaves, so nothing survives a
@@ -66,11 +67,18 @@ cdp_gateway_start() {
         CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX}" CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
         CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD_HASH="${console_password_hash}" \
-        CDP_MAIN_CHROMIUM_PID="${CHROMIUM_PID}" CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \
+        CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \
         CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT}" CDP_GATEWAY_VIEWER_PORT="${viewer_port}" \
         CDP_GATEWAY_MAIN_FLAGS_FILE="${CHROMIUM_MAIN_FLAGS_FILE}" \
         CDP_GATEWAY_RAISE_SWITCH="${raise_switch}" CDP_GATEWAY_SETTINGS_FILE="${SETTINGS_FILE}" \
         CDP_ALLOW_ORIGINS="${CDP_ALLOW_ORIGINS}" CDP_ALLOW_BROWSER_CLOSE="${CDP_ALLOW_BROWSER_CLOSE}" \
         "${CHROMIUM_ENV[@]}" \
         "${DROP[@]}" node /usr/local/lib/cdp-gateway/gateway.mjs
+
+    # CHROMIUM_AUTOSTART=true: wait for the main browser the gateway launches
+    # before nginx opens the front door.
+    if [ "${CHROMIUM_AUTOSTART}" != "false" ]; then
+        wait_until 100 0.2 curl -fsS "http://127.0.0.1:${CDP_INTERNAL_PORT}/json/version" >/dev/null 2>&1 \
+            || log "WARNING: chromium DevTools endpoint not up yet; nginx forwards anyway (see /tmp/chromium.log, /tmp/cdp-gateway.log)"
+    fi
 }

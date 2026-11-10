@@ -10,7 +10,7 @@
 //   {t:'current', name, id}                another tab is in front
 //   {t:'thumb', name, id, jpeg}            a new thumbnail of the current tab (base64)
 // Ticks read /json/list over loopback, only while a console is connected,
-// and never start an on-demand main browser. Thumbnails come from a
+// and never start a stopped main browser. Thumbnails come from a
 // screencast of each browser's current tab (screencast.mjs).
 
 import WebSocket from 'ws';
@@ -77,7 +77,7 @@ function consolePoke() {
 onChange(consolePoke);
 
 function browserFields(name, front) {
-  if (name === 'main') return { main: true, state: mainBrowser.state, onDemand: mainBrowser.onDemand, front };
+  if (name === 'main') return { main: true, state: mainBrowser.state, front };
   const s = contexts.get(name);
   return { color: s.color, client: s.client, createdAt: s.createdAt, pid: s.proc?.pid ?? null, front };
 }

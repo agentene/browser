@@ -57,7 +57,7 @@ async function resolveTarget(req, p) {
 
 export async function handleUpgrade(req, socket, head) {
   // node's HTTP server drops its own error listener from an upgraded socket,
-  // and resolving the target may take a while (an on-demand main browser
+  // and resolving the target may take a while (a stopped main browser
   // starts): a connection reset meanwhile would be an unhandled 'error'
   // event, which takes the whole gateway (and so the container) down
   const onError = () => socket.destroy();

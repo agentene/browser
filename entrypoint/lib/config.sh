@@ -71,16 +71,16 @@
 #                               fingerprinting): hardware GL only, WebGL
 #                               unavailable without a GPU
 #   CHROMIUM_START_URL=about:blank  page the main browser opens at startup
-#   CHROMIUM_AUTOSTART=true      false = do not start the main browser with
-#                                the container (the CDP gateway then owns
-#                                it): an idle container runs
-#                                no chromium at all. The gateway starts it on
-#                                the first CDP client (/json/version, a
+#   CHROMIUM_AUTOSTART=true      the CDP gateway owns the main browser and
+#                                starts it with the container; false = only
+#                                on the first CDP client (/json/version, a
 #                                browser WebSocket) or from the CDP console
-#                                ("Start"); closing it leaves the container
-#                                running instead of restarting it
-#   CHROMIUM_IDLE_TIMEOUT=0      (CHROMIUM_AUTOSTART=false only) minutes the
-#                                on-demand main browser may sit idle before
+#                                ("Start"), so an idle container runs no
+#                                chromium at all. Either way closing (or a
+#                                crash of) the main browser leaves the
+#                                container running; the next client or
+#                                "Start" brings it back
+#   CHROMIUM_IDLE_TIMEOUT=0      minutes the main browser may sit idle before
 #                                the gateway closes it (orderly, like Stop);
 #                                idle = no CDP client connected, no isolated
 #                                context, nobody watching the Selkies stream.
@@ -127,8 +127,8 @@
 #                                answers it and ends only that client's
 #                                connection (and its isolated context);
 #                                Browser.crash* are refused. true: passed
-#                                through — the browser exits, and with
-#                                CHROMIUM_AUTOSTART=true the container too
+#                                through — the browser exits (the container
+#                                keeps running; the next client restarts it)
 #   CHROMIUM_HEADLESS=1          run the browser headless instead (default 0:
 #                                the browser window opens on the desktop
 #                                and is visible live in the Selkies stream)
@@ -292,21 +292,18 @@ config_chromium() {
     CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT:-9221}" # chromium loopback DevTools port
     CHROMIUM_HEADLESS="${CHROMIUM_HEADLESS:-0}"
     CHROMIUM_START_URL="${CHROMIUM_START_URL:-about:blank}"
-    # Main browser at container start (true) or on demand through the CDP
-    # gateway (false).
+    # The CDP gateway starts the main browser at container start (true) or
+    # on demand only (false).
     CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART:-true}"
     case "${CHROMIUM_AUTOSTART}" in
         true|false) : ;;
         *) die "CHROMIUM_AUTOSTART='${CHROMIUM_AUTOSTART}' must be true or false" ;;
     esac
-    # Minutes until the gateway closes an idle on-demand main browser; 0 = never.
+    # Minutes until the gateway closes an idle main browser; 0 = never.
     CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT:-0}"
     case "${CHROMIUM_IDLE_TIMEOUT}" in
         ''|*[!0-9]*) die "CHROMIUM_IDLE_TIMEOUT='${CHROMIUM_IDLE_TIMEOUT}' must be a number of minutes (0 = never)" ;;
     esac
-    if [ "${CHROMIUM_IDLE_TIMEOUT}" -gt 0 ] && [ "${CHROMIUM_AUTOSTART}" != "false" ]; then
-        die "CHROMIUM_IDLE_TIMEOUT needs CHROMIUM_AUTOSTART=false (only an on-demand main browser can be closed and started again)"
-    fi
     # The persisted profile, on the /browser mount.
     CHROMIUM_USER_DATA_DIR="/browser/user-data"
     # Browser UI locale + Accept-Language; en-US by default (env override: any
