@@ -27,10 +27,13 @@
 //                         to keep alive}, 401 without a session
 //   PUT  /api/credentials {currentPassword, username, password}; both empty
 //                         = login off
-//   PUT  /api/apikey      {apiKey}; empty = no API key
-// With the login off (skipped) anyone who reaches the pages may use them, so
-// once an API key is set it is what proves ownership: changing the key or the
-// login then needs the current key too ({currentApiKey}).
+//   PUT  /api/apikey      {currentPassword, apiKey}; empty = no API key
+// A session is not enough for either change: with the login on, both need
+// the current password ({currentPassword}), so a stolen or forged session
+// cookie cannot lock the owner out by setting a key of its own. With the
+// login off (skipped) anyone who reaches the pages may use them, so once an
+// API key is set it is what proves ownership: changing the key or the login
+// then needs the current key instead ({currentApiKey}).
 // The state lives in AUTH_FILE (store.mjs).
 
 import fs from 'node:fs';
@@ -230,7 +233,8 @@ async function api(req, res, name) {
     return send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, store.newSession()) });
   }
   if (name === 'apikey' && req.method === 'PUT') {
-    await requireApiKeyWhileOpen(req, body.currentApiKey);
+    if (store.loginOn) await requirePassword(req, body.currentPassword);
+    else await requireApiKeyWhileOpen(req, body.currentApiKey);
     store.setApiKey(body.apiKey ?? '');
     return send(res, 200, { ok: true });
   }

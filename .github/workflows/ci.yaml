@@ -365,9 +365,13 @@ jobs:
           # login API
           [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-pass"}' $W/__auth/api/login)" = 401 ]
           [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $C/__auth/api/login)" = 200 ]
-          # API key: only with a session; then the CDP API needs it, in either header
-          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey)" = 401 ]
-          json -b "$J" -X PUT -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey | jq -e '.ok' >/dev/null
+          # API key: only with a session and the current password (a session
+          # alone — a stolen cookie — cannot lock the owner out); then the CDP
+          # API needs it, in either header
+          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123","currentPassword":"password1"}' $W/__auth/api/apikey)" = 401 ]
+          [ "$(code -b "$J" -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey)" = 403 ]
+          [ "$(code -b "$J" -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123","currentPassword":"wrong-pass"}' $W/__auth/api/apikey)" = 403 ]
+          json -b "$J" -X PUT -d '{"apiKey":"ci-key-0123","currentPassword":"password1"}' $W/__auth/api/apikey | jq -e '.ok' >/dev/null
           [ "$(code $C/json/version)" = 401 ] && [ "$(code -b "$J" $C/json/version)" = 401 ]
           [ "$(code -H 'Authorization: Bearer ci-key-0123' $C/json/version)" = 200 ]
           [ "$(code -H 'X-API-Key: ci-key-0123' $C/json/list)" = 200 ]

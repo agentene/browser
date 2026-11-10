@@ -87,12 +87,20 @@ test('setup needs the setup code; with the login skipped, the API key guards cha
   assert.equal((await fetch(`${base}/check/cdp`, { headers: { 'X-API-Key': 'second-key-123' } })).status, 204);
   const login = await call('PUT', 'credentials', { username: 'admin', password: 'password1', currentApiKey: 'second-key-123' });
   assert.equal(login.status, 200);
-  // with the login on, the session is what counts
+  // with the login on, a session AND the current password are needed: a
+  // session alone (a stolen or forged cookie) cannot set a key of its own
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const withSession = (method, name, body) => fetch(`${base}/api/${name}`, {
     method, headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify(body),
   });
-  assert.equal((await call('PUT', 'apikey', { apiKey: '' })).status, 401);
-  assert.equal((await withSession('PUT', 'apikey', { apiKey: '' })).status, 200);
+  assert.equal((await call('PUT', 'apikey', { apiKey: '', currentPassword: 'password1' })).status, 401, 'no session');
+  assert.equal((await withSession('PUT', 'apikey', { apiKey: 'mallory-key-123' })).status, 403, 'no password');
+  assert.equal((await withSession('PUT', 'apikey', { apiKey: 'mallory-key-123', currentPassword: 'wrong-pass' })).status, 403, 'wrong password');
+  assert.equal((await withSession('PUT', 'apikey', { apiKey: 'mallory-key-123', currentApiKey: 'second-key-123' })).status, 403, 'the key does not stand in for the password');
+  assert.equal((await fetch(`${base}/check/cdp`, { headers: { 'X-API-Key': 'second-key-123' } })).status, 204, 'the key is unchanged');
+  assert.equal((await withSession('PUT', 'apikey', { apiKey: '', currentPassword: 'password1' })).status, 200);
   assert.equal((await fetch(`${base}/check/cdp`)).status, 204, 'no key: the CDP API is open');
+  // the same for the login itself (turning it off included)
+  assert.equal((await withSession('PUT', 'credentials', { username: '', password: '' })).status, 403);
+  assert.equal((await withSession('PUT', 'credentials', { username: 'mallory', password: 'password2' })).status, 403);
 });

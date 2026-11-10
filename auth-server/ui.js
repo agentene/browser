@@ -35,6 +35,7 @@
       loginLead: 'The administrator login of the remote desktop and the CDP console. Saving signs every other session out.',
       loginLeadOff: 'The web UI has no login. Set one up to protect the remote desktop and the CDP console.',
       currentPassword: 'Current password',
+      currentPasswordKeyHint: 'Changing the API key needs your current password.',
       currentApiKey: 'Current CDP API key',
       currentApiKeyHint: 'Without a login, the API key is what shows that the browser is yours: changing the key or the login needs it.',
       username: 'User name',
@@ -72,6 +73,7 @@
       loginLead: '远程桌面和 CDP 控制台的管理员账号。保存后，其他所有会话都需要重新登录。',
       loginLeadOff: 'Web 界面当前未启用登录。设置账号以保护远程桌面和 CDP 控制台。',
       currentPassword: '当前密码',
+      currentPasswordKeyHint: '修改 API Key 需要输入当前密码。',
       currentApiKey: '当前 CDP API Key',
       currentApiKeyHint: '未启用登录时，API Key 是证明浏览器归属的凭据：修改 API Key 或登录都需要它。',
       username: '用户名',
@@ -252,7 +254,8 @@
   }
 
   // With the login off and an API key set, a change needs the current key
-  // (the auth service's api/credentials and api/apikey).
+  // (the auth service's api/credentials and api/apikey); with the login on,
+  // the current password.
   const needsCurrentKey = () => !state?.login && !!state?.apiKey;
 
   function currentKeyFields() {
@@ -318,6 +321,10 @@
       return [
         el('h3', {}, t('apiKeyTitle')),
         el('p', {}, isSet ? t('apiKeyLeadOn') : t('apiKeyLeadOff')),
+        ...(state?.login ? [
+          field(t('currentPassword'), { name: 'current', type: 'password', autocomplete: 'current-password', required: true }),
+          el('p', {}, t('currentPasswordKeyHint')),
+        ] : []),
         ...currentKeyFields(),
         el('div', { class: 'aa-keyrow' }, input,
           el('button', { type: 'button', onclick: () => { input.value = randomKey(); input.select(); } }, t('generate')),
@@ -329,7 +336,7 @@
       const apiKey = input.value.trim();
       if (!apiKey && !isSet) return true;
       if (!apiKey && !confirm(t('removeConfirm'))) return false;
-      await call('PUT', 'apikey', { apiKey, currentApiKey: currentKey(form) });
+      await call('PUT', 'apikey', { apiKey, currentPassword: String(new FormData(form).get('current') || ''), currentApiKey: currentKey(form) });
       return true;
     });
   }
