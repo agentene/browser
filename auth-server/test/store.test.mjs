@@ -6,7 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { Limiter } from '../src/limiter.mjs';
-import { AuthStore, apiKeyProblem, passwordProblem, usernameProblem } from '../src/store.mjs';
+import {
+  AuthStore, SESSION_RENEW_AFTER_MS, SESSION_TTL_MS, apiKeyProblem, passwordProblem, usernameProblem,
+} from '../src/store.mjs';
 
 const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'auth-')), 'settings', 'auth.json');
 const error = async (fn) => {
@@ -50,6 +52,16 @@ test('setup with a login, sessions, password change, login off', async () => {
   const session = store.newSession();
   assert.equal(store.sessionUser(session), 'admin');
   assert.match(store.cookieName, /^agentene_session_[A-Za-z0-9]+$/);
+
+  // renewal: a fresh token is due SESSION_RENEW_AFTER_MS after the issue
+  const now = Date.now();
+  const s = store.session(session, now);
+  assert.equal(s.u, 'admin');
+  assert.ok(Math.abs(s.exp - now - SESSION_TTL_MS) < 5000);
+  assert.ok(Math.abs(AuthStore.renewIn(s, now) - SESSION_RENEW_AFTER_MS) < 5000);
+  assert.ok(AuthStore.renewIn(s, now + SESSION_RENEW_AFTER_MS + 5000) <= 0);
+  assert.equal(store.session(session, now + SESSION_TTL_MS + 5000), null); // expired unrenewed
+  assert.equal(store.session('nonsense'), null);
 
   // a new login ends every session
   await store.setLogin('boss', 'password2');

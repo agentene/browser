@@ -268,7 +268,7 @@ COPY cdp-gateway/src/ /usr/local/lib/cdp-gateway/src/
 # dependency-free Node service nginx checks every web UI / console request
 # and every CDP request with; it also serves the setup/login forms and the
 # console's login + API key controls (ui.js).
-COPY auth-server/server.mjs auth-server/page.html auth-server/ui.js /usr/local/lib/auth-server/
+COPY auth-server/server.mjs auth-server/page.html auth-server/ui.js auth-server/keepalive.js /usr/local/lib/auth-server/
 COPY auth-server/src/ /usr/local/lib/auth-server/src/
 
 # The supervisor: a thin docker-entrypoint.sh that sources its stage modules

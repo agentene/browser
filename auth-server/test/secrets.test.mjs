@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   apiKeyFrom, hashApiKey, hashPassword, parseCookies, safeEqual, signSession, verifyApiKey, verifyPassword,
-  verifySession,
+  readSession, verifySession,
 } from '../src/secrets.mjs';
 
 test('passwords: scrypt, salted, verified', async () => {
@@ -31,6 +31,8 @@ test('sessions: signed, bound to the secret, expire', () => {
   const now = 1_000_000;
   const token = signSession('s1', 'admin', 1000, now);
   assert.equal(verifySession('s1', token, now + 999), 'admin');
+  assert.deepEqual(readSession('s1', token, now), { u: 'admin', exp: now + 1000 });
+  assert.equal(readSession('s1', token, now + 1000), null);
   assert.equal(verifySession('s1', token, now + 1000), null); // expired
   assert.equal(verifySession('s2', token, now), null); // other secret
   const [payload, mac] = token.split('.');

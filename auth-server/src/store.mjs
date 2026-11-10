@@ -19,10 +19,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  hashApiKey, hashPassword, randomToken, signSession, verifyApiKey, verifyPassword, verifySession,
+  hashApiKey, hashPassword, randomToken, readSession, signSession, verifyApiKey, verifyPassword,
 } from './secrets.mjs';
 
+// A session lasts SESSION_TTL_MS from its token's issue; a token older than
+// SESSION_RENEW_AFTER_MS is replaced on the next renewal (POST api/renew,
+// which keepalive.js sends from every open web UI / console page). So a
+// session ends 6-7 days after its last open page, not 7 days after login.
 export const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
+export const SESSION_RENEW_AFTER_MS = 24 * 3600 * 1000;
 const RELOAD_EVERY_MS = 1000;
 
 export class InputError extends Error {
@@ -140,11 +145,21 @@ export class AuthStore {
   // keep their sessions apart
   get cookieName() { return `agentene_session_${this.data.instance || 'new'}`; }
 
+  // A session token's {u: user, exp}, or null.
+  session(token, now = Date.now()) {
+    if (!this.loginOn) return null;
+    const s = readSession(this.data.session, token, now);
+    return s?.u === this.data.web.username ? s : null;
+  }
+
   // The user a session token stands for, or null.
   sessionUser(token) {
-    if (!this.loginOn) return null;
-    const user = verifySession(this.data.session, token);
-    return user === this.data.web.username ? user : null;
+    return this.session(token)?.u ?? null;
+  }
+
+  // ms until a session (from session()) is due for a fresh token; <= 0 = due
+  static renewIn(session, now = Date.now()) {
+    return session.exp - SESSION_TTL_MS + SESSION_RENEW_AFTER_MS - now;
   }
 
   newSession() {

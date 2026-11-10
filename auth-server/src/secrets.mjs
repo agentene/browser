@@ -6,7 +6,9 @@
 //   session    <payload b64url>.<HMAC-SHA256 b64url>, payload {u, exp};
 //              signed with the store's session secret, which is replaced
 //              whenever the login changes, so every older session ends
-//              with it.
+//              with it. A session in use is renewed (a fresh token, see
+//              store.mjs: SESSION_RENEW_AFTER_MS), so only one left unused
+//              for SESSION_TTL_MS expires.
 
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
@@ -61,8 +63,9 @@ export function signSession(secret, username, ttlMs, now = Date.now()) {
   return `${payload}.${hmac(secret, payload)}`;
 }
 
-// The session's user name, or null (malformed, forged, expired).
-export function verifySession(secret, token, now = Date.now()) {
+// The session's {u: user name, exp: expiry ms}, or null (malformed, forged,
+// expired).
+export function readSession(secret, token, now = Date.now()) {
   if (!secret || typeof token !== 'string') return null;
   const dot = token.indexOf('.');
   if (dot <= 0) return null;
@@ -70,10 +73,15 @@ export function verifySession(secret, token, now = Date.now()) {
   if (!safeEqual(token.slice(dot + 1), hmac(secret, payload))) return null;
   try {
     const { u, exp } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    return typeof u === 'string' && Number.isFinite(exp) && exp > now ? u : null;
+    return typeof u === 'string' && Number.isFinite(exp) && exp > now ? { u, exp } : null;
   } catch {
     return null;
   }
+}
+
+// The session's user name, or null (malformed, forged, expired).
+export function verifySession(secret, token, now = Date.now()) {
+  return readSession(secret, token, now)?.u ?? null;
 }
 
 // Cookie header -> Map(name -> value); the first occurrence of a name wins.

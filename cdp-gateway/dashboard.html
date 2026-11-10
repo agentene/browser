@@ -330,6 +330,10 @@
     window.AgenteneAuth?.mount({ menu: settingsMenu, root: document.body, onError: showError });
   };
   document.head.append(authUi);
+  // ...and the session keepalive, so an idle console tab stays signed in
+  const authKeepalive = document.createElement('script');
+  authKeepalive.src = new URL('../__auth/keepalive.js', location.href).href;
+  document.head.append(authKeepalive);
 
   function el(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);

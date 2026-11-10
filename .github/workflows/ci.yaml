@@ -78,7 +78,7 @@ jobs:
         run: |
           node --check update-chrome-node.mjs
           for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
-          for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js; do node --check "$f"; done
+          for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
           node --check entrypoint/helpers/chromium-close.mjs
           python3 -m py_compile entrypoint/helpers/*.py
 
@@ -288,6 +288,11 @@ jobs:
           # without a session: the login form; with it: Selkies + sidebar, console, WebSockets
           curl -s $W/ | grep -c 'data-mode="login"' >/dev/null
           curl -sf -b "$J" $W/ | grep -c 'cdp-console/panel.js' >/dev/null
+          curl -sf -b "$J" $W/ | grep -c '__auth/keepalive.js' >/dev/null
+          curl -sf $W/__auth/keepalive.js | grep -c 'api/renew' >/dev/null
+          # renewal: a fresh session is not due yet; none without a session
+          json -b "$J" -X POST -d '{}' $W/__auth/api/renew | jq -e '.renewIn > 0' >/dev/null
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{}' $W/__auth/api/renew)" = 401 ]
           [ "$(code -b "$J" $C/console/)" = 200 ] && [ "$(code $C/console/)" = 401 ]
           [ "$(ws -b "$J" $W/cdp-console/ws)" = 101 ] && [ "$(ws $W/cdp-console/ws)" = 401 ]
           [ "$(ws -b "$J" -H 'Origin: http://evil.example' $W/cdp-console/ws)" = 403 ]

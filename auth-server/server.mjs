@@ -14,10 +14,15 @@
 // CDP port) here, with that prefix stripped:
 //   GET  /                the account page (login, API key, log out)
 //   GET  /ui.js           settings rows + dialogs for the console pages
+//   GET  /keepalive.js    renews the session while a web UI / console page
+//                         is open (loaded by the Selkies page and the console)
 //   GET  /api/state       {setUp, login, authorized, username, apiKey, cdp}
 //   POST /api/setup       {username, password} | {skip: true}   (first start)
 //   POST /api/login       {username, password}
 //   POST /api/logout
+//   POST /api/renew       a fresh session cookie once the current one is due;
+//                         {renewIn: ms until the next one is due | null = none
+//                         to keep alive}, 401 without a session
 //   PUT  /api/credentials {currentPassword, username, password}; both empty
 //                         = login off
 //   PUT  /api/apikey      {apiKey}; empty = no API key
@@ -29,7 +34,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Limiter } from './src/limiter.mjs';
 import { apiKeyFrom, parseCookies } from './src/secrets.mjs';
-import { AuthStore, InputError, SESSION_TTL_MS } from './src/store.mjs';
+import { AuthStore, InputError, SESSION_RENEW_AFTER_MS, SESSION_TTL_MS } from './src/store.mjs';
 
 const env = process.env;
 const PORT = Number(env.AUTH_INTERNAL_PORT || 9219);
@@ -43,6 +48,7 @@ const store = new AuthStore(FILE, log);
 const limiter = new Limiter();
 const PAGE = fs.readFileSync(path.join(ROOT, 'page.html'), 'utf8');
 const UI = fs.readFileSync(path.join(ROOT, 'ui.js'));
+const KEEPALIVE = fs.readFileSync(path.join(ROOT, 'keepalive.js'));
 
 // --- request helpers -------------------------------------------------------------
 
@@ -77,10 +83,12 @@ function sessionCookie(req, token) {
   return `${store.cookieName}=${token || ''}; ${attrs.join('; ')}`;
 }
 
+const sessionOf = (req) => store.session(parseCookies(req.headers.cookie).get(store.cookieName));
+
 function authorized(req) {
   if (!store.setUp) return false;
   if (!store.loginOn) return true;
-  return !!store.sessionUser(parseCookies(req.headers.cookie).get(store.cookieName));
+  return !!sessionOf(req);
 }
 
 async function readJson(req, limit = 16 * 1024) {
@@ -171,6 +179,14 @@ async function api(req, res, name) {
   if (name === 'logout' && req.method === 'POST') {
     return send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '') });
   }
+  if (name === 'renew' && req.method === 'POST') {
+    if (!store.loginOn) return send(res, 200, { renewIn: null });
+    const session = sessionOf(req);
+    if (!session) return send(res, 401, { error: 'sign in first' });
+    const renewIn = AuthStore.renewIn(session);
+    if (renewIn > 0) return send(res, 200, { renewIn });
+    return send(res, 200, { renewIn: SESSION_RENEW_AFTER_MS }, { 'Set-Cookie': sessionCookie(req, store.newSession()) });
+  }
 
   if (!store.setUp) return send(res, 409, { error: store.broken || 'not set up yet' });
   if (!authorized(req)) return send(res, 401, { error: 'sign in first' });
@@ -214,8 +230,8 @@ async function route(req, res) {
     return page(req, res, mode, 401);
   }
   if (p === '/' && req.method === 'GET') return page(req, res, 'account', 200);
-  if (p === '/ui.js' && req.method === 'GET') {
-    return send(res, 200, UI, { 'Content-Type': 'text/javascript; charset=UTF-8', 'Cache-Control': 'no-cache' });
+  if ((p === '/ui.js' || p === '/keepalive.js') && req.method === 'GET') {
+    return send(res, 200, p === '/ui.js' ? UI : KEEPALIVE, { 'Content-Type': 'text/javascript; charset=UTF-8', 'Cache-Control': 'no-cache' });
   }
   const m = p.match(/^\/api\/([a-z]+)$/);
   if (m) return api(req, res, m[1]);

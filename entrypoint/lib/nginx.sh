@@ -9,7 +9,8 @@
 #                         (which talks to chromium on ${CDP_INTERNAL_PORT})
 # With the CDP console panel (CDP_CONSOLE_PANEL_ACTIVE, config.sh) the web UI
 # also gets the sidebar script injected into its entry page and
-# <subfolder>/cdp-console/ proxied to the gateway's /console/.
+# <subfolder>/cdp-console/ proxied to the gateway's /console/; with the
+# built-in login, the session keepalive script too.
 # plus one listener per PORT_FORWARDS entry (same-network peers, see
 # nginx_parse_port_forwards). Every proxy is WebSocket-capable (CDP and
 # Selkies signaling both need it).
@@ -223,11 +224,13 @@ nginx_web_servers() {
     # client derives its API/WebSocket base from the page URL's directory.
     # Relative redirects keep working behind docker port mapping and an
     # outer reverse proxy, where nginx's own host:port would be wrong.
-    local locations="        location / {
+    local locations
+    locations="        location / {
             proxy_pass http://127.0.0.1:${SELKIES_INTERNAL_PORT};
-        }"
+        }
+$(nginx_web_entry_locations)"
     [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] && locations="${locations}
-$(nginx_cdp_console_locations)"
+$(nginx_cdp_console_location)"
     if [ -n "${SELKIES_SUBFOLDER}" ]; then
         locations="${locations}
         location = / {
@@ -270,43 +273,62 @@ ${locations}
 EOF
 }
 
-# The CDP console sidebar on the web UI (CDP_CONSOLE_PANEL_ACTIVE): inject
-# cdp-gateway/panel.js into the Selkies entry page only (the /api/files/
-# browser is HTML too), and proxy cdp-console/ next to it to the gateway's
-# console. Both paths are relative to the subfolder, like the page's own.
-# proxy_set_header is all-or-nothing per level, so each location repeats the
-# http-level forwarding headers (selkies checks WebSocket Origins against
-# Host, the gateway its console's), Upgrade/Connection included where a
-# location upgrades (the console's live state WebSocket, cdp-console/ws).
-nginx_cdp_console_locations() {
-    local prefix="${SELKIES_SUBFOLDER}" fwd_headers entry
-    fwd_headers="            proxy_set_header Host \$http_host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;"
-    # Selkies entry page + the sidebar script (sub_filter only sees
-    # uncompressed, complete pages: no gzip, no 304s from upstream)
-    for entry in "${prefix}/" "${prefix}/index.html"; do
+# proxy_set_header is all-or-nothing per level, so a location that sets one
+# repeats the http-level forwarding headers (selkies checks WebSocket Origins
+# against Host, the gateway its console's).
+nginx_fwd_headers() {
+    cat <<'EOF'
+            proxy_set_header Host $http_host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+EOF
+}
+
+# The Selkies entry page with scripts injected before </head>: the CDP
+# console sidebar (cdp-gateway/panel.js, CDP_CONSOLE_PANEL_ACTIVE) and the
+# login's session keepalive (auth-server/keepalive.js, ENABLE_AUTH). Only
+# the entry page (the /api/files/ browser is HTML too); the paths are
+# relative to the subfolder, like the page's own. Nothing to inject = no
+# extra locations.
+nginx_web_entry_locations() {
+    local scripts="" entry
+    if [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ]; then
+        scripts='<script src="cdp-console/panel.js" defer></script>'
+    fi
+    if [ "${ENABLE_AUTH}" = "true" ]; then
+        scripts="${scripts}"'<script src="__auth/keepalive.js" defer></script>'
+    fi
+    [ -n "${scripts}" ] || return 0
+    # sub_filter only sees uncompressed, complete pages: no gzip, no 304s
+    # from upstream
+    for entry in "${SELKIES_SUBFOLDER}/" "${SELKIES_SUBFOLDER}/index.html"; do
         cat <<EOF
         location = ${entry} {
-${fwd_headers}
+$(nginx_fwd_headers)
             proxy_set_header Accept-Encoding "";
             proxy_set_header If-None-Match "";
             proxy_set_header If-Modified-Since "";
             sub_filter_once on;
             sub_filter_types text/html;
-            sub_filter '</head>' '<script src="cdp-console/panel.js" defer></script></head>';
+            sub_filter '</head>' '${scripts}</head>';
             add_header Cache-Control "no-cache" always;
             proxy_pass http://127.0.0.1:${SELKIES_INTERNAL_PORT};
         }
 EOF
     done
+}
+
+# The CDP console sidebar's backend on the web UI (CDP_CONSOLE_PANEL_ACTIVE):
+# <subfolder>/cdp-console/ proxied to the gateway's console, Upgrade/
+# Connection included (the console's live state WebSocket, cdp-console/ws).
+nginx_cdp_console_location() {
     cat <<EOF
         # the sidebar's script, API and live state WebSocket, served by the
         # CDP gateway's console; the marker header makes the gateway require
         # Selkies' master password
-        location ${prefix}/cdp-console/ {
-${fwd_headers}
+        location ${SELKIES_SUBFOLDER}/cdp-console/ {
+$(nginx_fwd_headers)
             proxy_set_header X-CDP-Console-Via web;
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection \$connection_upgrade;
