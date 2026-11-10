@@ -301,7 +301,8 @@ jobs:
           [ "$(code -H 'Authorization: Bearer ci-key-0123' $C/json/version)" = 200 ]
           [ "$(code -H 'X-API-Key: ci-key-0123' $C/json/list)" = 200 ]
           [ "$(ws $C/devtools/browser/x)" = 401 ]
-          [ "$(ws -H 'X-API-Key: ci-key-0123' "$(curl -s -H 'X-API-Key: ci-key-0123' $C/json/version | jq -r .webSocketDebuggerUrl)")" = 101 ]
+          # ws() does the upgrade over http:// (the runner's curl 8.5 has no ws:// scheme)
+          [ "$(ws -H 'X-API-Key: ci-key-0123' "$(curl -s -H 'X-API-Key: ci-key-0123' $C/json/version | jq -r .webSocketDebuggerUrl | sed 's#^ws://#http://#')")" = 101 ]
           # persisted (hashed) across a restart
           ! docker exec auth-smoke grep -q 'ci-key-0123\|password1' /browser/settings/auth.json
           docker restart auth-smoke >/dev/null
