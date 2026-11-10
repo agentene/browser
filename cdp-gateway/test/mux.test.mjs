@@ -18,6 +18,9 @@ const received = [];
 const rawReceived = []; // the frames as they came, for re-serialization checks
 const arrivals = []; // [upstream, method, sessionId] across both fake chromiums, in arrival order
 
+// What the fake main answers the list commands with (its "own" targets).
+const MAIN_TARGET_INFOS = [{ targetId: 'MT1', type: 'page', url: 'about:main', attached: false, browserContextId: 'MAINCTX' }];
+
 before(async () => {
   server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   await once(server, 'listening');
@@ -33,6 +36,10 @@ before(async () => {
       } else if (msg.method === 'Target.attachToTarget') {
         ws.send(JSON.stringify({ method: 'Target.attachedToTarget', params: { sessionId: 'S1', targetInfo: { targetId: msg.params.targetId, type: 'page' } } }));
         ws.send(JSON.stringify({ id: msg.id, result: { sessionId: 'S1' } }));
+      } else if (msg.method === 'Target.getTargets') {
+        ws.send(JSON.stringify({ id: msg.id, result: { targetInfos: MAIN_TARGET_INFOS } }));
+      } else if (msg.method === 'Target.getBrowserContexts') {
+        ws.send(JSON.stringify({ id: msg.id, result: { browserContextIds: ['MAINCTX'], defaultBrowserContextId: 'MAINDEFAULT' } }));
       } else {
         ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result: { echo: msg.method } }));
       }
@@ -129,6 +136,19 @@ test('main chromium replies are passed on as they came while nothing is awaited'
 // chromium instead of a real one -------------------------------------------
 let contextServer;
 let contextUrl;
+const contextReceived = []; // what the fake context chromium got
+
+// What the fake context answers with: its default context's page, under the
+// id the gateway must never let a client see (CTXDEFAULT).
+const CTX_TARGET_INFOS = [{ targetId: 'CT1', type: 'page', url: 'about:ctx', attached: true, browserContextId: 'CTXDEFAULT' }];
+const CTX_RESULTS = {
+  'Target.createBrowserContext': { browserContextId: 'INNER1' },
+  'Target.createTarget': { targetId: 'CT1' },
+  'Target.attachToBrowserTarget': { sessionId: 'CTXB' },
+  'Target.getTargets': { targetInfos: CTX_TARGET_INFOS },
+  'Target.getTargetInfo': { targetInfo: CTX_TARGET_INFOS[0] },
+};
+
 before(async () => {
   contextServer = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   await once(contextServer, 'listening');
@@ -136,13 +156,9 @@ before(async () => {
   contextServer.on('connection', (ws) => {
     ws.on('message', (data) => {
       const msg = JSON.parse(data.toString());
+      contextReceived.push(msg);
       arrivals.push(['context', msg.method, msg.sessionId]);
-      const result = {
-        'Target.createBrowserContext': { browserContextId: 'INNER1' },
-        'Target.createTarget': { targetId: 'CT1' },
-        'Target.attachToBrowserTarget': { sessionId: 'CTXB' },
-      }[msg.method] ?? {};
-      ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result }));
+      ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result: CTX_RESULTS[msg.method] ?? {} }));
     });
   });
 });
@@ -319,7 +335,7 @@ test('a client id that is one of the gateway\'s own in flight on the context get
     const reply = await client.command({ id, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId } });
     assert.deepEqual(reply, { id, result: { targetId: 'CT1' } });
     while (!internalReply) await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.deepEqual(internalReply, {});
+    assert.deepEqual(internalReply, CTX_RESULTS['Target.getTargets']);
     assert.equal(mux.pending.size, 0);
     assert.equal(mux.internal.size, 0);
   } finally {
@@ -337,10 +353,13 @@ test('context replies with nothing to track pass as they came, their bookkeeping
     const raw = [];
     const toClient = mux.toClient.bind(mux);
     mux.toClient = (data) => { raw.push(data); toClient(data); };
-    // the alias goes to the context chromium, whose reply ({}) needs no rewriting
-    await client.command({ id: 81, method: 'Target.getTargets', params: { filter: [{}], browserContextId } });
+    // the alias goes to the context chromium (the field stripped), whose
+    // reply ({}) needs no rewriting
+    await client.command({ id: 81, method: 'Storage.getCookies', params: { browserContextId } });
     assert.ok(raw.some((d) => Buffer.isBuffer(d) && d.toString() === '{"id":81,"result":{}}'), 'forwarded as it came');
     assert.equal(mux.pending.size, 0);
+    const last = contextReceived[contextReceived.length - 1];
+    assert.deepEqual(last.params, {}, 'the alias stripped on the way there');
     // one that names a target is parsed and tracked
     await client.command({ id: 82, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId } });
     assert.ok(mux.contextTargets.has('CT1'));
@@ -405,10 +424,98 @@ test('a non-object params does not take the gateway down', async () => {
   new Mux(client, 'test', mainUrl);
   try {
     for (const [id, params] of [[31, null], [32, 'x'], [33, 7]]) {
-      const reply = await client.command({ id, method: 'Target.getTargets', params });
-      assert.equal(reply.result.echo, 'Target.getTargets');
+      const reply = await client.command({ id, method: 'Runtime.evaluate', params });
+      assert.equal(reply.result.echo, 'Runtime.evaluate');
     }
   } finally {
     client.close();
+  }
+});
+
+// --- B1–B3: the alias covers results and commands, not just events -----------
+
+// A connection with one isolated context (and a page in it) on the fakes.
+async function contextConnection() {
+  const stub = stubContexts();
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', mainUrl);
+  const { result: { browserContextId } } = await client.command({ id: 200, method: 'Target.createBrowserContext', params: {} });
+  await client.command({ id: 201, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId } });
+  return { stub, client, mux, alias: browserContextId };
+}
+
+test('B1: a getTargetInfo result carries the alias, not the context chromium\'s id', async () => {
+  const { stub, client, mux, alias } = await contextConnection();
+  try {
+    const info = await client.command({ id: 210, method: 'Target.getTargetInfo', params: { targetId: 'CT1' } });
+    assert.deepEqual(info.result.targetInfo, { targetId: 'CT1', type: 'page', url: 'about:ctx', attached: true, browserContextId: alias });
+    assert.ok(mux.contextTargets.has('CT1'));
+    // the same for a getTargets answered by the context chromium (addressed
+    // by the alias, so the merge does not step in)
+    const listed = await client.command({ id: 211, method: 'Target.getTargets', params: { browserContextId: alias } });
+    assert.equal(listed.result.targetInfos[0].browserContextId, alias);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('B2: getTargets and getBrowserContexts list the isolated context too', async () => {
+  const { stub, client, mux, alias } = await contextConnection();
+  try {
+    const listed = await client.command({ id: 220, method: 'Target.getTargets', params: {} });
+    // the main chromium's part unchanged, the context's appended under the alias
+    assert.deepEqual(listed.result.targetInfos, [...MAIN_TARGET_INFOS, { targetId: 'CT1', type: 'page', url: 'about:ctx', attached: true, browserContextId: alias }]);
+    assert.ok(mux.contextTargets.has('CT1'), 'the merged ids are tracked, so they route back');
+    // a second context created inside the context chromium joins the list
+    await client.command({ id: 221, method: 'Target.createBrowserContext', params: {} });
+    const contexts = await client.command({ id: 222, method: 'Target.getBrowserContexts', params: {} });
+    assert.deepEqual(contexts.result.browserContextIds, ['MAINCTX', alias, 'INNER1']);
+    assert.equal(contexts.result.defaultBrowserContextId, 'MAINDEFAULT');
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('B2: a context that dies mid-question does not take the list down with it', async () => {
+  const { stub, client, mux, alias } = await contextConnection();
+  try {
+    const context = mux.context;
+    // the context chromium answers nothing any more: its connection is gone
+    mux.contextWs.terminate();
+    await new Promise((resolve) => setImmediate(resolve));
+    const listed = await client.command({ id: 230, method: 'Target.getTargets', params: {} });
+    assert.deepEqual(listed.result.targetInfos, MAIN_TARGET_INFOS);
+    assert.equal(listed.error, undefined);
+    assert.equal(alias.length > 0, true);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('B3: a browser-target session addresses the context by the alias', async () => {
+  const { stub, client, alias } = await contextConnection();
+  try {
+    // a browser-target session on main (the client picks its id: MB)
+    await client.command({ id: 240, method: 'Target.attachToBrowserTarget', params: {} });
+    arrivals.length = 0;
+    contextReceived.length = 0;
+    const reply = await client.command({ id: 241, sessionId: 'MB', method: 'Storage.getCookies', params: { browserContextId: alias } });
+    assert.deepEqual(reply, { id: 241, sessionId: 'MB', result: {} });
+    // through the stand-in browser session there, the alias stripped as on a root connection
+    assert.deepEqual(arrivals, [
+      ['context', 'Target.attachToBrowserTarget', undefined],
+      ['context', 'Storage.getCookies', 'CTXB'],
+    ]);
+    assert.deepEqual(contextReceived.find((m) => m.method === 'Storage.getCookies').params, {});
+    // an inner context keeps its id on the way there
+    await client.command({ id: 242, method: 'Target.createBrowserContext', params: {} });
+    await client.command({ id: 243, sessionId: 'MB', method: 'Storage.getCookies', params: { browserContextId: 'INNER1' } });
+    assert.deepEqual(contextReceived.filter((m) => m.method === 'Storage.getCookies').at(-1).params, { browserContextId: 'INNER1' });
+  } finally {
+    client.close();
+    stub.restore();
   }
 });

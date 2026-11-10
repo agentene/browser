@@ -9,7 +9,9 @@
 // stands for that chromium's default (persistent, cloned) context. From then
 // on commands are routed per sessionId / targetId / browserContextId to the
 // main or the context's chromium, and its events get their browserContextId
-// rewritten to the alias. Target.disposeBrowserContext(alias) or the client
+// rewritten to the alias. Target.getTargets / Target.getBrowserContexts are
+// answered from both chromiums, the context's ids rewritten to the alias.
+// Target.disposeBrowserContext(alias) or the client
 // disconnecting destroys the context.
 //
 // Default-context traffic is not even parsed: a client message that names no
@@ -32,12 +34,28 @@ const muxes = new Set();
 const REPLY_HEAD = /^\{"id":(-?\d+)[,}]/;
 // What a context chromium's message has to contain for the gateway to track
 // or rewrite it (targets, contexts, sessions: trackContextMessage).
-const CONTEXT_MARKERS = ['"Target.', '"targetId"', '"browserContextId"', '"targetInfo"'];
+// '"targetInfos"' (a getTargets reply) has a marker of its own: an entry
+// without a browserContextId would match none of the others.
+const CONTEXT_MARKERS = ['"Target.', '"targetId"', '"browserContextId"', '"targetInfo"', '"targetInfos"'];
+
+// The list commands the gateway answers from BOTH chromiums of the
+// connection when a context is attached (mergedTargets): each chromium
+// knows only its own targets and contexts.
+const MERGED = new Set(['Target.getTargets', 'Target.getBrowserContexts']);
 
 // A client command's params as an object: chromium refuses any other kind
 // itself, but the gateway reads them first (and a null would throw).
 function paramsOf(msg) {
   return msg.params !== null && typeof msg.params === 'object' ? msg.params : {};
+}
+
+// A command that names the alias, as it goes to the context chromium: the
+// alias stands for its default context, which CDP addresses by leaving
+// browserContextId out (on a root connection and through a stand-in session
+// alike).
+function strippedAlias(msg) {
+  const { browserContextId: _, ...params } = paramsOf(msg);
+  return { ...msg, params };
 }
 
 // open client connections, for idle.mjs
@@ -236,13 +254,15 @@ export class Mux {
     if (this.alias && params.browserContextId === this.alias) {
       // the alias stands for the context chromium's default context, which CDP
       // addresses by leaving browserContextId out
-      const { browserContextId: _, ...rest } = params;
-      this.toContext({ ...msg, params: rest }, msg);
+      this.toContext(strippedAlias(msg), msg);
       return;
     }
-    if (this.context && (this.innerContexts.has(params.browserContextId)
-        || this.addressesContext(params))) {
+    if (this.routesContext(params)) {
       this.toContext(msg);
+      return;
+    }
+    if (this.context && msg.id !== undefined && MERGED.has(method)) {
+      this.mergedTargets(msg, params);
       return;
     }
     this.sendMain(msg);
@@ -259,7 +279,9 @@ export class Mux {
   }
 
   // A command on a session: the context chromium's, the main chromium's, or
-  // a browser-target session on main that addresses the context chromium.
+  // a browser-target session on main that addresses the context chromium —
+  // by the alias (its default context, addressed there by leaving the field
+  // out, as on a root connection), an inner context, or a target of it.
   fromClientSession(msg) {
     const { sessionId } = msg;
     const params = paramsOf(msg);
@@ -267,8 +289,11 @@ export class Mux {
     // everything on it waits, so its commands keep their order
     const browserSession = this.browserSessions.get(sessionId);
     if (browserSession && !browserSession.id) browserSession.waiting.push(msg);
-    else if (this.sessionOwner.get(sessionId) === 'context') this.toContext(msg);
-    else if (this.addressesContext(params)) this.viaContextBrowserSession(msg);
+    else if (this.sessionOwner.get(sessionId) === 'context') {
+      this.toContext(params.browserContextId === this.alias ? strippedAlias(msg) : msg);
+    } else if (this.context && params.browserContextId === this.alias) {
+      this.viaContextBrowserSession(msg, true);
+    } else if (this.routesContext(params)) this.viaContextBrowserSession(msg);
     else this.sendMain(msg);
   }
 
@@ -278,13 +303,60 @@ export class Mux {
       || this.sessionOwner.get(params.sessionId) === 'context');
   }
 
+  // Browser-level params addressed to the context chromium any way a client
+  // can: the alias (its default context), one of the contexts created inside
+  // it (innerContexts), or a target or session of it.
+  routesContext(params) {
+    return Boolean(this.context) && (params.browserContextId === this.alias
+      || this.innerContexts.has(params.browserContextId) || this.addressesContext(params));
+  }
+
+  // Target.getTargets / Target.getBrowserContexts on a connection with an
+  // isolated context: neither chromium knows the other's, so the gateway
+  // asks both and answers with the union — the context's targetInfos
+  // rewritten to the alias, its contexts as the alias plus the inner ones.
+  // (getBrowserContexts needs no trip to the context: what to append is
+  // known here.) The main chromium's part of the answer goes out unchanged,
+  // like every other main reply.
+  async mergedTargets(msg, params) {
+    const asks = [this.internalSend('main', msg.method, params)];
+    if (msg.method === 'Target.getTargets') {
+      asks.push(this.internalSend('context', msg.method, params));
+    }
+    const settled = await Promise.allSettled(asks);
+    const [main, context] = settled;
+    if (main.status === 'rejected') {
+      this.replyError(msg, main.reason instanceof Error ? main.reason.message : `${msg.method} failed`);
+      return;
+    }
+    const merged = { ...main.value };
+    if (msg.method === 'Target.getBrowserContexts') {
+      merged.browserContextIds = [...(merged.browserContextIds ?? []), this.alias, ...this.innerContexts];
+    } else if (context.status === 'fulfilled') {
+      const infos = (context.value.targetInfos ?? []).map((info) => ({ ...info }));
+      for (const info of infos) {
+        this.contextTargets.add(info.targetId);
+        if (!this.innerContexts.has(info.browserContextId)) info.browserContextId = this.alias;
+      }
+      merged.targetInfos = [...(merged.targetInfos ?? []), ...infos];
+    } else {
+      log(`mux ${this.clientAddr}: merging ${msg.method}: ${context.reason instanceof Error ? context.reason.message : 'the context chromium did not answer'}`);
+    }
+    this.reply(msg, merged);
+  }
+
   // A client browser-target session's command for the context chromium goes
   // through the stand-in session the gateway opens there (once per session).
-  viaContextBrowserSession(msg) {
+  // withAlias: the command names the alias, which stands for the context
+  // chromium's default context — stripped on the way there, as on a root
+  // connection. The message is queued as it came, so a re-route on the flush
+  // can tell where it belongs again.
+  viaContextBrowserSession(msg, withAlias = false) {
     const clientSession = msg.sessionId;
     const known = this.browserSessions.get(clientSession);
     if (known) {
-      this.toContext({ ...msg, sessionId: known.id }, msg);
+      const out = { ...msg, sessionId: known.id };
+      this.toContext(withAlias ? strippedAlias(out) : out, msg);
       return;
     }
     const entry = { id: '', waiting: [msg] };
@@ -295,7 +367,7 @@ export class Mux {
       for (const m of waiting) {
         // without a stand-in what needed one fails (no retry loop); the rest
         // takes its usual way
-        if (err && this.addressesContext(paramsOf(m))) this.replyError(m, err.message);
+        if (err && this.routesContext(paramsOf(m))) this.replyError(m, err.message);
         else this.fromClientSession(m);
       }
     };
@@ -461,8 +533,14 @@ export class Mux {
       default:
         break;
     }
-    const info = p?.targetInfo;
-    if (info) {
+    // a targetInfo wherever the context chromium put it — an event's
+    // params, or the result of Target.getTargetInfo / Target.getTargets:
+    // the ids belong to the client's namespace, not chromium's
+    const infos = [];
+    if (p?.targetInfo) infos.push(p.targetInfo);
+    if (msg.result?.targetInfo) infos.push(msg.result.targetInfo);
+    if (Array.isArray(msg.result?.targetInfos)) infos.push(...msg.result.targetInfos);
+    for (const info of infos) {
       this.contextTargets.add(info.targetId);
       // everything in the context chromium's default context belongs to the alias
       if (!this.innerContexts.has(info.browserContextId)) info.browserContextId = this.alias;
