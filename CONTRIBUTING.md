@@ -23,6 +23,7 @@ node --check update-chrome-node.mjs
 for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 node --check entrypoint/helpers/chromium-close.mjs
+node --check entrypoint/helpers/password-hash.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .                        # Dockerfile lint (BuildKit)
 

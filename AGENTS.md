@@ -53,6 +53,7 @@ npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit te
 for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
 npm test --prefix auth-server                                  # auth server unit tests (no deps)
 node --check entrypoint/helpers/chromium-close.mjs
+node --check entrypoint/helpers/password-hash.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .
 ```
@@ -177,7 +178,13 @@ node update-chrome-node.mjs --node 22        # force the Node major
   locations are exempt (`auth_request off`). The CDP API stays open while no
   API key is set, so CDP clients never need changes by default; the session
   cookie never opens the CDP API. Its state is console-managed in
-  `/browser/settings/auth.json` — no env knobs besides the on/off switch.
+  `/browser/settings/auth.json` — no env knobs besides the on/off switch
+  and `AUTH_SETUP_CODE` (the setup form's code, random and logged when
+  empty). With the login skipped, changing the key or the login needs the
+  current key. The gateway and the auth service refuse request targets that
+  nginx and the WHATWG URL parser would read differently (backslashes,
+  whitespace): nginx picks the auth check by its reading, the services route
+  by theirs.
   Internal tools must talk to loopback internals, never to the public CDP
   port (it may need a key).
 * **The CDP gateway always owns the CDP port** (not a knob — there is

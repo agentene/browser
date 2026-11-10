@@ -276,3 +276,74 @@ test('a browser-target session keeps its command order while its stand-in opens'
     stub.restore();
   }
 });
+
+test('an escaped Browser.close is caught all the same', async () => {
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', mainUrl);
+  await client.command({ id: 60, method: 'Browser.getVersion', params: {} });
+  const closed = once(client, 'close');
+  client.emit('message', Buffer.from(String.raw`{"id":61,"method":"Browser.close","params":{}}`));
+  assert.deepEqual(await client.next((m) => m.id === 61), { id: 61, result: {} });
+  await closed;
+  assert.equal(mux.closed, true);
+  assert.ok(!received.some((m) => m.id === 61), 'never reached chromium');
+});
+
+test('an escaped Target.createBrowserContext still gets an isolated context', async () => {
+  const stub = stubContexts();
+  const client = new FakeClient();
+  new Mux(client, 'test', mainUrl);
+  try {
+    client.emit('message', Buffer.from(String.raw`{"id":62,"method":"Target.createBrowserContext","params":{}}`));
+    const reply = await client.next((m) => m.id === 62);
+    assert.match(reply.result.browserContextId, /^CONTEXT/);
+    assert.equal(stub.made.length, 1);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('a client id that is one of the gateway\'s own in flight on the context gets its own reply', async () => {
+  const stub = stubContexts();
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', mainUrl);
+  try {
+    const { result: { browserContextId } } = await client.command({ id: 70, method: 'Target.createBrowserContext', params: {} });
+    // an internal command of the gateway's, in flight under that id
+    const id = mux.nextInternalId;
+    let internalReply = null;
+    mux.internalSend('context', 'Target.getTargets', {}).then((r) => { internalReply = r; });
+    const reply = await client.command({ id, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId } });
+    assert.deepEqual(reply, { id, result: { targetId: 'CT1' } });
+    while (!internalReply) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(internalReply, {});
+    assert.equal(mux.pending.size, 0);
+    assert.equal(mux.internal.size, 0);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('context replies with nothing to track pass as they came, their bookkeeping done', async () => {
+  const stub = stubContexts();
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', mainUrl);
+  try {
+    const { result: { browserContextId } } = await client.command({ id: 80, method: 'Target.createBrowserContext', params: {} });
+    const raw = [];
+    const toClient = mux.toClient.bind(mux);
+    mux.toClient = (data) => { raw.push(data); toClient(data); };
+    // the alias goes to the context chromium, whose reply ({}) needs no rewriting
+    await client.command({ id: 81, method: 'Target.getTargets', params: { filter: [{}], browserContextId } });
+    assert.ok(raw.some((d) => Buffer.isBuffer(d) && d.toString() === '{"id":81,"result":{}}'), 'forwarded as it came');
+    assert.equal(mux.pending.size, 0);
+    // one that names a target is parsed and tracked
+    await client.command({ id: 82, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId } });
+    assert.ok(mux.contextTargets.has('CT1'));
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});

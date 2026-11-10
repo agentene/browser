@@ -70,6 +70,15 @@ class MainBrowser {
         stdio: ['ignore', logFile, logFile],
       });
       this.proc = proc;
+      // a failed spawn is an 'error' event and no 'exit' (unhandled, it would
+      // take the gateway down): the launch below then fails
+      proc.on('error', (err) => {
+        log(`main browser: ${err.message}`);
+        if (!proc.pid && this.proc === proc) {
+          this.proc = null;
+          logFile.end();
+        }
+      });
       proc.once('exit', (code, signal) => {
         log(`main browser exited (code=${code} signal=${signal}); the container keeps running without it`);
         killGroup(proc.pid, 'SIGKILL');
@@ -108,7 +117,7 @@ class MainBrowser {
   // it is only the fallback; the group is killed after a grace period.
   async stop() {
     const proc = this.proc;
-    if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+    if (!proc?.pid || proc.exitCode !== null || proc.signalCode !== null) return;
     const exited = new Promise((resolve) => proc.once('exit', resolve));
     const term = () => {
       try { process.kill(proc.pid, 'SIGTERM'); } catch { /* already gone */ }

@@ -7,6 +7,27 @@ export function publicHost(req) {
   return req.headers.host || PUBLIC_FALLBACK;
 }
 
+// The path a request is routed by, or null for one that must be refused.
+// nginx picks the location (and so the auth check) from its own reading of
+// the raw request target and passes that target on unchanged; the WHATWG URL
+// parser reads more into it — a backslash is a slash, tabs and newlines are
+// dropped — so /console/..\json/version is /console/… to nginx (the console
+// login) but /json/version here (the CDP API, which needs the API key). Only
+// targets both read alike get through: origin-form, no backslash, no
+// whitespace or control characters.
+export function requestPath(req) {
+  const target = req.url || '';
+  if (!target.startsWith('/') || /[\\\x00-\x20\x7f]/.test(target)) return null;
+  return new URL(target, 'http://gateway').pathname;
+}
+
+// A console request nginx forwarded from the web UI port (its cdp-console/
+// location sets this header; the CDP listener strips it). Those may reach
+// the console and nothing else: the CDP API is the CDP port's alone.
+export function viaWeb(req) {
+  return req.headers['x-cdp-console-via'] === 'web';
+}
+
 // An error a route answers with its own status instead of 500.
 export class HttpError extends Error {
   constructor(status, message) {

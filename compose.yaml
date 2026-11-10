@@ -96,6 +96,10 @@ services:
       # settings/auth.json under BROWSER_DATA_HOST_DIR (delete it to start
       # over). false = no login, no API key (both open, as before).
       ENABLE_AUTH: "${ENABLE_AUTH:-true}"
+      # The code the setup form asks for, so that reaching the page first is
+      # not enough to claim the browser. Empty = a random one on every start,
+      # printed in the container log (docker compose logs browser).
+      AUTH_SETUP_CODE: "${AUTH_SETUP_CODE:-}"
 
       # --- nginx front door ---
       # Ports nginx LISTENS ON inside the container (not the published host
@@ -108,6 +112,11 @@ services:
       # exposure): 127.0.0.1 keeps the CDP endpoint (open until a CDP API key
       # is set) and the web UI host-local.
       NGINX_LISTEN_ADDR: "${NGINX_LISTEN_ADDR:-}"
+      # Host names the web UI and the CDP port answer to (comma-separated; a
+      # leading dot = subdomains too), besides IP addresses and localhost;
+      # others get 421. Guards an open web UI / console (login skipped or
+      # ENABLE_AUTH=false) against DNS rebinding. Empty = any host name.
+      ALLOWED_HOSTS: "${ALLOWED_HOSTS:-}"
       # true = nginx also serves HTTPS on NGINX_LISTEN_HTTPS_PORT (published to the
       # host only via the compose.https.yaml overlay, which also mounts ./tls).
       # Certificates: an existing valid pair in ./tls is reused as-is;

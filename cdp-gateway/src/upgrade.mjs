@@ -14,6 +14,7 @@ import { fetchJson } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { Mux } from './mux.mjs';
 import { relay } from './relay.mjs';
+import { requestPath, viaWeb } from './respond.mjs';
 import { log } from './util.mjs';
 
 const wss = new WebSocketServer({ noServer: true, ...WS_OPTIONS });
@@ -29,6 +30,9 @@ function refuse(socket, status) {
 
 // What the upgrade connects to, or the HTTP status to refuse it with.
 async function resolveTarget(req, p) {
+  if (p === null) return { refuse: 400 };
+  // from the web UI port: the console's WebSocket only (respond.mjs)
+  if (viaWeb(req) && p !== '/console/ws') return { refuse: 404 };
   if (p.startsWith('/devtools/')) {
     const denied = cdpOriginDenied(req);
     if (denied) {
@@ -45,7 +49,7 @@ async function resolveTarget(req, p) {
     return { kind: 'page', url: `ws://127.0.0.1:${port}${p}` };
   }
   if (p === '/console/ws') {
-    const denied = consoleDenied(req) ?? consoleOriginDenied(req);
+    const denied = (await consoleDenied(req)) ?? consoleOriginDenied(req);
     return denied ? { refuse: denied[0] } : { kind: 'console' };
   }
   return { refuse: 404 };
@@ -58,7 +62,7 @@ export async function handleUpgrade(req, socket, head) {
   // event, which takes the whole gateway (and so the container) down
   const onError = () => socket.destroy();
   socket.on('error', onError);
-  const p = new URL(req.url, 'http://gateway').pathname;
+  const p = requestPath(req);
   let target;
   try {
     target = await resolveTarget(req, p);

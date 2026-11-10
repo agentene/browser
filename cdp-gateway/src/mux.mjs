@@ -14,11 +14,11 @@
 //
 // Default-context traffic is not even parsed: a client message that names no
 // Target.* method (nor a Browser.close, browser-exit.mjs) goes to the main
-// chromium as it came, and so does a main chromium message while the gateway
-// awaits no reply there itself.
+// chromium as it came, and so does an upstream message the gateway has no
+// business with (needsParse).
 
 import WebSocket from 'ws';
-import { REFUSED_MESSAGE, browserExitAction, mayEndBrowser } from './browser-exit.mjs';
+import { REFUSED_MESSAGE, browserExitAction, hasEscape, mayEndBrowser } from './browser-exit.mjs';
 import { openWs } from './cdp-client.mjs';
 import { INTERNAL_ID_BASE, WS_OPTIONS } from './config.mjs';
 import { contexts } from './contexts.mjs';
@@ -26,6 +26,12 @@ import { forward } from './flow.mjs';
 import { log } from './util.mjs';
 
 const muxes = new Set();
+
+// How chromium starts a reply: {"id":<n>, — its id comes first.
+const REPLY_HEAD = /^\{"id":(-?\d+)[,}]/;
+// What a context chromium's message has to contain for the gateway to track
+// or rewrite it (targets, contexts, sessions: trackContextMessage).
+const CONTEXT_MARKERS = ['"Target.', '"targetId"', '"browserContextId"', '"targetInfo"'];
 
 // open client connections, for idle.mjs
 export function openMuxes() {
@@ -44,7 +50,7 @@ export class Mux {
     // In-flight client commands the gateway may have to answer itself, kept
     // until their reply: anything sent to the context chromium (which can
     // die before answering) and context disposals sent to the main chromium.
-    this.pending = new Map(); // client command id -> { origin, msg }
+    this.pending = new Map(); // upstream command id -> { origin, msg: the client's command }
     this.sessionOwner = new Map(); // context sessionId -> 'context' (any other session is main's)
     this.sessionTarget = new Map(); // context sessionId -> targetId
     this.sessionParent = new Map(); // context sessionId -> the client session it was attached on
@@ -108,7 +114,13 @@ export class Mux {
       this.answerGone(answerAs);
       return;
     }
-    if (msg.id !== undefined) this.pending.set(msg.id, { origin: 'context', msg: answerAs });
+    if (msg.id !== undefined) {
+      // the gateway's own commands there count up from INTERNAL_ID_BASE; a
+      // client id that is one of those in flight goes up under a fresh id,
+      // and its reply gets the client's back (fromUpstream)
+      if (this.internal.has(msg.id)) msg = { ...msg, id: this.nextInternalId++ };
+      this.pending.set(msg.id, { origin: 'context', msg: answerAs });
+    }
     this.sendContext(msg);
   }
 
@@ -140,7 +152,8 @@ export class Mux {
 
   // A command of the gateway's own on an upstream; resolves with its result.
   internalSend(target, method, params) {
-    const id = this.nextInternalId++;
+    let id;
+    do id = this.nextInternalId++; while (this.pending.has(id)); // not a client's id in flight
     return new Promise((resolve, reject) => {
       this.internal.set(id, { resolve, reject, method, target });
       const msg = { id, method, params };
@@ -153,8 +166,8 @@ export class Mux {
   fromClient(data) {
     // nothing to route or rewrite without a context, unless it is one of the
     // Target.* commands the gateway handles (their method name is a JSON
-    // string, so it always appears as "Target.)
-    if (!this.context && !this.attaching && !data.includes('"Target.') && !mayEndBrowser(data)) {
+    // string, so it appears as "Target. — or escaped, browser-exit.mjs)
+    if (!this.context && !this.attaching && !data.includes('"Target.') && !hasEscape(data) && !mayEndBrowser(data)) {
       this.toMain(data);
       return;
     }
@@ -162,6 +175,8 @@ export class Mux {
     try {
       msg = JSON.parse(data.toString());
     } catch {
+      // not CDP: chromium answers it with its parse error, as without a context
+      this.toMain(data);
       return;
     }
     const { method, params = {}, sessionId } = msg;
@@ -352,10 +367,11 @@ export class Mux {
   }
 
   // --- upstreams -> client ---------------------------------------------------
+  // Most upstream traffic goes to the client as it came: parsing and
+  // re-serializing every frame would cost the most on the largest ones
+  // (screenshots, screencasts, traces).
   fromUpstream(origin, data) {
-    // the main chromium's messages need no rewriting; only the replies the
-    // gateway waits for itself are picked out
-    if (origin === 'main' && this.pending.size === 0 && this.internal.size === 0) {
+    if (!this.needsParse(origin, data)) {
       this.toClient(data);
       return;
     }
@@ -376,8 +392,9 @@ export class Mux {
     }
 
     const pending = msg.id !== undefined && this.pending.get(msg.id);
-    if (pending) {
+    if (pending?.origin === origin) {
       this.pending.delete(msg.id);
+      msg.id = pending.msg.id; // the client's own id (toContext may have sent another)
       if (msg.error && pending.msg.method === 'Target.disposeBrowserContext') {
         this.answerGone(pending.msg);
         return;
@@ -391,6 +408,29 @@ export class Mux {
       this.trackContextMessage(msg);
     }
     this.sendClient(msg);
+  }
+
+  // Whether an upstream frame needs the gateway: a reply to its own command,
+  // a reply it rewrites or answers itself, or a context chromium message
+  // that names a target, a context or one of the gateway's stand-in sessions.
+  // Chromium writes a reply's id first and an event's method first; a frame
+  // laid out any other way is parsed. Bookkeeping for a plain reply (its
+  // pending entry) is done right here.
+  needsParse(origin, data) {
+    const head = data.subarray(0, 40).toString('latin1');
+    const reply = REPLY_HEAD.exec(head);
+    if (!reply && !head.startsWith('{"method":"')) return true;
+    if (reply) {
+      const id = Number(reply[1]);
+      if (this.internal.get(id)?.target === origin) return true;
+      const pending = this.pending.get(id);
+      if (pending?.origin === origin) {
+        if (pending.msg.id !== id || pending.msg.method === 'Target.disposeBrowserContext') return true;
+        this.pending.delete(id);
+      }
+    }
+    return origin === 'context'
+      && (this.browserSessionOf.size > 0 || CONTEXT_MARKERS.some((marker) => data.includes(marker)));
   }
 
   trackContextMessage(msg) {

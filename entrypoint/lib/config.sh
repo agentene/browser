@@ -16,6 +16,14 @@
 #                               all interfaces. With network_mode: host set
 #                               127.0.0.1 to keep the unauthenticated CDP
 #                               endpoint (and the web UI) off the network.
+#   ALLOWED_HOSTS=""            host names the web UI and the CDP port answer
+#                               to (comma-separated; a leading dot or *.
+#                               matches subdomains), besides IP addresses and
+#                               localhost: any other Host header gets 421.
+#                               Stops DNS rebinding — a site pointing its own
+#                               name at this container — from using an open
+#                               web UI / console (login skipped or
+#                               ENABLE_AUTH=false). Empty = any host name
 #   ENABLE_HTTPS=false          true = nginx also serves HTTPS on NGINX_LISTEN_HTTPS_PORT. The
 #                               certificate pair is REUSED whenever a valid one
 #                               already exists (mounted or generated on an
@@ -136,6 +144,12 @@
 #                                persisted in /browser/settings/auth.json.
 #                                false = no login, no API key (the CDP
 #                                endpoint and the web UI are open, as before)
+#   AUTH_SETUP_CODE=""           the code the setup form asks for, so that
+#                                reaching the page first is not enough to
+#                                claim the browser; empty = a random one on
+#                                every start, printed in the container log
+#                                (docker logs). Set one for scripted setups
+#                                (POST <base>/__auth/api/setup {code, ...})
 #   AUTH_INTERNAL_PORT=9219      auth service loopback port (behind nginx)
 #   PORT_FORWARDS=""             extra reverse proxies served by nginx, e.g.
 #                                "3080=peer:80 6080=other:6080" (space or
@@ -253,6 +267,12 @@ config_nginx() {
     # Extra reverse proxies served by the same nginx front door (empty = none).
     # Parsed and validated in nginx.sh.
     PORT_FORWARDS="${PORT_FORWARDS:-}"
+    # Host names nginx answers to besides IP addresses and localhost (empty =
+    # any; nginx.sh turns the list into a map).
+    ALLOWED_HOSTS="${ALLOWED_HOSTS:-}"
+    case "${ALLOWED_HOSTS}" in
+        *[!A-Za-z0-9.,*\ -]*) die "ALLOWED_HOSTS='${ALLOWED_HOSTS}' must be a comma-separated list of host names like browser.example.com or .example.com" ;;
+    esac
 }
 
 config_tls() {
@@ -354,6 +374,14 @@ config_auth() {
     esac
     AUTH_INTERNAL_PORT="${AUTH_INTERNAL_PORT:-9219}" # auth service loopback port (behind nginx)
     AUTH_FILE="/browser/settings/auth.json"
+    # The setup form's code (auth.sh makes a random one when empty).
+    AUTH_SETUP_CODE="${AUTH_SETUP_CODE:-}"
+    case "${AUTH_SETUP_CODE}" in
+        *[![:graph:]]*) die "AUTH_SETUP_CODE must be printable ASCII without spaces" ;;
+    esac
+    if [ -n "${AUTH_SETUP_CODE}" ] && [ "${#AUTH_SETUP_CODE}" -lt 8 ]; then
+        die "AUTH_SETUP_CODE needs at least 8 characters"
+    fi
 }
 
 # Every port knob must be a plain TCP port number; a typo would otherwise

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { browserPid, portOf } from './browsers.mjs';
 import { notifyChange } from './changes.mjs';
 import { CONTEXTS_HEADLESS, RAISE_SWITCH, ROOT, WAYLAND, appId } from './config.mjs';
-import { fetchJson, pageTargets } from './devtools-http.mjs';
+import { devtoolsFetch, fetchJson, pageTargets } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { output, run, sleep } from './util.mjs';
 
@@ -75,7 +75,7 @@ export async function focus(name, targetId) {
   let id = targetId || (await pageTargets(port))[0]?.id;
   const opened = !id;
   if (opened) id = (await fetchJson(port, '/json/new?about:blank', 'PUT')).id;
-  if (!(await fetch(`http://127.0.0.1:${port}/json/activate/${encodeURIComponent(id)}`)).ok) return false;
+  if (!(await devtoolsFetch(port, `/json/activate/${encodeURIComponent(id)}`)).ok) return false;
   if (name !== 'main' && CONTEXTS_HEADLESS) return true;
   // a freshly opened window may take a moment to map
   for (let tries = opened ? 20 : 1; tries > 0; tries--) {

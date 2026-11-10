@@ -98,17 +98,17 @@ async function tick() {
     views.delete(name);
     ops.push({ t: 'gone', name });
   }
-  for (const name of names) {
-    const port = portOf(name);
-    let listing = NO_TABS;
-    if (name !== 'main' || mainBrowser.running) {
-      try {
-        listing = await browserTabs(port);
-      } catch {
-        continue; // starting up or shutting down: keep what the consoles have
-      }
-    }
+  // all browsers at once: one slow to answer holds up the tick only as long
+  // as the slowest (and at most devtools-http.mjs' timeout), not their sum
+  const listings = await Promise.all(names.map((name) => (
+    name === 'main' && !mainBrowser.running ? NO_TABS
+      // null: starting up or shutting down — keep what the consoles have
+      : browserTabs(portOf(name)).catch(() => null))));
+  for (const [i, name] of names.entries()) {
+    const listing = listings[i];
+    if (!listing) continue;
     if (name !== 'main' && !contexts.get(name)) continue; // destroyed meanwhile
+    const port = portOf(name);
     let view = views.get(name);
     if (!view) views.set(name, view = { fields: {}, tabs: new Map(), current: null, thumb: null, cast: null });
     const changed = {};

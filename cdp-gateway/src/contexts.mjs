@@ -28,6 +28,7 @@ function devtoolsAnnounced(proc, port, logPath) {
       else tail = text.slice(-512); // a line split across chunks
     };
     const onExit = () => done(new Error(`chromium exited during startup, see ${logPath}`));
+    const onError = (err) => done(new Error(`chromium could not be started: ${err.message}`));
     const timer = setTimeout(() => {
       done(new Error(`chromium did not open its DevTools port ${port} within ${STARTUP_TIMEOUT_MS / 1000}s, see ${logPath}`));
     }, STARTUP_TIMEOUT_MS);
@@ -35,11 +36,13 @@ function devtoolsAnnounced(proc, port, logPath) {
       clearTimeout(timer);
       proc.stderr.off('data', onData);
       proc.off('exit', onExit);
+      proc.off('error', onError);
       if (err) reject(err);
       else resolve(wsPath);
     }
     proc.stderr.on('data', onData);
     proc.once('exit', onExit);
+    proc.once('error', onError);
   });
 }
 
@@ -86,6 +89,9 @@ class Context {
       stdio: ['ignore', logFile, 'pipe'], // stderr: read below, then into the log
     });
     this.proc = proc;
+    // a failed spawn (EAGAIN, ENOMEM, ...) is an 'error' event and no 'exit';
+    // unhandled it would take the whole gateway down
+    proc.on('error', (err) => log(`${this.name}: chromium: ${err.message}`));
     proc.stderr.pipe(logFile);
     proc.once('exit', (code, signal) => {
       log(`${this.name}: chromium exited (code=${code} signal=${signal})`);
@@ -117,7 +123,8 @@ class Context {
     // same connection may create its next isolated context right away
     this.mux?.contextGone(this);
     const proc = this.proc;
-    if (proc && proc.exitCode === null && proc.signalCode === null) {
+    // (no pid: it never started, so there is nothing to wait for)
+    if (proc?.pid && proc.exitCode === null && proc.signalCode === null) {
       const exited = new Promise((resolve) => proc.once('exit', resolve));
       killGroup(proc.pid, 'SIGTERM');
       const timer = setTimeout(() => killGroup(proc.pid, 'SIGKILL'), 5000);

@@ -13,10 +13,18 @@ import { ALLOW_BROWSER_CLOSE } from './config.mjs';
 
 const CRASH = new Set(['Browser.crash', 'Browser.crashGpuProcess']);
 
+// Whether a raw frame has a JSON \u escape: a method name may hide behind
+// one ("Browser.\u0063lose" is Browser.close to chromium's parser too), so
+// such a frame cannot be judged by its bytes and has to be parsed.
+export function hasEscape(data) {
+  return data.includes('\\u');
+}
+
 // Cheap pre-check on a raw frame: whether it may name one of the commands
-// (their method name is a JSON string, so it always appears as "Browser.c).
+// (their method name is a JSON string, so it appears as "Browser.c — or
+// escaped).
 export function mayEndBrowser(data, allowed = ALLOW_BROWSER_CLOSE) {
-  return !allowed && data.includes('"Browser.c');
+  return !allowed && (data.includes('"Browser.c') || hasEscape(data));
 }
 
 // What the gateway does with a parsed client command: null = forward it,

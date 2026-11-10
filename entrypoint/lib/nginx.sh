@@ -19,6 +19,8 @@
 # a session, else its setup/login form in place), the CDP API with its API
 # key; <subfolder>/__auth/ (web) and /__auth/ (CDP port) proxy to its pages
 # and API. PORT_FORWARDS listeners are not covered.
+# With ALLOWED_HOSTS the web and CDP listeners answer only to those host names
+# (plus IP addresses and localhost); any other Host gets 421 (DNS rebinding).
 #
 # There is no static config: it is generated into NGINX_CONF at every start
 # and checked with `nginx -t` before nginx runs.
@@ -150,6 +152,40 @@ nginx_check_port_collisions() {
 
 # --- config rendering -----------------------------------------------------------
 
+# ALLOWED_HOSTS: $agentene_host_allowed is 1 for a listed host name (a
+# leading dot or *. = its subdomains too), an IP address or localhost.
+# Nothing when the list is empty (or *): every Host is answered.
+nginx_host_map() {
+    local entry entries=""
+    for entry in $(printf '%s\n' "${ALLOWED_HOSTS}" | tr ',' ' '); do
+        [ "${entry}" = "*" ] && return 0
+        entries="${entries}
+        $(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]') 1;"
+    done
+    [ -n "${entries}" ] || return 0
+    cat <<EOF
+
+    # ALLOWED_HOSTS (DNS rebinding: a site pointing its own name here)
+    map \$host \$agentene_host_allowed {
+        hostnames;
+        default 0;
+        localhost 1;
+        ~^[0-9.]+\$ 1;
+        ~^\[?[0-9a-f:.]+\]?\$ 1;${entries}
+    }
+EOF
+}
+
+# The check every web / CDP server starts with (nginx_host_map).
+nginx_host_guard() {
+    [ -n "$(nginx_host_map)" ] || return 0
+    cat <<'EOF'
+        if ($agentene_host_allowed = 0) {
+            return 421;
+        }
+EOF
+}
+
 nginx_write_config() {
     mkdir -p /tmp/nginx/client_body /tmp/nginx/proxy /tmp/nginx/fastcgi \
              /tmp/nginx/uwsgi /tmp/nginx/scgi
@@ -162,8 +198,9 @@ nginx_write_config() {
     # nginx workers as the RUN_USER (the `user` directive takes a NAME, which
     # is why numeric ids get a synthesized passwd entry in privileges.sh);
     # empty = compiled default nobody, the historical behavior.
-    local user_conf="" web_servers="" cdp_server=""
+    local user_conf="" web_servers="" cdp_server="" host_map=""
     [ -n "${RUN_NGINX_USER}" ] && user_conf="user ${RUN_NGINX_USER};"
+    host_map="$(nginx_host_map)"
     [ "${ENABLE_SELKIES}" = "true" ] && web_servers="$(nginx_web_servers)"
     [ "${ENABLE_CDP}" = "true" ] && cdp_server="$(nginx_cdp_server)"
 
@@ -194,6 +231,7 @@ http {
         default upgrade;
         ''      close;
     }
+${host_map}
 
     # proxy defaults inherited by every server block below
     proxy_http_version 1.1;
@@ -254,6 +292,7 @@ $(nginx_auth_locations "${SELKIES_SUBFOLDER}/__auth/" "${SELKIES_SUBFOLDER}/")"
     server {
         listen ${LISTEN_PREFIX}${NGINX_LISTEN_HTTP_PORT};
         server_name _;
+$(nginx_host_guard)
 ${locations}
     }
 EOF
@@ -268,6 +307,7 @@ EOF
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_session_cache shared:SSL:10m;
         ssl_session_timeout 1d;
+$(nginx_host_guard)
 ${locations}
     }
 EOF
@@ -326,7 +366,8 @@ nginx_cdp_console_location() {
     cat <<EOF
         # the sidebar's script, API and live state WebSocket, served by the
         # CDP gateway's console; the marker header makes the gateway require
-        # Selkies' master password
+        # Selkies' master password and serve its console only (never the
+        # CDP API, which is the CDP port's)
         location ${SELKIES_SUBFOLDER}/cdp-console/ {
 $(nginx_fwd_headers)
             proxy_set_header X-CDP-Console-Via web;
@@ -361,6 +402,7 @@ nginx_cdp_server() {
     server {
         listen ${LISTEN_PREFIX}${CDP_LISTEN_PORT};
         server_name _;
+$(nginx_host_guard)
         location / {
 ${gateway}
         }
@@ -373,14 +415,22 @@ EOF
     server {
         listen ${LISTEN_PREFIX}${CDP_LISTEN_PORT};
         server_name _;
+$(nginx_host_guard)
         # the CDP API (/json/*, /devtools/*): the API key, once one is set
         location / {
             auth_request /.agentene-auth/cdp;
             error_page 401 = @agentene_cdp_denied;
 ${gateway}
         }
-        # the CDP console: a session, like the web UI
-        location /console {
+        # the CDP console: a session, like the web UI (exactly /console and
+        # what is under /console/; the gateway serves nothing else there and
+        # refuses request paths it would read differently from nginx)
+        location = /console {
+            auth_request /.agentene-auth/web;
+            error_page 401 = @agentene_login;
+${gateway}
+        }
+        location /console/ {
             auth_request /.agentene-auth/web;
             error_page 401 = @agentene_login;
 ${gateway}

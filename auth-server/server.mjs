@@ -17,7 +17,9 @@
 //   GET  /keepalive.js    renews the session while a web UI / console page
 //                         is open (loaded by the Selkies page and the console)
 //   GET  /api/state       {setUp, login, authorized, username, apiKey, cdp}
-//   POST /api/setup       {username, password} | {skip: true}   (first start)
+//   POST /api/setup       {code, username, password} | {code, skip: true}
+//                         (first start; code: the setup code the entrypoint
+//                         prints in the container log, AUTH_SETUP_CODE)
 //   POST /api/login       {username, password}
 //   POST /api/logout
 //   POST /api/renew       a fresh session cookie once the current one is due;
@@ -26,6 +28,9 @@
 //   PUT  /api/credentials {currentPassword, username, password}; both empty
 //                         = login off
 //   PUT  /api/apikey      {apiKey}; empty = no API key
+// With the login off (skipped) anyone who reaches the pages may use them, so
+// once an API key is set it is what proves ownership: changing the key or the
+// login then needs the current key too ({currentApiKey}).
 // The state lives in AUTH_FILE (store.mjs).
 
 import fs from 'node:fs';
@@ -33,7 +38,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Limiter } from './src/limiter.mjs';
-import { apiKeyFrom, parseCookies } from './src/secrets.mjs';
+import { apiKeyFrom, parseCookies, randomToken, safeEqual } from './src/secrets.mjs';
 import { AuthStore, InputError, SESSION_RENEW_AFTER_MS, SESSION_TTL_MS } from './src/store.mjs';
 
 const env = process.env;
@@ -42,6 +47,11 @@ const FILE = env.AUTH_FILE || '/browser/settings/auth.json';
 // whether this container has a CDP endpoint (the API key matters at all)
 const CDP = env.ENABLE_CDP !== 'false';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
+// The setup code the first visitor has to know (entrypoint/lib/auth.sh
+// prints it in the container log): reaching the page first is not enough to
+// claim the browser. One of its own (in its log) when started without one.
+const SETUP_CODE_GIVEN = !!env.AUTH_SETUP_CODE;
+const SETUP_CODE = env.AUTH_SETUP_CODE || randomToken(9);
 
 const log = (msg) => console.log(`[auth] ${new Date().toISOString()} ${msg}`);
 const store = new AuthStore(FILE, log);
@@ -137,16 +147,30 @@ function page(req, res, mode, status) {
   send(res, status, html, { 'Content-Type': 'text/html; charset=UTF-8' });
 }
 
-// Checks the current password for a change; throws when it is wrong.
-async function requirePassword(req, password) {
+// Checks a secret the caller has to know against `ok`, rate-limited like the
+// login; throws `message` (403) when it is wrong.
+async function requireSecret(req, ok, message) {
   const address = clientAddress(req);
   const wait = limiter.blockedFor(address);
   if (wait) throw new InputError(`too many failed attempts, try again in ${Math.ceil(wait / 60)} min`, 429);
-  if (!(await store.checkLogin(store.username, password))) {
+  if (!(await ok())) {
     limiter.fail(address);
-    throw new InputError('the current password is wrong', 403);
+    log(`${message} (from ${address})`);
+    throw new InputError(message, 403);
   }
   limiter.succeed(address);
+}
+
+// With the login off, a change of the key or the login needs the key once
+// one is set (see the header).
+async function requireApiKeyWhileOpen(req, given) {
+  if (store.loginOn || !store.apiKeySet) return;
+  await requireSecret(req, () => store.cdpAllowed(typeof given === 'string' ? given : ''), 'the current API key is wrong');
+}
+
+// Checks the current password for a change; throws when it is wrong.
+function requirePassword(req, password) {
+  return requireSecret(req, () => store.checkLogin(store.username, password), 'the current password is wrong');
 }
 
 // --- routes ----------------------------------------------------------------------
@@ -158,6 +182,9 @@ async function api(req, res, name) {
   const body = await readJson(req);
 
   if (name === 'setup' && req.method === 'POST') {
+    if (!store.setUp && !store.broken) {
+      await requireSecret(req, () => typeof body.code === 'string' && safeEqual(body.code.trim(), SETUP_CODE), 'the setup code is wrong');
+    }
     await store.setup(body);
     const headers = store.loginOn ? { 'Set-Cookie': sessionCookie(req, store.newSession()) } : {};
     return send(res, 200, { ok: true }, headers);
@@ -193,6 +220,7 @@ async function api(req, res, name) {
 
   if (name === 'credentials' && req.method === 'PUT') {
     if (store.loginOn) await requirePassword(req, body.currentPassword);
+    else await requireApiKeyWhileOpen(req, body.currentApiKey);
     const { username = '', password = '' } = body;
     if (username === '' && password === '') {
       if (store.loginOn) store.disableLogin();
@@ -202,6 +230,7 @@ async function api(req, res, name) {
     return send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, store.newSession()) });
   }
   if (name === 'apikey' && req.method === 'PUT') {
+    await requireApiKeyWhileOpen(req, body.currentApiKey);
     store.setApiKey(body.apiKey ?? '');
     return send(res, 200, { ok: true });
   }
@@ -210,6 +239,9 @@ async function api(req, res, name) {
 
 async function route(req, res) {
   store.refresh();
+  // like the CDP gateway (respond.mjs: requestPath): only request targets
+  // nginx and the WHATWG URL parser read alike (no backslash, no whitespace)
+  if (!(req.url || '').startsWith('/') || /[\\\x00-\x20\x7f]/.test(req.url)) return send(res, 400, { error: 'malformed request path' });
   const p = new URL(req.url, 'http://auth').pathname;
 
   if (p === '/check/web') {
@@ -247,6 +279,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   let what = 'not set up yet: the web pages show the setup form';
   if (store.broken) what = `LOCKED: ${store.broken}`;
+  else if (!store.setUp && !SETUP_CODE_GIVEN) what += ` (setup code: ${SETUP_CODE})`;
   else if (store.loginOn) what = `login on (user "${store.username}")`;
   else if (store.setUp) what = 'login skipped: the web UI is open';
   log(`listening on 127.0.0.1:${PORT}; ${FILE}: ${what}; CDP API key ${store.apiKeySet ? 'set' : 'not set (CDP open)'}`);

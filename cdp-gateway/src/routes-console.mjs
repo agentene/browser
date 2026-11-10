@@ -34,7 +34,7 @@ export async function consoleRoute(req, res, url) {
     return true;
   }
   if (!p.startsWith('/console/')) return false;
-  const denied = consoleDenied(req);
+  const denied = await consoleDenied(req);
   if (denied) {
     send(res, denied[0], { error: denied[1] });
     return true;

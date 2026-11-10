@@ -37,13 +37,15 @@ cdp_gateway_start() {
     # Selkies' master password, resolved like selkies.sh does (empty = the
     # web UI has no login, so neither has the sidebar). Only the master
     # password: a view-only login must not manage contexts. The gateway gets
-    # its SHA-256 only — all it compares against.
-    local console_password="" console_password_sha256=""
+    # a salted scrypt hash of it only — all it compares against.
+    local console_password="" console_password_hash=""
     if [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] && [ "${SELKIES_ENABLE_BASIC_AUTH:-}" != "false" ]; then
         console_password="${SELKIES_BASIC_AUTH_PASSWORD:-${PASSWORD:-${PASSWD:-}}}"
     fi
     if [ -n "${console_password}" ]; then
-        console_password_sha256="$(printf '%s' "${console_password}" | sha256sum | cut -d' ' -f1)"
+        console_password_hash="$(printf '%s' "${console_password}" \
+            | node "${ENTRYPOINT_HELPERS}/password-hash.mjs")" \
+            || die "could not hash the Selkies password for the CDP console sidebar"
     fi
 
     # Selkies viewers keep the idle timer from closing the main browser
@@ -63,7 +65,7 @@ cdp_gateway_start() {
         CDP_GATEWAY_INTERNAL_PORT="${CDP_GATEWAY_INTERNAL_PORT}" \
         CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX}" CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
-        CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD_SHA256="${console_password_sha256}" \
+        CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD_HASH="${console_password_hash}" \
         CDP_MAIN_CHROMIUM_PID="${CHROMIUM_PID}" CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \
         CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT}" CDP_GATEWAY_VIEWER_PORT="${viewer_port}" \
         CDP_GATEWAY_MAIN_FLAGS_FILE="${CHROMIUM_MAIN_FLAGS_FILE}" \

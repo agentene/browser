@@ -1,17 +1,19 @@
 // Unit tests for the gateway's side-effect-free pieces (node --test).
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { browserExitAction, mayEndBrowser } from '../src/browser-exit.mjs';
+import { browserExitAction, hasEscape, mayEndBrowser } from '../src/browser-exit.mjs';
 import { appId, intEnv } from '../src/config.mjs';
 import { broadcast, MAX_BUFFERED } from '../src/console-live.mjs';
 import { listedAppIds } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
-import { consoleDenied, consoleOriginDenied, passwordDigest } from '../src/console-auth.mjs';
+import { consoleDenied, consoleOriginDenied, hashPassword, verifyPassword } from '../src/console-auth.mjs';
 import { rewriteHost } from '../src/devtools-http.mjs';
+import { requestPath, viaWeb } from '../src/respond.mjs';
 import { connectionsTo } from '../src/idle.mjs';
 import { adjustPrefs, cloned } from '../src/profile.mjs';
 import { cookieKey, cookieParam, originTabs } from '../src/storage-sync.mjs';
@@ -31,59 +33,99 @@ test('appId matches the entrypoint convention', () => {
   assert.equal(appId('context-3'), 'cdp-context-3');
 });
 
-test('rewriteHost swaps the loopback host:port everywhere, nothing else', () => {
+test('rewriteHost swaps the loopback host:port in the address fields only', () => {
   const v = {
     webSocketDebuggerUrl: 'ws://127.0.0.1:9221/devtools/browser/x',
-    list: [{ devtoolsFrontendUrl: '/devtools/inspector.html?ws=127.0.0.1:9221/devtools/page/y' }],
-    other: 'ws://127.0.0.1:9333/z',
+    other: 'ws://127.0.0.1:9221/z',
   };
   assert.deepEqual(rewriteHost(v, 9221, 'example.com:9222'), {
     webSocketDebuggerUrl: 'ws://example.com:9222/devtools/browser/x',
-    list: [{ devtoolsFrontendUrl: '/devtools/inspector.html?ws=example.com:9222/devtools/page/y' }],
-    other: 'ws://127.0.0.1:9333/z',
+    other: 'ws://127.0.0.1:9221/z',
   });
+  const list = [{
+    devtoolsFrontendUrl: '/devtools/inspector.html?ws=127.0.0.1:9221/devtools/page/y',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:9333/devtools/page/z',
+    title: 'http://127.0.0.1:9221/',
+    url: 'http://127.0.0.1:9221/json',
+  }];
+  assert.deepEqual(rewriteHost(list, 9221, 'example.com:9222'), [{
+    devtoolsFrontendUrl: '/devtools/inspector.html?ws=example.com:9222/devtools/page/y',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:9333/devtools/page/z',
+    title: 'http://127.0.0.1:9221/',
+    url: 'http://127.0.0.1:9221/json',
+  }]);
 });
 
 const basic = (user, pw) => `Basic ${Buffer.from(`${user}:${pw}`).toString('base64')}`;
 const req = (headers, method = 'GET') => ({ method, headers });
 
-const PW = passwordDigest('pw');
+const PW = await hashPassword('pw');
 
-test('passwordDigest: SHA-256 hex', () => {
-  assert.equal(passwordDigest('pw'), '30c952fab122c3f9759f02a6d95c3758b246b4fee239957b2d4fee46e26170c4');
+test('hashPassword / verifyPassword: salted scrypt, the auth service\'s format', async () => {
+  assert.match(PW, /^scrypt\$16384\$8\$1\$[\w-]{22}\$[\w-]{43}$/);
+  assert.notEqual(await hashPassword('pw'), PW, 'salted');
+  assert.equal(await verifyPassword('pw', PW), true);
+  assert.equal(await verifyPassword('wrong', PW), false);
+  for (const junk of ['', 'zz', 'scrypt$1$2$3$x$y', '30c952fab122c3f9759f02a6d95c3758b246b4fee239957b2d4fee46e26170c4']) {
+    assert.equal(await verifyPassword('pw', junk), false, junk);
+  }
+  // made by the entrypoint's helper
+  const helper = path.resolve(import.meta.dirname, '../../entrypoint/helpers/password-hash.mjs');
+  const made = execFileSync(process.execPath, [helper], { input: 'p:w $x' }).toString().trim();
+  assert.equal(await verifyPassword('p:w $x', made), true);
 });
 
-test('consoleDenied: reads on the CDP port (no web marker) need nothing', () => {
-  assert.equal(consoleDenied(req({}), PW), null);
-  assert.equal(consoleDenied(req({}, 'HEAD'), PW), null);
+test('consoleDenied: reads on the CDP port (no web marker) need nothing', async () => {
+  assert.equal(await consoleDenied(req({}), PW), null);
+  assert.equal(await consoleDenied(req({}, 'HEAD'), PW), null);
 });
 
-test('consoleDenied: the web port needs the master password', () => {
+test('consoleDenied: the web port needs the master password', async () => {
   const via = { 'x-cdp-console-via': 'web' };
-  assert.equal(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'pw') }), PW), null);
-  assert.equal(consoleDenied(req({ ...via, authorization: basic('anyone', 'pw') }), PW), null);
-  assert.equal(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'p:w') }), passwordDigest('p:w')), null);
-  assert.deepEqual(consoleDenied(req({ ...via, authorization: basic('ubuntu', 'wrong') }), PW), [401, 'unauthorized']);
-  assert.deepEqual(consoleDenied(req(via), PW), [401, 'unauthorized']);
-  assert.deepEqual(consoleDenied(req({ ...via, authorization: 'Bearer pw' }), PW), [401, 'unauthorized']);
+  assert.equal(await consoleDenied(req({ ...via, authorization: basic('ubuntu', 'pw') }), PW), null);
+  assert.equal(await consoleDenied(req({ ...via, authorization: basic('ubuntu', 'pw') }), PW), null, 'remembered');
+  assert.equal(await consoleDenied(req({ ...via, authorization: basic('anyone', 'pw') }), PW), null);
+  assert.equal(await consoleDenied(req({ ...via, authorization: basic('ubuntu', 'p:w') }), await hashPassword('p:w')), null);
+  assert.deepEqual(await consoleDenied(req({ ...via, authorization: basic('ubuntu', 'wrong') }), PW), [401, 'unauthorized']);
+  assert.deepEqual(await consoleDenied(req(via), PW), [401, 'unauthorized']);
+  assert.deepEqual(await consoleDenied(req({ ...via, authorization: 'Bearer pw' }), PW), [401, 'unauthorized']);
   const noColon = `Basic ${Buffer.from('pw').toString('base64')}`;
-  assert.deepEqual(consoleDenied(req({ ...via, authorization: noColon }), PW), [401, 'unauthorized']);
-  // upper-case or malformed digests compare as bytes: a malformed one never matches
-  assert.deepEqual(consoleDenied(req({ ...via, authorization: basic('u', 'pw') }), 'zz'), [401, 'unauthorized']);
+  assert.deepEqual(await consoleDenied(req({ ...via, authorization: noColon }), PW), [401, 'unauthorized']);
+  // a malformed hash never matches
+  assert.deepEqual(await consoleDenied(req({ ...via, authorization: basic('u', 'pw') }), 'zz'), [401, 'unauthorized']);
+  // a header that passed for one hash does not pass for another
+  assert.deepEqual(await consoleDenied(req({ ...via, authorization: basic('ubuntu', 'pw') }), await hashPassword('other')), [401, 'unauthorized']);
   // no password configured: no login
-  assert.equal(consoleDenied(req(via), ''), null);
+  assert.equal(await consoleDenied(req(via), ''), null);
 });
 
-test('consoleDenied: every write needs X-CDP-Console, on either port', () => {
+test('consoleDenied: every write needs X-CDP-Console, on either port', async () => {
   const via = { 'x-cdp-console-via': 'web', authorization: basic('u', 'pw') };
-  assert.deepEqual(consoleDenied(req(via, 'POST'), PW), [403, 'missing X-CDP-Console header']);
-  assert.equal(consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'POST'), PW), null);
-  assert.equal(consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'DELETE'), PW), null);
+  assert.deepEqual(await consoleDenied(req(via, 'POST'), PW), [403, 'missing X-CDP-Console header']);
+  assert.equal(await consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'POST'), PW), null);
+  assert.equal(await consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'DELETE'), PW), null);
   // the CDP port: no password, but the same CSRF guard (a cross-site form POST)
   for (const method of ['POST', 'PATCH', 'DELETE']) {
-    assert.deepEqual(consoleDenied(req({}, method), PW), [403, 'missing X-CDP-Console header']);
-    assert.equal(consoleDenied(req({ 'x-cdp-console': '1' }, method), PW), null);
+    assert.deepEqual(await consoleDenied(req({}, method), PW), [403, 'missing X-CDP-Console header']);
+    assert.equal(await consoleDenied(req({ 'x-cdp-console': '1' }, method), PW), null);
   }
+});
+
+test('requestPath: only targets nginx and the WHATWG parser read alike', () => {
+  const at = (url) => requestPath({ url });
+  assert.equal(at('/json/version'), '/json/version');
+  assert.equal(at('/json/list?x=1'), '/json/list');
+  assert.equal(at('/console/../json/version'), '/json/version'); // nginx resolves it alike
+  assert.equal(at('/console/%2e%2e/json/version'), '/json/version'); // and this
+  assert.equal(at('/x%5Cy'), '/x%5Cy'); // an escaped backslash stays one
+  for (const url of ['/console/..\\json/version', '/console\\..\\devtools/browser/x', '/a\tb', '/a b', '/a\nb', '/a\x7f', 'http://x/json/version', '*', '']) {
+    assert.equal(at(url), null, JSON.stringify(url));
+  }
+});
+
+test('viaWeb: the marker nginx sets on the web port', () => {
+  assert.equal(viaWeb(req({ 'x-cdp-console-via': 'web' })), true);
+  assert.equal(viaWeb(req({})), false);
 });
 
 test('cdpOriginDenied: CDP clients and address-bar visits pass, web pages do not', () => {
@@ -207,6 +249,10 @@ test('browserExitAction / mayEndBrowser: Browser.close is answered, crashes refu
   assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Browser.close"}'), false), true);
   assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Page.navigate"}'), false), false);
   assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Browser.close"}'), true), false);
+  // a JSON escape may hide the name (chromium decodes it): parsed to be sure
+  assert.equal(mayEndBrowser(Buffer.from(String.raw`{"id":1,"method":"Browser.\u0063lose"}`), false), true);
+  assert.equal(mayEndBrowser(Buffer.from(String.raw`{"id":1,"method":"\u0042rowser.crash"}`), false), true);
+  assert.equal(hasEscape(Buffer.from('{"id":1,"method":"Page.navigate"}')), false);
 });
 
 test('originTabs: one tab per http(s) origin', () => {
