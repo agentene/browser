@@ -50,7 +50,8 @@ services:
         - CMD-SHELL
         - >-
           if [ "$${ENABLE_SELKIES:-true}" = false ]; then
-          curl -sf -o /dev/null http://127.0.0.1:${CDP_LISTEN_PORT:-${CDP_PORT:-9222}}/json/version;
+          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${CDP_LISTEN_PORT:-${CDP_PORT:-9222}}/json/version)" in
+          2??|401) true ;; *) false ;; esac;
           else
           case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-${NGINX_HTTP_PORT:-8080}}/)" in
           2??|3??|401) true ;; *) false ;; esac;

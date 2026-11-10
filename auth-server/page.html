@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:,">
+<title>Sign in</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #667085;
+    --line: #e3e6eb; --accent: #2f6fde; --danger: #c43d3d; --chip: #eef2f8;
+    --field: #ffffff; color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e6e9ef; --muted: #98a2b3;
+      --line: #2a313d; --accent: #6b9cf5; --danger: #f07171; --chip: #252c38;
+      --field: #12151b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; place-items: center; padding: 24px 16px;
+  }
+  .card {
+    width: min(400px, 100%); background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 28px 28px 24px; box-shadow: 0 8px 32px rgba(0,0,0,.08);
+  }
+  .top { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .logo {
+    width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; flex: none;
+    background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  }
+  h1 { font-size: 18px; margin: 0; line-height: 1.25; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .seg { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; flex: none; }
+  .seg button {
+    border: none; border-radius: 0; padding: 2px 8px; background: transparent; color: var(--muted);
+    font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  p.lead { margin: 0 0 16px; color: var(--muted); }
+  form { display: grid; gap: 12px; }
+  label { display: grid; gap: 4px; font-size: 13px; font-weight: 500; }
+  input {
+    font: inherit; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--field); color: var(--text); width: 100%;
+  }
+  input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 0; border-color: var(--accent); }
+  button.primary, button.secondary, a.secondary {
+    font: inherit; font-weight: 500; border-radius: 7px; padding: 8px 12px; cursor: pointer; text-align: center;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff; text-decoration: none;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  button.secondary, a.secondary { background: transparent; color: var(--text); border-color: var(--line); }
+  button.secondary:hover, a.secondary:hover { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .6; cursor: default; }
+  .error { color: var(--danger); font-size: 13px; min-height: 0; }
+  .error:empty { display: none; }
+  .or {
+    display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 18px 0 12px;
+  }
+  .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+  .box { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 12px; }
+  /* the rows ui.js mounts (the same classes as in the console's settings menu) */
+  .setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .setting[hidden], [hidden] { display: none !important; }
+  .setting-hint { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+  .box button {
+    font: inherit; font-size: 13px; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--text); white-space: nowrap;
+  }
+  .box button:hover { border-color: var(--accent); color: var(--accent); }
+  .links { display: flex; gap: 8px; margin-top: 16px; }
+  .links a { flex: 1; }
+</style>
+</head>
+<body data-base="{{BASE}}" data-home="{{HOME}}" data-mode="{{MODE}}" data-cdp="{{CDP}}">
+<main class="card">
+  <div class="top">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+    <div><h1 id="title"></h1><div class="sub" id="sub"></div></div>
+    <span class="seg" role="group"><button type="button" data-lang="en" lang="en">EN</button><button type="button" data-lang="zh" lang="zh-CN">中文</button></span>
+  </div>
+
+  <section id="setup" hidden>
+    <p class="lead" id="setup-lead"></p>
+    <form id="setup-form" autocomplete="on">
+      <label><span data-t="username"></span><input name="username" autocomplete="username" required maxlength="64" autofocus></label>
+      <label><span data-t="password"></span><input name="password" type="password" autocomplete="new-password" required minlength="8"></label>
+      <label><span data-t="confirm"></span><input name="confirm" type="password" autocomplete="new-password" required minlength="8"></label>
+      <div class="error"></div>
+      <button class="primary" type="submit" data-t="create"></button>
+    </form>
+    <div class="or" data-t="or"></div>
+    <button class="secondary" type="button" id="skip" style="width:100%" data-t="skip"></button>
+    <p class="hint" data-t="skipHint"></p>
+  </section>
+
+  <section id="login" hidden>
+    <form id="login-form" autocomplete="on">
+      <label><span data-t="username"></span><input name="username" autocomplete="username" required autofocus></label>
+      <label><span data-t="password"></span><input name="password" type="password" autocomplete="current-password" required></label>
+      <div class="error"></div>
+      <button class="primary" type="submit" data-t="signIn"></button>
+    </form>
+    <p class="hint" data-t="forgot"></p>
+  </section>
+
+  <section id="broken" hidden>
+    <p class="lead" data-t="brokenLead"></p>
+    <div class="error" id="broken-msg"></div>
+  </section>
+
+  <section id="account" hidden>
+    <div class="box" id="account-box"></div>
+    <div class="error"></div>
+    <div class="links"><a class="secondary" id="home" href="../" data-t="home"></a></div>
+  </section>
+</main>
+<script>
+  'use strict';
+  const BASE = document.body.dataset.base;
+  const MODE = document.body.dataset.mode;
+  const $ = (sel) => document.querySelector(sel);
+
+  const STRINGS = {
+    en: {
+      setupTitle: 'Welcome', setupSub: 'First start: secure this browser',
+      setupLead: 'Create the administrator login for the remote desktop and the CDP console. You can change it later in the console settings.',
+      loginTitle: 'Sign in', loginSub: 'Remote desktop & CDP console',
+      brokenTitle: 'Login locked', brokenSub: 'Configuration error',
+      brokenLead: 'The login configuration cannot be read, so the web UI and the CDP endpoint stay locked. Fix the file, or delete it to set the login up again:',
+      accountTitle: 'Account', accountSub: 'Login and CDP API key',
+      username: 'User name', password: 'Password', confirm: 'Repeat the password',
+      create: 'Create login', or: 'or', skip: 'Continue without a login',
+      skipHint: 'Without a login, anyone who can reach this page can use the desktop and the console. You can set a login up later in the console settings.',
+      skipConfirm: 'Use the web UI without a login? Anyone who can reach it can then use it.',
+      signIn: 'Sign in', mismatch: 'The two passwords do not match.',
+      forgot: 'Forgot it? Delete /browser/settings/auth.json in the container (or the browser data directory on the host) to set the login up again.',
+      home: 'Back', signInFirst: 'Sign in first.',
+    },
+    zh: {
+      setupTitle: '欢迎', setupSub: '首次启动：为浏览器设置访问保护',
+      setupLead: '为远程桌面和 CDP 控制台创建管理员账号。之后可以在控制台的设置中修改。',
+      loginTitle: '登录', loginSub: '远程桌面与 CDP 控制台',
+      brokenTitle: '登录已锁定', brokenSub: '配置错误',
+      brokenLead: '无法读取登录配置，Web 界面和 CDP 接口保持锁定。请修复该文件，或删除它以重新设置登录：',
+      accountTitle: '账号', accountSub: '登录与 CDP API Key',
+      username: '用户名', password: '密码', confirm: '再次输入密码',
+      create: '创建账号', or: '或', skip: '跳过，不启用登录',
+      skipHint: '不启用登录时，任何能访问此页面的人都可以使用桌面和控制台。之后可以在控制台的设置中再设置登录。',
+      skipConfirm: '不启用登录直接使用 Web 界面？任何能访问它的人都可以使用。',
+      signIn: '登录', mismatch: '两次输入的密码不一致。',
+      forgot: '忘记密码？删除容器内的 /browser/settings/auth.json（或宿主机浏览器数据目录下的同名文件）即可重新设置。',
+      home: '返回', signInFirst: '请先登录。',
+    },
+  };
+  const LANG_KEY = 'cdp-console-lang'; // shared with the CDP console
+  let lang = '';
+  try { lang = localStorage.getItem(LANG_KEY) || ''; } catch { /* storage blocked */ }
+  if (!STRINGS[lang]) lang = navigator.languages?.find((l) => /^(zh|en)\b/i.test(l))?.slice(0, 2).toLowerCase() || 'en';
+  const t = (key) => STRINGS[lang][key];
+  // the auth service's error messages, in Chinese (prefix match)
+  const ZH_ERRORS = [
+    ['wrong user name or password', '用户名或密码错误'],
+    ['the current password is wrong', '当前密码错误'],
+    ['too many failed attempts', '失败次数过多，请稍后再试'],
+    ['the password needs at least 8 characters', '密码至少需要 8 个字符'],
+    ['the user name is empty', '用户名不能为空'],
+    ['the user name may not contain', '用户名不能包含空格、冒号或控制字符'],
+    ['the API key needs at least 8 characters', 'API Key 至少需要 8 个字符'],
+    ['the API key may only contain', 'API Key 只能包含可见 ASCII 字符（不含空格）'],
+    ['already set up', '已经设置过了，请刷新页面'],
+    ['sign in first', '请先登录'],
+  ];
+  const localize = (msg) => (lang === 'zh' ? ZH_ERRORS.find(([en]) => String(msg).startsWith(en))?.[1] : null) || msg;
+
+  function setLang(next, save) {
+    lang = next;
+    if (save) {
+      try { localStorage.setItem(LANG_KEY, lang); } catch { /* storage blocked */ }
+    }
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+    const mode = MODE === 'reload' ? 'login' : MODE;
+    $('#title').textContent = t(`${mode}Title`);
+    $('#sub').textContent = t(`${mode}Sub`);
+    document.title = t(`${mode}Title`);
+    $('#setup-lead').textContent = t('setupLead');
+    for (const node of document.querySelectorAll('[data-t]')) node.textContent = t(node.dataset.t);
+    for (const b of document.querySelectorAll('[data-lang]')) b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+    window.AgenteneAuth?.setLang(lang);
+  }
+  for (const b of document.querySelectorAll('[data-lang]')) b.addEventListener('click', () => setLang(b.dataset.lang, true));
+
+  async function post(name, body) {
+    const res = await fetch(`${BASE}api/${name}`, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(localize(data.error || `HTTP ${res.status}`));
+    return data;
+  }
+
+  // Submit a form; on success the page the visitor asked for loads in place.
+  function wire(form, name, values) {
+    const error = form.querySelector('.error');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.textContent = '';
+      const body = values(new FormData(form));
+      if (!body) return;
+      const button = form.querySelector('button[type=submit]');
+      button.disabled = true;
+      try {
+        await post(name, body);
+        location.reload();
+      } catch (err) {
+        error.textContent = err.message;
+        button.disabled = false;
+      }
+    });
+  }
+
+  wire($('#setup-form'), 'setup', (f) => {
+    if (f.get('password') !== f.get('confirm')) {
+      $('#setup-form .error').textContent = t('mismatch');
+      return null;
+    }
+    return { username: f.get('username'), password: f.get('password') };
+  });
+  wire($('#login-form'), 'login', (f) => ({ username: f.get('username'), password: f.get('password') }));
+  $('#skip').addEventListener('click', async () => {
+    if (!confirm(t('skipConfirm'))) return;
+    try {
+      await post('setup', { skip: true });
+      location.reload();
+    } catch (err) {
+      $('#setup-form .error').textContent = err.message;
+    }
+  });
+
+  async function account() {
+    const res = await fetch(`${BASE}api/state`, { cache: 'no-store', credentials: 'same-origin' });
+    const state = await res.json();
+    $('#home').href = document.body.dataset.home;
+    if (!state.authorized) {
+      $('#account .error').textContent = state.broken || t('signInFirst');
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = `${BASE}ui.js`;
+    script.onload = () => {
+      window.AgenteneAuth.setLang(lang);
+      window.AgenteneAuth.mount({ menu: $('#account-box'), root: document.body, onError: (err) => { $('#account .error').textContent = err ? err.message : ''; } });
+    };
+    document.head.append(script);
+  }
+
+  if (MODE === 'reload') location.reload();
+  const section = { setup: '#setup', login: '#login', reload: '#login', broken: '#broken', account: '#account' }[MODE];
+  $(section).hidden = false;
+  if (MODE === 'broken') $('#broken-msg').textContent = '/browser/settings/auth.json';
+  if (MODE === 'account') account();
+  setLang(lang, false);
+</script>
+</body>
+</html>

@@ -94,6 +94,17 @@
 #                                and is visible live in the Selkies stream)
 #   ENABLE_SELKIES=true          set false to skip Selkies + display + audio
 #   ENABLE_CDP=true              set false to skip Chromium + the CDP gateway
+#   ENABLE_AUTH=true             built-in login (auth.sh): the web UI and the
+#                                CDP console need a session — the first visit
+#                                sets up the administrator login (or skips
+#                                it) — and the CDP API needs the API key once
+#                                one is set (Authorization: Bearer <key> or
+#                                X-API-Key). Login, skip choice and key are
+#                                changed in the console's settings and
+#                                persisted in /browser/settings/auth.json.
+#                                false = no login, no API key (the CDP
+#                                endpoint and the web UI are open, as before)
+#   AUTH_INTERNAL_PORT=9219      auth service loopback port (behind nginx)
 #   PORT_FORWARDS=""             extra reverse proxies served by nginx, e.g.
 #                                "3080=peer:80 6080=other:6080" (space or
 #                                comma separated): each LISTEN=HOST:PORT entry
@@ -121,7 +132,8 @@
 # Fixed by the image (no knobs; an env value is ignored): the browser data
 # paths (profile /browser/user-data, isolated-context clones
 # /browser/contexts, the CDP console's persisted settings
-# /browser/settings/settings.json — settings.sh), the TLS pair /etc/nginx/tls/{fullchain,privkey}.pem
+# /browser/settings/settings.json — settings.sh — and the login + API key
+# /browser/settings/auth.json — auth.sh), the TLS pair /etc/nginx/tls/{fullchain,privkey}.pem
 # (self-signed CN=localhost), the first X display tried (:0), the Xvfb RandR
 # ceiling (8192x4096x24), picom + the chromium screen follower on X11, the
 # wlr-screencopy capture of labwc, the Selkies device interposers in the
@@ -137,6 +149,7 @@ config_load() {
     config_tls
     config_chromium
     config_cdp_gateway
+    config_auth
     config_check_ports
     config_runtime_env
 }
@@ -273,12 +286,25 @@ config_cdp_gateway() {
     fi
 }
 
+config_auth() {
+    # The built-in login + CDP API key (auth.sh); its state is console-managed
+    # and persisted next to the console settings, on the /browser mount.
+    ENABLE_AUTH="${ENABLE_AUTH:-true}"
+    case "${ENABLE_AUTH}" in
+        true|false) : ;;
+        *) die "ENABLE_AUTH='${ENABLE_AUTH}' must be true or false" ;;
+    esac
+    AUTH_INTERNAL_PORT="${AUTH_INTERNAL_PORT:-9219}" # auth service loopback port (behind nginx)
+    AUTH_FILE="/browser/settings/auth.json"
+}
+
 # Every port knob must be a plain TCP port number; a typo would otherwise
 # only surface as an obscure nginx/selkies/chromium startup failure.
 config_check_ports() {
     local port_var port_val
     for port_var in NGINX_LISTEN_HTTP_PORT NGINX_LISTEN_HTTPS_PORT CDP_LISTEN_PORT \
-                    SELKIES_INTERNAL_PORT CDP_INTERNAL_PORT CDP_GATEWAY_INTERNAL_PORT; do
+                    SELKIES_INTERNAL_PORT CDP_INTERNAL_PORT CDP_GATEWAY_INTERNAL_PORT \
+                    AUTH_INTERNAL_PORT; do
         port_val="${!port_var}"
         case "${port_val}" in
             ''|*[!0-9]*) die "${port_var}='${port_val}' is not a port number" ;;

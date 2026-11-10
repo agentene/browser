@@ -11,21 +11,22 @@ Chrome for Testing browser, a live-viewable Selkies remote desktop, and a
 public CDP endpoint behind one nginx front door. It is an infrastructure
 repo, not an application codebase: the deliverables are a Dockerfile, a bash
 PID-1 supervisor, compose files, a Node version-sync script, and mirrored
-bilingual docs. Apart from the CDP gateway's small `node --test` suite
-there are no unit tests — "testing" means static lint + image build +
+bilingual docs. Apart from the small `node --test` suites of the CDP gateway
+and the auth server there are no unit tests — "testing" means static lint + image build +
 runtime smoke tests.
 
 | Path | Role |
 | --- | --- |
 | `Dockerfile` | Single-stage ubuntu:26.04 image: Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
 | `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages labwc (or Xvfb → picom) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
-| `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `settings` (the CDP console's persisted settings, `/browser/settings/settings.json` — no env knobs; applied at start), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `audio`, `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
+| `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `settings` (the CDP console's persisted settings, `/browser/settings/settings.json` — no env knobs; applied at start), `auth` (the built-in login + CDP API key service, `ENABLE_AUTH`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `audio`, `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
 | `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, the new-windows-to-the-front switch, chromium prefs seeding, the orderly Browser.close the supervisor's stop hook runs) — formerly heredocs in the entrypoint |
 | `.shellcheckrc` | Lets shellcheck follow the module `source` statements |
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | The commonly changed runtime knobs, documented (the full reference is the READMEs' Configuration section + `entrypoint/lib/config.sh`) |
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies and CDP are both on), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
+| `auth-server/` | Built-in login + CDP API key (`ENABLE_AUTH=true`, default): `server.mjs` (dependency-free Node service on loopback that nginx asks about every web UI / console request — `check/web`, a session cookie — and every CDP request — `check/cdp`, the API key once one is set — via `auth_request`; also serves the setup/login form nginx shows in place on 401, the account page and the auth API under `<subfolder>/__auth/` and `/__auth/`), `src/` (`store.mjs`: `/browser/settings/auth.json`, scrypt/SHA-256 hashes, sessions; `secrets.mjs`; `limiter.mjs`), `page.html` (setup/login/account page), `ui.js` (the console's *Access* rows + dialogs, loaded by `dashboard.html` and `panel.js`), `test/` (`node --test`, not shipped) |
 | `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Release tags are `v<VERSION>` (code) and `v<VERSION>-<chrome-version>` (Chrome bump) — see [Releases](#releases) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland, X11) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
@@ -49,6 +50,8 @@ grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION                   # X.Y.Z, one line
 node --check update-chrome-node.mjs
 for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
+for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js; do node --check "$f"; done
+npm test --prefix auth-server                                  # auth server unit tests (no deps)
 node --check entrypoint/helpers/chromium-close.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .
@@ -78,7 +81,7 @@ one (`DISPLAY_BACKEND=x11`) — see the `verify` job in `ci.yaml`.
 
 When a smoke test fails: container logs live in `/tmp/*.log` (`xvfb.log`,
 `labwc.log`, `picom.log`, `chromium.log`, `pulseaudio.log`,
-`cdp-gateway.log`, `nginx/error.log`, …); `docker logs` shows the
+`cdp-gateway.log`, `auth-server.log`, `nginx/error.log`, …); `docker logs` shows the
 entrypoint's own output plus Selkies' and nginx's stdout/stderr (both run
 with `start_service -`).
 
@@ -166,6 +169,17 @@ node update-chrome-node.mjs --node 22        # force the Node major
 * **TLS policy:** reuse any parseable cert/key pair that belongs together
   (self-signed counts as valid); self-sign ONLY when no usable pair exists;
   a broken pair fails fast, never gets silently replaced.
+* **Built-in login (`ENABLE_AUTH`).** nginx stays the only enforcement
+  point: every web UI request and the CDP port's `/console` go through
+  `auth_request` to the auth service's `check/web`, the CDP API through
+  `check/cdp`; on 401 nginx serves the auth service's page in place (no
+  redirects, so subfolders and the console URL just work). Its own
+  locations are exempt (`auth_request off`). The CDP API stays open while no
+  API key is set, so CDP clients never need changes by default; the session
+  cookie never opens the CDP API. Its state is console-managed in
+  `/browser/settings/auth.json` — no env knobs besides the on/off switch.
+  Internal tools must talk to loopback internals, never to the public CDP
+  port (it may need a key).
 * **The CDP gateway always owns the CDP port** (not a knob — there is
   no direct nginx → chromium path). nginx proxies the whole CDP listener
   to the gateway without `sub_filter`; the gateway itself rewrites the

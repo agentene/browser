@@ -13,6 +13,11 @@
 # plus one listener per PORT_FORWARDS entry (same-network peers, see
 # nginx_parse_port_forwards). Every proxy is WebSocket-capable (CDP and
 # Selkies signaling both need it).
+# With the built-in login (ENABLE_AUTH, auth.sh) every web UI request and the
+# CDP port's /console are checked with the auth service first (auth_request:
+# a session, else its setup/login form in place), the CDP API with its API
+# key; <subfolder>/__auth/ (web) and /__auth/ (CDP port) proxy to its pages
+# and API. PORT_FORWARDS listeners are not covered.
 #
 # There is no static config: it is generated into NGINX_CONF at every start
 # and checked with `nginx -t` before nginx runs.
@@ -64,6 +69,9 @@ nginx_plan_ports() {
     if [ "${ENABLE_CDP}" = "true" ]; then
         LISTEN_PORTS+=("${CDP_LISTEN_PORT}")
         UPSTREAM_PORTS+=("${CDP_INTERNAL_PORT}" "${CDP_GATEWAY_INTERNAL_PORT}")
+    fi
+    if [ "${ENABLE_AUTH}" = "true" ]; then
+        UPSTREAM_PORTS+=("${AUTH_INTERNAL_PORT}")
     fi
     return 0
 }
@@ -231,6 +239,13 @@ $(nginx_cdp_console_locations)"
             return 301 ${SELKIES_SUBFOLDER}/;
         }"
     fi
+    if [ "${ENABLE_AUTH}" = "true" ]; then
+        locations="        # built-in login: a session for everything but the auth pages
+        auth_request /.agentene-auth/web;
+        error_page 401 = @agentene_login;
+${locations}
+$(nginx_auth_locations "${SELKIES_SUBFOLDER}/__auth/" "${SELKIES_SUBFOLDER}/")"
+    fi
     cat <<EOF
     # web UI over plain HTTP (always on)
     server {
@@ -300,32 +315,112 @@ ${fwd_headers}
 EOF
 }
 
-# The CDP listener, through the CDP gateway.
+# The CDP listener, through the CDP gateway. With the built-in login the
+# CDP API needs the API key (if one is set) and /console a session, like the
+# web UI.
 nginx_cdp_server() {
-    cat <<EOF
-    # public CDP endpoint, via the CDP gateway
-    server {
-        listen ${LISTEN_PREFIX}${CDP_LISTEN_PORT};
-        server_name _;
-        location / {
-            # The CDP gateway talks to the main chromium (and to every
-            # context browser) itself: it rewrites the Host header to the
-            # loopback upstream and the ws:// URLs in JSON bodies back to
-            # the Host the client dialed — so pass that Host through as-is.
-            # The console marker of the web UI's cdp-console/ proxy must not
-            # be forgeable from here (the CDP port has no login anyway), and
-            # setting it drops the http-level headers, so repeat those.
-            proxy_set_header X-CDP-Console-Via "";
+    # The CDP gateway talks to the main chromium (and to every context
+    # browser) itself: it rewrites the Host header to the loopback upstream
+    # and the ws:// URLs in JSON bodies back to the Host the client dialed —
+    # so pass that Host through as-is. The console marker of the web UI's
+    # cdp-console/ proxy must not be forgeable from here, and setting it
+    # drops the http-level headers, so repeat those.
+    local gateway="            proxy_set_header X-CDP-Console-Via \"\";
             proxy_set_header Host \$http_host;
             proxy_set_header X-Real-IP \$remote_addr;
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto \$scheme;
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection \$connection_upgrade;
-            proxy_pass http://127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT};
+            proxy_pass http://127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT};"
+    if [ "${ENABLE_AUTH}" != "true" ]; then
+        cat <<EOF
+    # public CDP endpoint, via the CDP gateway
+    server {
+        listen ${LISTEN_PREFIX}${CDP_LISTEN_PORT};
+        server_name _;
+        location / {
+${gateway}
         }
     }
 EOF
+        return 0
+    fi
+    cat <<EOF
+    # public CDP endpoint, via the CDP gateway
+    server {
+        listen ${LISTEN_PREFIX}${CDP_LISTEN_PORT};
+        server_name _;
+        # the CDP API (/json/*, /devtools/*): the API key, once one is set
+        location / {
+            auth_request /.agentene-auth/cdp;
+            error_page 401 = @agentene_cdp_denied;
+${gateway}
+        }
+        # the CDP console: a session, like the web UI
+        location /console {
+            auth_request /.agentene-auth/web;
+            error_page 401 = @agentene_login;
+${gateway}
+        }
+        location @agentene_cdp_denied {
+            default_type application/json;
+            add_header WWW-Authenticate 'Bearer realm="CDP"' always;
+            return 401 '{"error":"CDP API key missing or wrong: send it as Authorization: Bearer <key> or X-API-Key: <key>"}\n';
+        }
+$(nginx_auth_locations /__auth/ /console/)
+    }
+EOF
+}
+
+# nginx_auth_locations <public base> <home>: the auth service's locations in
+# a server — its public pages + API under <base> (prefix stripped), the
+# internal checks auth_request asks, and the setup/login form nginx serves
+# in place of a page that needs a session (401; <home> is where its account
+# page links back to). Every one of them is exempt from the server's own
+# auth_request. The checks get the original request's headers (cookie,
+# API key, Origin) without its body or WebSocket upgrade.
+nginx_auth_locations() {
+    local base="$1" home="$2" check
+    local headers="            proxy_set_header Host \$http_host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_set_header Upgrade \"\";
+            proxy_set_header Connection \"\";"
+    cat <<EOF
+        # built-in login (auth.sh): setup/login forms, account page, API, ui.js
+        location ${base} {
+            auth_request off;
+${headers}
+            proxy_set_header X-Auth-Base "${base}";
+            proxy_set_header X-Auth-Home "${home}";
+            proxy_pass http://127.0.0.1:${AUTH_INTERNAL_PORT}/;
+        }
+        location @agentene_login {
+            auth_request off;
+${headers}
+            proxy_set_header X-Auth-Base "${base}";
+            proxy_set_header X-Auth-Home "${home}";
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            rewrite ^ /page break;
+            proxy_pass http://127.0.0.1:${AUTH_INTERNAL_PORT};
+        }
+EOF
+    for check in web cdp; do
+        cat <<EOF
+        location = /.agentene-auth/${check} {
+            internal;
+            auth_request off;
+${headers}
+            proxy_set_header X-Original-Method \$request_method;
+            proxy_set_header X-Original-Upgrade \$http_upgrade;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_pass http://127.0.0.1:${AUTH_INTERNAL_PORT}/check/${check};
+        }
+EOF
+    done
 }
 
 # nginx_forward_server <listen> <host:port> <resolver>: one PORT_FORWARDS block.

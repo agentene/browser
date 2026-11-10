@@ -35,6 +35,7 @@ docker run ─┬─ labwc       virtual Wayland desktop (what Selkies streams; 
 - [Connecting Playwright over CDP](#connecting-playwright-over-cdp)
 - [CDP gateway (isolated contexts with your logins)](#cdp-gateway-isolated-contexts-with-your-logins)
 - [Watching the desktop](#watching-the-desktop)
+- [Login and CDP API key](#login-and-cdp-api-key)
 - [Configuration](#configuration)
   - [Build arguments](#build-arguments)
   - [Environment variables](#environment-variables)
@@ -117,7 +118,7 @@ Two independent sets of variables, both set in `.env`: the **container-side** po
 | Web UI (HTTPS, opt-in) | 443                      | `NGINX_LISTEN_HTTPS_PORT` | 8443                | `NGINX_HTTPS_PORT` + [HTTPS](#https) |
 | Chromium CDP           | 9222                     | `CDP_LISTEN_PORT`         | 9222                | `CDP_PORT`                           |
 
-Changing the container-side ports is mainly useful with `network_mode: host` / a shared network namespace, or when peers on the docker network expect specific ports; with plain port publishing the defaults are fine. They must not collide with each other, with `PORT_FORWARDS` listeners, or with the loopback-only `SELKIES_INTERNAL_PORT` / `CDP_INTERNAL_PORT` / `CDP_GATEWAY_INTERNAL_PORT` (the [CDP gateway](#cdp-gateway-isolated-contexts-with-your-logins)) — the entrypoint fails fast on a clash. With `docker run`, pass them via `-e` and adjust `-p` to match (e.g. `-e CDP_LISTEN_PORT=9333 -p 9222:9333`).
+Changing the container-side ports is mainly useful with `network_mode: host` / a shared network namespace, or when peers on the docker network expect specific ports; with plain port publishing the defaults are fine. They must not collide with each other, with `PORT_FORWARDS` listeners, or with the loopback-only `SELKIES_INTERNAL_PORT` / `CDP_INTERNAL_PORT` / `CDP_GATEWAY_INTERNAL_PORT` / `AUTH_INTERNAL_PORT` (the [CDP gateway](#cdp-gateway-isolated-contexts-with-your-logins)) — the entrypoint fails fast on a clash. With `docker run`, pass them via `-e` and adjust `-p` to match (e.g. `-e CDP_LISTEN_PORT=9333 -p 9222:9333`).
 
 On top of these ports, `PORT_FORWARDS` adds extra listeners that are reverse-proxied to sibling containers on the docker network — see [Docker network (compose)](#docker-network-compose). With host networking there is no publishing at all and the container-side ports are bound on the host directly — see [Host network (compose)](#host-network-compose).
 
@@ -152,6 +153,7 @@ Notes:
 * The default context uses the **persisted profile**, so logins and cookies carry over between runs.
 * `curl http://localhost:9222/json/version` is the quickest health check.
 * Puppeteer works the same way: `puppeteer.connect({ browserURL: "http://localhost:9222" })`.
+* Once a [CDP API key](#login-and-cdp-api-key) is set, pass it as a header: `chromium.connectOverCDP(url, { headers: { Authorization: "Bearer <key>" } })` (Puppeteer: `connect({ browserURL, headers })`; `examples/connect-playwright.mjs` reads `CDP_API_KEY`). Without one the endpoint stays open, as before.
 
 ## CDP gateway (isolated contexts with your logins)
 
@@ -210,7 +212,7 @@ Limits:
 
 Open <http://localhost:8080>. Selkies streams the virtual display (with audio) straight into the browser tab — keyboard and mouse input go to the container. Since Chromium runs headed by default (`CHROMIUM_HEADLESS=0`), every automation step is visible in the stream. Set `CHROMIUM_LANG`/`CHROMIUM_START_URL` to control the initial browser state.
 
-Protect the stream with a login screen by setting a password (`SELKIES_BASIC_AUTH_PASSWORD`, username defaults to `ubuntu` — see [Environment variables](#environment-variables)).
+The first visit asks you to set up the administrator login (or to skip it) — see [Login and CDP API key](#login-and-cdp-api-key).
 
 ### Serving under a subpath
 
@@ -232,6 +234,18 @@ location /desk/ {
     proxy_read_timeout 86400s;
 }
 ```
+
+## Login and CDP API key
+
+With `ENABLE_AUTH=true` (the default) a small built-in auth service sits behind nginx:
+
+* **First start.** Until it is set up, the web UI and the CDP console (`/console/` on the CDP port) show a setup form instead: create the administrator user name + password (8+ characters), or choose **Continue without a login** — that choice is saved too, and the web UI stays open as before. Whoever reaches the page first sets it up, so do it right after the first start.
+* **Login.** With a login, every web UI request (the Selkies page and its WebSockets, the console sidebar) and the CDP port's console need a session: anything else gets the login form in place (HTTP 401). The session is an `HttpOnly`, `SameSite=Lax` cookie valid for 7 days; it is shared by the web and the CDP port of the same host. Cross-origin writes and WebSockets that carry it are refused (403). After 10 failed passwords from one address within 15 minutes that address gets 429 until the window ends.
+* **CDP API key.** Optional. Once set, the CDP API (`/json/*`, `/devtools/*` on the CDP port) needs it in a header — `Authorization: Bearer <key>` or `X-API-Key: <key>` — and answers 401 without; empty = no key, the CDP endpoint is open (the default, so existing clients keep working). The session cookie does not open the CDP API.
+* **Changing them.** The console's settings menu (the gear in `/console/` and in the sidebar on the Selkies page) has an *Access* group: **Login → Change…** (current password, new user name + password; leave the user name and both password fields empty to turn the login off — or set one up when it was skipped), **CDP API key → Change…** (type one or *Generate* a random one, *Copy*; empty removes it) and **Log out**. Changing the login signs every other session out. Without the console (`ENABLE_CDP=false`) the same controls are on the account page, `<web UI>/__auth/`.
+* **Where it is kept.** `/browser/settings/auth.json` on the `/browser` mount (mode 0600): the password as a salted scrypt hash, the API key as a SHA-256 hash (it cannot be shown again — copy it when you set it), the session secret. It survives restarts and re-creation and has no environment variables. **Forgot the password?** Delete the file (`docker compose exec browser rm /browser/settings/auth.json`, or `./browser/settings/auth.json` on the host): the next visit shows the setup form again, no restart needed. A file that exists but cannot be parsed locks the web UI and the CDP API until it is fixed or deleted.
+
+`ENABLE_AUTH=false` turns all of it off: no setup form, no login, no API key — the web UI and the CDP endpoint are open as in earlier versions. Selkies' own Basic Auth (`SELKIES_BASIC_AUTH_PASSWORD`) still works independently of the built-in login (both apply when both are on). `PORT_FORWARDS` listeners are not covered by the login.
 
 ## Configuration
 
@@ -258,6 +272,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | ---------------- | ------- | --------------------------------------------------------------------- |
 | `ENABLE_SELKIES` | `true`  | `false` = skip web UI + display + audio (CDP-only container)          |
 | `ENABLE_CDP`     | `true`  | `false` = skip Chromium + CDP gateway (remote-desktop-only container) |
+| `ENABLE_AUTH`    | `true`  | built-in login for the web UI + CDP console and the optional CDP API key, managed in the console (see [Login and CDP API key](#login-and-cdp-api-key)); `false` = everything open |
 
 **Web UI / TLS**
 
@@ -316,6 +331,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | --------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDP_CONTEXTS_MAX`          | `4`                         | most isolated contexts alive at once (each is a whole browser); further ones fail with a CDP error                                                                              |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | gateway loopback port (behind nginx)                                                                                                                                            |
+| `AUTH_INTERNAL_PORT`        | `9219`                      | loopback port of the built-in auth service (behind nginx; `ENABLE_AUTH=true`) |
 
 **Desktop / container**
 
@@ -426,6 +442,7 @@ When it does not help: without a GPU everything runs in software either way and 
 | Host path (compose)    | Container path         | Content                                                                    |
 | ---------------------- | ---------------------- | -------------------------------------------------------------------------- |
 | `./browser/user-data`  | `/browser/user-data`   | Chromium profile: cookies, logins, extensions, `navigator.language` prefs  |
+| `./browser/settings`   | `/browser/settings`    | the console's settings (`settings.json`) and the [login + CDP API key](#login-and-cdp-api-key) (`auth.json`) |
 | `./browser/contexts`   | `/browser/contexts`    | [CDP gateway](#cdp-gateway-isolated-contexts-with-your-logins) browser contexts — one profile clone each (wiped at every start) |
 | `./tls`                | `/etc/nginx/tls`       | TLS certificates (yours or the generated self-signed pair); only with `compose.https.yaml` |
 
@@ -454,7 +471,7 @@ PORT_FORWARDS=3080=web:80
 #PORT_FORWARDS=3080=web:80 6080=onlyoffice-documentserver:80
 ```
 
-The forwards are served by the same nginx front door (no extra process): WebSocket-capable, per-request DNS resolution via the container's DNS server (docker's embedded DNS on compose networks) — this container starts fine while a peer is still down (requests 502 until the peer answers) and follows a recreated peer's new IP. A forward listen port must not collide with `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` (80/443/9222 by default), the loopback internals (`SELKIES_INTERNAL_PORT` 8081, `CDP_INTERNAL_PORT` 9221, `CDP_GATEWAY_INTERNAL_PORT` 9220) or any other forward — the entrypoint refuses to start on a clash.
+The forwards are served by the same nginx front door (no extra process): WebSocket-capable, per-request DNS resolution via the container's DNS server (docker's embedded DNS on compose networks) — this container starts fine while a peer is still down (requests 502 until the peer answers) and follows a recreated peer's new IP. A forward listen port must not collide with `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` (80/443/9222 by default), the loopback internals (`SELKIES_INTERNAL_PORT` 8081, `CDP_INTERNAL_PORT` 9221, `CDP_GATEWAY_INTERNAL_PORT` 9220, `AUTH_INTERNAL_PORT` 9219) or any other forward — the entrypoint refuses to start on a clash.
 
 ### Host network (compose)
 
@@ -470,7 +487,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # recommended: keep CDP + web UI off the network
 What changes in this mode:
 
 * Nothing is published; nginx binds its ports on the host directly. `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` default to `NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` / `CDP_PORT` (8080 / 8443 / 9222), so the URLs stay the same as in bridge mode; set them explicitly to override. HTTPS needs only `ENABLE_HTTPS=true` (`compose.https.yaml` is not needed; its port mapping is dropped).
-* The loopback-only internals — `SELKIES_INTERNAL_PORT` (8081), `CDP_INTERNAL_PORT` (9221) and `CDP_GATEWAY_INTERNAL_PORT` (9220) — sit on the host's loopback as well (context browsers pick free ports themselves). Move them in `.env` if your own apps use those ports; a bind failure stops the container.
+* The loopback-only internals — `SELKIES_INTERNAL_PORT` (8081), `CDP_INTERNAL_PORT` (9221), `CDP_GATEWAY_INTERNAL_PORT` (9220) and `AUTH_INTERNAL_PORT` (9219) — sit on the host's loopback as well (context browsers pick free ports themselves). Move them in `.env` if your own apps use those ports; a bind failure stops the container.
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` and `hostname` do not apply. `PORT_FORWARDS` still works but resolves names through the host's DNS (container names do not resolve) — usually you just point the browser at `localhost:<port>` directly.
 * With `DISPLAY_BACKEND=x11`, if the host runs its own X server on `:0`, the entrypoint picks the next free display automatically. Xvfb listens on its filesystem socket only, so host processes cannot attach to the unauthenticated container display.
 
@@ -549,9 +566,9 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 
 ## Security considerations
 
-* **The CDP endpoint has no authentication.** Full browser control is one TCP connect away — publish `9222` on localhost or a trusted network only, never on a public IP. With [host networking](#host-network-compose) there is no port mapping to restrict this; use `NGINX_LISTEN_ADDR=127.0.0.1`.
-* **CDP gateway contexts inherit your real logins.** Every isolated client starts out signed in wherever the main browser is. That is the point of the feature, and it is also the risk: hand the CDP endpoint only to automation you would trust with those accounts. The `/console/` page and its API share the CDP port's (lack of) authentication. The sidebar copy on the web UI port (`cdp-console/`) follows the Selkies login instead: master password only, open when the web UI has no login.
-* **The web UI is unauthenticated by default.** Set `SELKIES_BASIC_AUTH_PASSWORD` whenever the stream is reachable by anyone you don't trust; use HTTPS alongside it (plain HTTP + basic auth leaks the password).
+* **The CDP endpoint is open until you set a [CDP API key](#login-and-cdp-api-key).** Without one, full browser control is one TCP connect away. Even with one, publish `9222` on localhost or a trusted network only (or behind TLS: the key travels in a header, in clear text over plain HTTP). With [host networking](#host-network-compose) there is no port mapping to restrict this; use `NGINX_LISTEN_ADDR=127.0.0.1`.
+* **CDP gateway contexts inherit your real logins.** Every isolated client starts out signed in wherever the main browser is. That is the point of the feature, and it is also the risk: hand the CDP endpoint only to automation you would trust with those accounts. The `/console/` page and its API follow the [built-in login](#login-and-cdp-api-key) (open when it is skipped or `ENABLE_AUTH=false`). The sidebar copy on the web UI port (`cdp-console/`) follows the built-in login as well, and additionally Selkies' master password when `SELKIES_BASIC_AUTH_PASSWORD` is set.
+* **Set up the login right after the first start.** Until then the first visitor of the web UI or the console can set it up (or skip it). Skipping leaves the web UI open to everyone who can reach it. Use HTTPS alongside the login whenever the web UI leaves a trusted network (plain HTTP sends the password and the session cookie in clear text).
 * Chromium runs with `--no-sandbox` (standard for containerized Chrome without a seccomp profile that allows userns); run the container as a dedicated user/VM you'd be comfortable exposing a browser to.
 * Generated TLS keys are self-signed — browsers will warn; that is expected. Bring a real certificate for anything public.
 * The container runs as **root** by default (the entrypoint is PID 1 and binds the privileged ports 80/443 by default). Set `RUN_USER` (see [Privilege drop (`RUN_USER`)](#privilege-drop-run_user)) to move the desktop stack and the nginx workers off root — PID 1 and the nginx master remain root by design. `--security-opt=no-new-privileges` works as-is. `--cap-drop=ALL` on its own stops the container from starting (the entrypoint and nginx still chown, switch uids and bind 80); add back what the startup needs:
@@ -567,7 +584,7 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 | Symptom                                           | Fix                                                                                                                                                                                                                                         |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `curl :9222/json/version` fails                   | `docker compose logs`; check `/tmp/chromium.log` inside the container. Port busy? change `CDP_PORT`.                                                                                                                                        |
-| Container restarts in a loop with host networking | a listen or internal port is already in use on the host — check `docker compose logs` / `/tmp/nginx/error.log`, `/tmp/chromium.log`, then move `NGINX_LISTEN_HTTP_PORT`, `CDP_LISTEN_PORT`, `SELKIES_INTERNAL_PORT`, `CDP_INTERNAL_PORT` or `CDP_GATEWAY_INTERNAL_PORT`. |
+| Container restarts in a loop with host networking | a listen or internal port is already in use on the host — check `docker compose logs` / `/tmp/nginx/error.log`, `/tmp/chromium.log`, then move `NGINX_LISTEN_HTTP_PORT`, `CDP_LISTEN_PORT`, `SELKIES_INTERNAL_PORT`, `CDP_INTERNAL_PORT`, `CDP_GATEWAY_INTERNAL_PORT` or `AUTH_INTERNAL_PORT`. |
 | Web UI unreachable                                | `ENABLE_SELKIES=false` set? Check `/tmp/nginx/error.log` and that Selkies came up (its output is in `docker compose logs`).                                                                                                                       |
 | Browser window not in the stream                  | `CHROMIUM_HEADLESS=1` set? The default `0` runs headed on the streamed display.                                                                                                                                                             |
 | Isolated session fails with `CDP context limit reached` | `CDP_CONTEXTS_MAX` isolated contexts are open: close idle sessions (or delete them on `/console/`) or raise the limit. Gateway log: `/tmp/cdp-gateway.log`; per-context chromium logs: `$CDP_CONTEXTS_DIR/<context>/chromium.log` while the context is alive (its directory is deleted with it, also after a failed startup — the reason is then in the gateway log). |

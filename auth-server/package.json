@@ -1,0 +1,12 @@
+{
+  "name": "auth-server",
+  "private": true,
+  "description": "Built-in login of the web UI and the CDP console, and the CDP endpoint's API key",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "for f in server.mjs src/*.mjs test/*.mjs ui.js; do node --check \"$f\" || exit 1; done",
+    "test": "node --test 'test/*.test.mjs'"
+  }
+}

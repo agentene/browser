@@ -7,13 +7,20 @@
 //
 // The browser runs HEADED on the container's Xvfb desktop by default, so you
 // can watch this visit live in the Selkies stream (http://localhost:8080).
+//
+// With a CDP API key set in the console (README "Login and CDP API key"):
+//   CDP_API_KEY=<key> node examples/connect-playwright.mjs
 
 import { chromium } from "playwright";
 
 const url = process.argv[2] ?? "https://example.com";
 const endpoint = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
 
-const browser = await chromium.connectOverCDP(endpoint);
+// the key goes in a header on /json/version and the WebSocket alike
+const apiKey = process.env.CDP_API_KEY;
+const browser = await chromium.connectOverCDP(endpoint, {
+  headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+});
 console.log(`connected to ${endpoint} -> ${browser.version()}`);
 
 // Reuse the browser's default context (and its open tab) instead of
