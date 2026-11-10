@@ -75,34 +75,46 @@ export async function copyCookies(contextWsUrl) {
   return params.length - missing.length;
 }
 
-// localStorage reaches disk lazily too — chromium rate-limits its commits,
-// so a value written seconds (or, after a burst of writes, minutes) ago may
-// not be in the cloned files yet. The origins with such pending writes are
-// the ones open in the main browser, so read their live localStorage through
-// their own tabs (DOMStorage only serves a frame of the same storage key;
-// read-only, runs no page script).
-export async function snapshotLocalStorage() {
-  const snapshot = new Map(); // origin -> [[key, value], ...]
-  for (const target of await pageTargets(MAIN_PORT)) {
+// One tab per http(s) origin: [[origin, targetId], ...] of the given targets.
+export function originTabs(targets) {
+  const tabs = new Map();
+  for (const target of targets) {
     let origin;
     try {
       origin = new URL(target.url).origin;
     } catch {
       continue;
     }
-    if (!/^https?:/.test(origin) || snapshot.has(origin)) continue;
+    if (/^https?:/.test(origin) && !tabs.has(origin)) tabs.set(origin, target.id);
+  }
+  return [...tabs];
+}
+
+// How long one origin's localStorage read may take (connect included).
+const SNAPSHOT_TIMEOUT_MS = 3000;
+
+// localStorage reaches disk lazily too — chromium rate-limits its commits,
+// so a value written seconds (or, after a burst of writes, minutes) ago may
+// not be in the cloned files yet. The origins with such pending writes are
+// the ones open in the main browser, so read their live localStorage through
+// their own tabs (DOMStorage only serves a frame of the same storage key;
+// read-only, runs no page script). All origins at once, so a context starts
+// within SNAPSHOT_TIMEOUT_MS however many tabs are open.
+export async function snapshotLocalStorage() {
+  const snapshot = new Map(); // origin -> [[key, value], ...]
+  await Promise.all(originTabs(await pageTargets(MAIN_PORT)).map(async ([origin, targetId]) => {
     let cdp;
     try {
-      cdp = await CdpClient.connect(`ws://127.0.0.1:${MAIN_PORT}/devtools/page/${target.id}`);
+      cdp = await CdpClient.connect(`ws://127.0.0.1:${MAIN_PORT}/devtools/page/${targetId}`, SNAPSHOT_TIMEOUT_MS);
       const { entries } = await cdp.send('DOMStorage.getDOMStorageItems',
-        { storageId: { storageKey: `${origin}/`, isLocalStorage: true } }, { timeout: 3000 });
+        { storageId: { storageKey: `${origin}/`, isLocalStorage: true } }, { timeout: SNAPSHOT_TIMEOUT_MS });
       snapshot.set(origin, entries);
     } catch (err) {
       log(`localStorage snapshot of ${origin} skipped: ${err.message}`);
     } finally {
       cdp?.close();
     }
-  }
+  }));
   return snapshot;
 }
 
@@ -124,22 +136,33 @@ export async function restoreLocalStorage(contextWsUrl, snapshot) {
         body: Buffer.from('<html></html>').toString('base64'),
       }, opts).catch(() => {});
     });
-    let loaded = () => {};
-    cdp.on('Page.loadEventFired', () => loaded());
+    // the load of each navigation by its loaderId: a late load of the one
+    // before (after its timeout) must not count for the next
+    const loads = new Map(); // loaderId -> resolve, or true once loaded
+    cdp.on('Page.lifecycleEvent', ({ name, loaderId }) => {
+      if (name !== 'load') return;
+      const waiting = loads.get(loaderId);
+      if (typeof waiting === 'function') waiting();
+      loads.set(loaderId, true);
+    });
+    const loaded = (loaderId) => (loads.get(loaderId) === true ? Promise.resolve()
+      : new Promise((resolve) => { loads.set(loaderId, resolve); }));
     await cdp.send('Page.enable', {}, opts);
+    await cdp.send('Page.setLifecycleEventsEnabled', { enabled: true }, opts);
     await cdp.send('Network.enable', {}, opts);
     await cdp.send('Network.setBypassServiceWorker', { bypass: true }, opts);
     await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] }, opts);
     for (const [origin, entries] of snapshot) {
       try {
-        const load = new Promise((resolve) => { loaded = resolve; });
-        await cdp.send('Page.navigate', { url: `${origin}/` }, opts);
-        await Promise.race([load, sleep(5000)]);
+        const { loaderId, errorText } = await cdp.send('Page.navigate', { url: `${origin}/` }, opts);
+        if (errorText) throw new Error(`navigation: ${errorText}`);
+        await Promise.race([loaded(loaderId), sleep(5000)]);
         const storageId = { storageKey: `${origin}/`, isLocalStorage: true };
         await cdp.send('DOMStorage.clear', { storageId }, opts);
-        for (const [key, value] of entries) {
-          await cdp.send('DOMStorage.setDOMStorageItem', { storageId, key, value }, opts);
-        }
+        // all items in one go: chromium runs them in order, so only the
+        // round trips are saved
+        await Promise.all(entries.map(([key, value]) => (
+          cdp.send('DOMStorage.setDOMStorageItem', { storageId, key, value }, opts))));
         restored++;
       } catch (err) {
         log(`localStorage restore of ${origin} failed: ${err.message}`);

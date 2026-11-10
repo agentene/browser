@@ -34,13 +34,12 @@ export async function jsonRoute(req, res, url) {
     return true;
   }
   if (['/json', '/json/', '/json/list', '/json/list/'].includes(p)) {
-    let list = mainBrowser.running ? rewriteHost(await fetchJson(MAIN_PORT, '/json/list'), MAIN_PORT, host) : [];
-    for (const s of contexts.values()) {
-      try {
-        list = list.concat(rewriteHost(await fetchJson(s.port, '/json/list'), s.port, host));
-      } catch { /* context shutting down */ }
-    }
-    send(res, 200, list);
+    // all browsers at once; a context shutting down lists nothing
+    const lists = await Promise.all([
+      mainBrowser.running ? fetchJson(MAIN_PORT, '/json/list').then((l) => rewriteHost(l, MAIN_PORT, host)) : [],
+      ...contexts.values().map((c) => fetchJson(c.port, '/json/list').then((l) => rewriteHost(l, c.port, host), () => [])),
+    ]);
+    send(res, 200, lists.flat());
     return true;
   }
   if (p === '/json/protocol' || p === '/json/protocol/') {

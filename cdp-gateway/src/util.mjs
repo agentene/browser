@@ -33,6 +33,18 @@ export function run(cmd, args) {
   });
 }
 
+// Run a helper to completion; resolves with its stdout ('' when it failed or
+// could not be started).
+export function output(cmd, args) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    child.on('close', (code) => resolve(code === 0 ? out : ''));
+    child.on('error', () => resolve(''));
+  });
+}
+
 // Signal a process group, ignoring one that is already gone.
 export function killGroup(pid, signal) {
   try { process.kill(-pid, signal); } catch { /* already gone */ }

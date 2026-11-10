@@ -494,7 +494,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # 建议:CDP 与 Web UI 不暴露到网络
 该模式下的变化:
 
 * 不发布任何端口,nginx 直接在宿主机上绑定端口。`NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` 默认取 `NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` / `CDP_PORT`(8080 / 8443 / 9222),访问地址与 bridge 模式保持一致;显式设置即可覆盖。HTTPS 只需 `ENABLE_HTTPS=true`(不需要 `compose.https.yaml`,它的端口映射会被丢弃)。
-* 仅回环的内部端口 —— `SELKIES_INTERNAL_PORT`(8081)、`CDP_INTERNAL_PORT`(9221)、`CDP_GATEWAY_INTERNAL_PORT`(9220)和 `AUTH_INTERNAL_PORT`(9219)—— 同样占用宿主机回环(context 浏览器自行选择空闲端口)。若与你自己的应用冲突,在 `.env` 里换掉;端口绑定失败会导致容器退出。
+* 仅回环的内部端口 —— `SELKIES_INTERNAL_PORT`(8081)、`CDP_INTERNAL_PORT`(9221)、`CDP_GATEWAY_INTERNAL_PORT`(9220)和 `AUTH_INTERNAL_PORT`(9219)—— 同样占用宿主机回环(context 浏览器自行选择空闲端口)。若与你自己的应用冲突,在 `.env` 里换掉;端口绑定失败会导致容器退出。这些端口不经过 nginx,宿主机上的任何进程都可以不带 [CDP API Key](#登录与-cdp-api-key) 通过它们使用浏览器 —— 只在本机用户都可信任的宿主机上使用 host 网络。
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` 与 `hostname` 不再生效。`PORT_FORWARDS` 仍可用,但通过宿主机的 DNS 解析(容器名无法解析)—— 通常直接让浏览器访问 `localhost:<端口>` 即可。
 * 使用 `DISPLAY_BACKEND=x11` 时,若宿主机自己在 `:0` 上跑着 X server,入口脚本会自动换用下一个空闲 display。Xvfb 只监听文件系统 socket,宿主机进程无法接入容器里无认证的 display。
 

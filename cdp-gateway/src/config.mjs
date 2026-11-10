@@ -56,6 +56,8 @@ export const INTERNAL_ID_BASE = 1_000_000_000;
 const MAX_PAYLOAD = 256 * 1024 * 1024; // screenshots and traces can be large
 // options for every WebSocket the gateway opens or accepts
 export const WS_OPTIONS = { perMessageDeflate: false, maxPayload: MAX_PAYLOAD };
+// how long the gateway waits for a WebSocket of its own to open (cdp-client.mjs)
+export const WS_OPEN_TIMEOUT_MS = 10_000;
 
 // Browser frame color per context (cycled), so a context window on the desktop
 // is recognizable and matches its dashboard card. No window manager draws

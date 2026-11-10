@@ -17,6 +17,7 @@
 // chromium message while the gateway awaits no reply there itself.
 
 import WebSocket from 'ws';
+import { openWs } from './cdp-client.mjs';
 import { INTERNAL_ID_BASE, WS_OPTIONS } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { forward } from './flow.mjs';
@@ -50,7 +51,7 @@ export class Mux {
     // Playwright's newCDPSession) lives on the main chromium; whatever it
     // addresses in the context chromium goes through a browser-target session
     // the gateway opens there instead.
-    this.browserSessions = new Map(); // client sessionId -> Promise<context browser sessionId>
+    this.browserSessions = new Map(); // client sessionId -> { id: context browser sessionId ('' while opening), waiting: [msg] }
     this.browserSessionOf = new Map(); // context browser sessionId -> client sessionId
     this.autoAttach = null; // last Target.setAutoAttach params from the client
     this.discover = null; // last Target.setDiscoverTargets params
@@ -60,11 +61,15 @@ export class Mux {
     this.closed = false;
     muxes.add(this);
 
+    // nothing is read from the client until the upstream is open, so what
+    // it sends meanwhile waits in the socket (TCP pushes back), not here
+    client.pause?.();
     this.main = new WebSocket(mainUrl, WS_OPTIONS);
     this.main.on('open', () => {
       const queued = this.queue;
       this.queue = null; // before sending: toMain queues while it is set
       for (const m of queued) this.toMain(m);
+      client.resume?.();
     });
     this.main.on('message', (data) => this.fromUpstream('main', data));
     this.main.on('close', () => this.close('main browser connection closed'));
@@ -160,9 +165,7 @@ export class Mux {
     const { method, params = {}, sessionId } = msg;
 
     if (sessionId) {
-      if (this.sessionOwner.get(sessionId) === 'context') this.toContext(msg);
-      else if (this.addressesContext(params)) this.viaContextBrowserSession(msg);
-      else this.sendMain(msg);
+      this.fromClientSession(msg);
       return;
     }
 
@@ -213,28 +216,54 @@ export class Mux {
     this.sendMain(msg);
   }
 
+  // A command on a session: the context chromium's, the main chromium's, or
+  // a browser-target session on main that addresses the context chromium.
+  fromClientSession(msg) {
+    const { params = {}, sessionId } = msg;
+    // while that session's stand-in in the context chromium is being opened,
+    // everything on it waits, so its commands keep their order
+    const browserSession = this.browserSessions.get(sessionId);
+    if (browserSession && !browserSession.id) browserSession.waiting.push(msg);
+    else if (this.sessionOwner.get(sessionId) === 'context') this.toContext(msg);
+    else if (this.addressesContext(params)) this.viaContextBrowserSession(msg);
+    else this.sendMain(msg);
+  }
+
   // Browser-level params naming a target or session of the context chromium.
   addressesContext(params) {
     return Boolean(this.context) && (this.contextTargets.has(params.targetId)
       || this.sessionOwner.get(params.sessionId) === 'context');
   }
 
-  async viaContextBrowserSession(msg) {
+  // A client browser-target session's command for the context chromium goes
+  // through the stand-in session the gateway opens there (once per session).
+  viaContextBrowserSession(msg) {
     const clientSession = msg.sessionId;
-    let pending = this.browserSessions.get(clientSession);
-    if (!pending) {
-      pending = this.internalSend('context', 'Target.attachToBrowserTarget', {}).then(({ sessionId }) => {
-        this.browserSessionOf.set(sessionId, clientSession);
-        return sessionId;
-      });
-      this.browserSessions.set(clientSession, pending);
+    const known = this.browserSessions.get(clientSession);
+    if (known) {
+      this.toContext({ ...msg, sessionId: known.id }, msg);
+      return;
     }
-    try {
-      this.toContext({ ...msg, sessionId: await pending }, msg);
-    } catch (err) {
-      this.browserSessions.delete(clientSession);
-      this.replyError(msg, err.message);
-    }
+    const entry = { id: '', waiting: [msg] };
+    this.browserSessions.set(clientSession, entry);
+    const flush = (err) => {
+      const { waiting } = entry;
+      entry.waiting = [];
+      for (const m of waiting) {
+        // without a stand-in what needed one fails (no retry loop); the rest
+        // takes its usual way
+        if (err && this.addressesContext(m.params ?? {})) this.replyError(m, err.message);
+        else this.fromClientSession(m);
+      }
+    };
+    this.internalSend('context', 'Target.attachToBrowserTarget', {}).then(({ sessionId }) => {
+      entry.id = sessionId;
+      this.browserSessionOf.set(sessionId, clientSession);
+      flush();
+    }, (err) => {
+      if (this.browserSessions.get(clientSession) === entry) this.browserSessions.delete(clientSession);
+      flush(err);
+    });
   }
 
   // Target.createBrowserContext. One startup at a time: a client may create
@@ -270,11 +299,7 @@ export class Mux {
         await context.destroy('client went away during startup');
         return;
       }
-      const ws = new WebSocket(context.browserWsUrl(), WS_OPTIONS);
-      await new Promise((resolve, reject) => {
-        ws.once('open', resolve);
-        ws.once('error', reject);
-      });
+      const ws = await openWs(context.browserWsUrl());
       if (this.closed || context.destroyed) {
         // the client left (or the chromium died) while the connection opened:
         // nothing else would ever destroy the context

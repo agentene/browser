@@ -110,17 +110,30 @@ export function updateSettings(patch) {
 async function update(patch) {
   const changes = parsePatch(SCHEMA, patch).filter(([section, key, value]) => values[section][key] !== value);
   if (!changes.length) return settingsView();
+  // the changes applied before one fails stay applied, so they are saved
+  // (and shown) all the same; the failure is reported after that
+  let applied = 0;
+  let failure = null;
   for (const [section, key, value] of changes) {
-    await SCHEMA[section][key].apply(value);
+    try {
+      await SCHEMA[section][key].apply(value);
+    } catch (err) {
+      failure = err;
+      break;
+    }
     values[section][key] = value;
     saved = { ...saved, [section]: { ...(isObject(saved[section]) ? saved[section] : {}), [key]: value } };
     log(`settings: ${section}.${key} = ${JSON.stringify(value)}`);
+    applied++;
   }
-  notifyChange();
-  try {
-    save();
-  } catch (err) {
-    throw new HttpError(500, `applied, but not saved to ${SETTINGS_FILE}: ${err.message}`);
+  if (applied) {
+    notifyChange();
+    try {
+      save();
+    } catch (err) {
+      throw new HttpError(500, `applied, but not saved to ${SETTINGS_FILE}: ${err.message}`);
+    }
   }
+  if (failure) throw failure;
   return settingsView();
 }

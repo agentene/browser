@@ -14,6 +14,7 @@ import { Mux, openMuxes } from '../src/mux.mjs';
 let server;
 let mainUrl;
 const received = [];
+const arrivals = []; // [upstream, method, sessionId] across both fake chromiums, in arrival order
 
 before(async () => {
   server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
@@ -23,6 +24,7 @@ before(async () => {
     ws.on('message', (data) => {
       const msg = JSON.parse(data.toString());
       received.push(msg);
+      arrivals.push(['main', msg.method, msg.sessionId]);
       if (msg.method === 'Target.disposeBrowserContext') {
         ws.send(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'Failed to find context with id' } }));
       } else if (msg.method === 'Target.attachToTarget') {
@@ -131,7 +133,12 @@ before(async () => {
   contextServer.on('connection', (ws) => {
     ws.on('message', (data) => {
       const msg = JSON.parse(data.toString());
-      const result = msg.method === 'Target.createBrowserContext' ? { browserContextId: 'INNER1' } : {};
+      arrivals.push(['context', msg.method, msg.sessionId]);
+      const result = {
+        'Target.createBrowserContext': { browserContextId: 'INNER1' },
+        'Target.createTarget': { targetId: 'CT1' },
+        'Target.attachToBrowserTarget': { sessionId: 'CTXB' },
+      }[msg.method] ?? {};
       ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result }));
     });
   });
@@ -226,4 +233,29 @@ test('a closed client closes its mux and the upstream connection', async () => {
   await upstreamGone;
   assert.equal(mux.closed, true);
   assert.equal(openMuxes(), before);
+});
+
+test('a browser-target session keeps its command order while its stand-in opens', async () => {
+  const stub = stubContexts();
+  const client = new FakeClient();
+  new Mux(client, 'test', mainUrl);
+  try {
+    const { result: { browserContextId } } = await client.command({ id: 50, method: 'Target.createBrowserContext', params: {} });
+    await client.command({ id: 51, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId } });
+    arrivals.length = 0;
+    // MB: a browser-target session on main; the first command addresses the
+    // context's target (needs the stand-in), the second one is main's
+    const first = client.command({ id: 52, sessionId: 'MB', method: 'Target.attachToTarget', params: { targetId: 'CT1', flatten: true } });
+    const second = client.command({ id: 53, sessionId: 'MB', method: 'Runtime.evaluate', params: { expression: '1' } });
+    assert.deepEqual(await first, { id: 52, sessionId: 'MB', result: {} });
+    await second;
+    assert.deepEqual(arrivals, [
+      ['context', 'Target.attachToBrowserTarget', undefined],
+      ['context', 'Target.attachToTarget', 'CTXB'],
+      ['main', 'Runtime.evaluate', 'MB'],
+    ]);
+  } finally {
+    client.close();
+    stub.restore();
+  }
 });

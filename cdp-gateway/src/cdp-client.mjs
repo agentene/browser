@@ -1,16 +1,22 @@
 // A minimal CDP client for the gateway's own one-off commands.
 
 import WebSocket from 'ws';
-import { WS_OPTIONS } from './config.mjs';
+import { WS_OPEN_TIMEOUT_MS, WS_OPTIONS } from './config.mjs';
+
+// A WebSocket of the gateway's own to a chromium, once it is open; rejects
+// when it cannot be opened within `timeout` (a hung handshake included).
+export async function openWs(url, timeout = WS_OPEN_TIMEOUT_MS) {
+  const ws = new WebSocket(url, { ...WS_OPTIONS, handshakeTimeout: timeout });
+  await new Promise((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  return ws;
+}
 
 export class CdpClient {
-  static async connect(url) {
-    const ws = new WebSocket(url, WS_OPTIONS);
-    await new Promise((resolve, reject) => {
-      ws.once('open', resolve);
-      ws.once('error', reject);
-    });
-    return new CdpClient(ws);
+  static async connect(url, timeout) {
+    return new CdpClient(await openWs(url, timeout));
   }
 
   constructor(ws) {

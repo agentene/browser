@@ -8,7 +8,7 @@ import { notifyChange } from './changes.mjs';
 import { CONTEXTS_HEADLESS, RAISE_SWITCH, ROOT, WAYLAND, appId } from './config.mjs';
 import { fetchJson, pageTargets } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
-import { run, sleep } from './util.mjs';
+import { output, run, sleep } from './util.mjs';
 
 // Hand desktop.raiseNewWindows (settings.mjs) to the desktop: whether a
 // window that opens comes to the front or stays behind the one in front.
@@ -18,20 +18,24 @@ export async function applyRaiseNewWindows(on) {
   if (await run(RAISE_SWITCH, [String(on)]) !== 0) throw new Error(`${path.basename(RAISE_SWITCH)} ${on} failed`);
 }
 
+// The app_ids in `wlrctl toplevel list` output ("<app_id>: <title>" lines).
+export function listedAppIds(text) {
+  return new Set(text.split('\n').filter((line) => line.includes(':')).map((line) => line.slice(0, line.indexOf(':'))));
+}
+
 // The browser whose window is in front on the desktop, or null. Wayland: the
-// one labwc has focused — one wlrctl call per browser until it matches. X11:
-// the topmost browser window, which front-window.py reports whenever it
-// changes (while watchFront runs).
+// one labwc has focused (one wlrctl call lists it). X11: the topmost browser
+// window, which front-window.py reports whenever it changes (while
+// watchFront runs).
 let frontPid = 0;
 let frontWatch = null;
 
 export async function frontBrowser(names) {
   if (!WAYLAND) return names.find((name) => frontPid && browserPid(name) === frontPid) ?? null;
-  for (const name of names) {
-    if (name === 'main' ? !mainBrowser.running : CONTEXTS_HEADLESS) continue;
-    if (await run('wlrctl', ['toplevel', 'find', `app_id:${appId(name)}`, 'state:focused']) === 0) return name;
-  }
-  return null;
+  const shown = names.filter((name) => (name === 'main' ? mainBrowser.running : !CONTEXTS_HEADLESS));
+  if (!shown.length) return null;
+  const focused = listedAppIds(await output('wlrctl', ['toplevel', 'list', 'state:focused']));
+  return shown.find((name) => focused.has(appId(name))) ?? null;
 }
 
 export function watchFront() {
@@ -64,13 +68,14 @@ export function unwatchFront() {
 // Bring a context's (or the main browser's) window to the front of the desktop
 // so it shows up in the Selkies stream. A browser whose tabs were all closed
 // (it keeps running without a window) gets a blank tab to show.
+// Resolves false when there is nothing to focus: no such browser or tab.
 export async function focus(name, targetId) {
   const port = portOf(name);
   if (!port) return false;
   let id = targetId || (await pageTargets(port))[0]?.id;
   const opened = !id;
   if (opened) id = (await fetchJson(port, '/json/new?about:blank', 'PUT')).id;
-  await fetch(`http://127.0.0.1:${port}/json/activate/${id}`);
+  if (!(await fetch(`http://127.0.0.1:${port}/json/activate/${encodeURIComponent(id)}`)).ok) return false;
   if (name !== 'main' && CONTEXTS_HEADLESS) return true;
   // a freshly opened window may take a moment to map
   for (let tries = opened ? 20 : 1; tries > 0; tries--) {

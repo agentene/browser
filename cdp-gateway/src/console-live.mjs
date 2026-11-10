@@ -40,11 +40,23 @@ let settingsSent = JSON.stringify(settingsView());
 let tickRunning = Promise.resolve();
 let tickQueued = null;
 
-function broadcast(ops) {
+// A console that reads slower than the thumbnails come (a stalled tab, a bad
+// link) would grow the gateway's send buffer without bound; skipping ops would
+// leave it with a wrong picture, so it is dropped instead — the pages
+// reconnect and start over from a snapshot.
+export const MAX_BUFFERED = 8 * 1024 * 1024;
+
+export function broadcast(ops, to = subscribers) {
   if (!ops.length) return;
   const msg = JSON.stringify({ ops });
-  for (const ws of subscribers) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+  for (const ws of to) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (ws.bufferedAmount > MAX_BUFFERED) {
+      log(`console subscriber too slow (${ws.bufferedAmount} bytes waiting): disconnected`);
+      ws.terminate();
+      continue;
+    }
+    ws.send(msg);
   }
 }
 

@@ -4,7 +4,8 @@
 // the /console/ws WebSocket, console-live.mjs):
 //   POST   /console/api/main/start|stop     on-demand main browser
 //   POST   /console/api/<name>/focus[/<id>] bring a browser (tab) to the front
-//   DELETE /console/api/<context>           destroy a context
+//   DELETE /console/api/<context>           destroy a context (and end the
+//                                           CDP connection that owns it)
 //   GET    /console/api/settings            the server-side settings (settings.mjs)
 //   PATCH  /console/api/settings            change some: {section: {key: value}}
 
@@ -71,7 +72,9 @@ export async function consoleRoute(req, res, url) {
     return true;
   }
   if (action === 'focus' && req.method === 'POST') {
-    if (!(await focus(name, targetId))) {
+    if (name === 'main' && !mainBrowser.running) {
+      send(res, 409, { error: `the main browser is ${mainBrowser.state}` });
+    } else if (!(await focus(name, targetId))) {
       send(res, 404, { error: 'nothing to focus' });
     } else {
       notifyChange(); // the new current tab
@@ -84,6 +87,9 @@ export async function consoleRoute(req, res, url) {
     if (!context) {
       send(res, 404, { error: `no context ${name}` });
     } else {
+      // its client's whole connection goes too: a client whose context
+      // vanished under it would otherwise go on with a half-dead browser
+      // (Playwright then reports the browser as disconnected)
       await context.destroy('deleted via API');
       context.mux?.close('context deleted via API');
       send(res, 200, { ok: true });

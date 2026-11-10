@@ -14,6 +14,9 @@ export function openRelays() {
 export function relay(client, upstreamUrl) {
   relays++;
   client.once('close', () => { relays--; });
+  // nothing is read from the client until the upstream is open (the queue
+  // below only holds what was already read)
+  client.pause?.();
   const upstream = new WebSocket(upstreamUrl, WS_OPTIONS);
   // what the client sent before the upstream was open; frames keep their
   // type (ws hands text over as a Buffer too, which it would send as binary
@@ -23,6 +26,7 @@ export function relay(client, upstreamUrl) {
   upstream.on('open', () => {
     for (const [data, isBinary] of queue) forward(upstream, data, { binary: isBinary }, [client]);
     queue.length = 0;
+    client.resume?.();
   });
   client.on('message', (data, isBinary) => {
     if (upstream.readyState === WebSocket.OPEN) forward(upstream, data, { binary: isBinary }, [client]);

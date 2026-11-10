@@ -6,12 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { appId, intEnv } from '../src/config.mjs';
+import { broadcast, MAX_BUFFERED } from '../src/console-live.mjs';
+import { listedAppIds } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
 import { consoleDenied, consoleOriginDenied, passwordDigest } from '../src/console-auth.mjs';
 import { rewriteHost } from '../src/devtools-http.mjs';
 import { connectionsTo } from '../src/idle.mjs';
 import { adjustPrefs, cloned } from '../src/profile.mjs';
-import { cookieKey, cookieParam } from '../src/storage-sync.mjs';
+import { cookieKey, cookieParam, originTabs } from '../src/storage-sync.mjs';
 
 test('intEnv: default, integer, rejects junk', () => {
   assert.equal(intEnv('X', 7, {}), 7);
@@ -193,4 +195,35 @@ test('connectionsTo counts established connections on the local port', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('originTabs: one tab per http(s) origin', () => {
+  assert.deepEqual(originTabs([
+    { id: 'A', url: 'https://a.example/x' },
+    { id: 'B', url: 'https://a.example/y' },
+    { id: 'C', url: 'http://b.example:8080/' },
+    { id: 'D', url: 'about:blank' },
+    { id: 'E', url: 'chrome://newtab/' },
+    { id: 'F', url: 'not a url' },
+  ]), [['https://a.example', 'A'], ['http://b.example:8080', 'C']]);
+});
+
+test('listedAppIds: app_ids of wlrctl toplevel list', () => {
+  assert.deepEqual(listedAppIds('cdp-context-1: ctx - Google Chrome for Testing\ncdp-main: a: b\n'),
+    new Set(['cdp-context-1', 'cdp-main']));
+  assert.deepEqual(listedAppIds(''), new Set());
+});
+
+test('broadcast: a console that does not keep up is dropped, not buffered for', () => {
+  const ws = (bufferedAmount) => ({
+    readyState: 1, bufferedAmount, sent: [], terminated: false,
+    send(m) { this.sent.push(m); },
+    terminate() { this.terminated = true; },
+  });
+  const fast = ws(0);
+  const slow = ws(MAX_BUFFERED + 1);
+  broadcast([{ t: 'gone', name: 'context-1' }], [fast, slow]);
+  assert.deepEqual(fast.sent, ['{"ops":[{"t":"gone","name":"context-1"}]}']);
+  assert.deepEqual(slow.sent, []);
+  assert.equal(slow.terminated, true);
 });
