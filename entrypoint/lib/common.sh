@@ -20,7 +20,7 @@ wait_until() {
 }
 
 # give_to_run_user [-R] <path...>: chown to the RUN_USER (privileges.sh);
-# a no-op when everything runs as root.
+# a no-op in root mode (RUN_USER=0).
 give_to_run_user() {
     [ -n "${RUN_UID}" ] || return 0
     local opts=()

@@ -76,8 +76,8 @@ chromium_resolve_sandbox() {
     # shellcheck disable=SC2153 # CHROMIUM_SANDBOX is set by config.sh
     if [ "${CHROMIUM_SANDBOX}" = "off" ]; then
         log "chromium: sandbox off (CHROMIUM_SANDBOX=off)"
-    elif [ -z "${RUN_USER}" ]; then
-        log "chromium: no sandbox — the browsers run as root (set RUN_USER, e.g. browser, to sandbox them)"
+    elif [ -z "${RUN_UID}" ]; then
+        log "chromium: no sandbox — the browsers run as root (RUN_USER=${RUN_USER}; drop it, or set an unprivileged user, to sandbox them)"
     elif "${DROP[@]}" unshare --user --map-root-user true 2>/dev/null; then
         CHROMIUM_SANDBOXED=true
         log "chromium: sandboxed (user namespaces, as ${RUN_NAME})"

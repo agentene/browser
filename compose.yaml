@@ -182,7 +182,7 @@ services:
       # SwiftShader software; off = force software; strict = never
       # SwiftShader (WebGL then requires the GPU).
       CHROMIUM_GPU: "${CHROMIUM_GPU:-auto}"
-      # Chromium's own sandbox: auto = on when RUN_USER is set and the
+      # Chromium's own sandbox: auto = on when RUN_USER is not 0 and the
       # container may create user namespaces (docker's default seccomp
       # profile forbids it: add security_opt, see the README), --no-sandbox
       # otherwise; off = always --no-sandbox
@@ -221,14 +221,15 @@ services:
 
       # --- Privilege drop ---
       # Run the desktop stack (Xvfb/labwc, picom, PulseAudio, selkies, chromium,
-      # the CDP gateway) and the nginx WORKERS as this user instead of root. Empty (default)
-      # = everything runs as root (the historical behavior). Accepts an
-      # existing username (e.g. browser, which the image ships) or uid[:gid]
-      # — missing passwd/group entries for a numeric id are synthesized at
-      # startup, and the browser profile mount is chowned to the user on
-      # every start. PID 1 and the nginx master always stay root: nginx
-      # binds the (by default privileged) listen ports and reads the TLS key.
-      RUN_USER: "${RUN_USER:-}"
+      # the CDP gateway, the auth service) and the nginx WORKERS as this user.
+      # Unset or empty (default) = browser, the unprivileged user the image
+      # ships (uid 1001). Accepts an existing username or uid[:gid] — missing
+      # passwd/group entries for a numeric id are synthesized at startup,
+      # and the browser profile mount is chowned to the user on every start.
+      # 0 = everything runs as root (no privilege drop). PID 1 and the nginx
+      # master always stay root: nginx binds the (by default privileged)
+      # listen ports and reads the TLS key.
+      RUN_USER: "${RUN_USER:-browser}"
 
     healthcheck:
       # The web UI on container port NGINX_LISTEN_HTTP_PORT counts as healthy

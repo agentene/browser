@@ -197,7 +197,7 @@ nginx_write_config() {
 
     # nginx workers as the RUN_USER (the `user` directive takes a NAME, which
     # is why numeric ids get a synthesized passwd entry in privileges.sh);
-    # empty = compiled default nobody, the historical behavior.
+    # empty (RUN_USER=0) = compiled default nobody.
     local user_conf="" web_servers="" cdp_server="" host_map=""
     [ -n "${RUN_NGINX_USER}" ] && user_conf="user ${RUN_NGINX_USER};"
     host_map="$(nginx_host_map)"

@@ -327,7 +327,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                | minutes the main browser may sit idle (no CDP client, no isolated context, nobody watching the stream) before it is closed again; `0` = never |
 | `CHROMIUM_EXTRA_ARGS`       | *(empty)*                                                                                          | extra chromium flags, e.g. `--proxy-server=http://host:3128`                                                                                                                                                                                         |
 | `CHROMIUM_GPU`              | `auto`                                                                                             | `auto` = render on a passed-through GPU when one is visible ([GPU passthrough](#gpu-passthrough-optional)), else SwiftShader software — WebGL always works; `off` = force software; `strict` = never allow SwiftShader (WebGL then requires the GPU) |
-| `CHROMIUM_SANDBOX`          | `auto`                                                                                             | Chromium's own sandbox (main and context browsers): `auto` = on when the browsers run unprivileged (`RUN_USER`) **and** the container may create user namespaces, `--no-sandbox` otherwise; `off` = always `--no-sandbox`. See [Privilege drop (`RUN_USER`)](#privilege-drop-run_user) |
+| `CHROMIUM_SANDBOX`          | `auto`                                                                                             | Chromium's own sandbox (main and context browsers): `auto` = on when the browsers run unprivileged (`RUN_USER` not `0`, the default) **and** the container may create user namespaces, `--no-sandbox` otherwise; `off` = always `--no-sandbox`. See [Privilege drop (`RUN_USER`)](#privilege-drop-run_user) |
 | `CHROMIUM_ALLOW_FILE_URLS`  | `false`                                                                                            | `true` = the browsers may open `file://` URLs. Blocked by default (a managed `URLBlocklist` policy), because through the browser a CDP client could read any file its user can — the login's session secret and the processes' environment included |
 | `CDP_LISTEN_PORT`           | `9222`                                                                                             | container port of the public CDP endpoint (nginx → the CDP gateway → chromium; see [Ports](#ports))                                                                                                                                                  |
 | `CDP_INTERNAL_PORT`         | `9221`                                                                                             | chromium loopback DevTools port (behind nginx)                                                                                                                                                                                                       |
@@ -349,29 +349,32 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `TZ`                 | `UTC`          | container timezone (any IANA zone, e.g. `Asia/Shanghai`)                                                                                                                                                                                                                         |
 | `DISPLAY_BACKEND`    | `wayland`      | desktop the headed browsers live on: `wayland` = labwc, a headless Wayland compositor + window manager that Selkies captures on the GPU — several times less CPU for animated pages when a GPU is passed in, see [Wayland desktop](#wayland-desktop-display_backendwayland); `x11` = Xvfb (+ picom) — use it with an NVIDIA GPU |
 | `SCREEN_GEOMETRY`    | `1920x1080x24` | Xvfb screen size `WxHxD` (with `wayland`: the size of labwc's output); also sizes the Selkies stream                                                                                                                                                                             |
-| `RUN_USER`           | *(empty)*      | run the desktop stack (Xvfb or labwc, picom, PulseAudio, selkies, chromium, the CDP gateway) and the nginx *workers* as this user instead of root — an existing username (e.g. `browser`) or `uid[:gid]`; PID 1 and the nginx master stay root. See [Privilege drop (`RUN_USER`)](#privilege-drop-run_user) |
+| `RUN_USER`           | `browser`      | the user the desktop stack (Xvfb or labwc, picom, PulseAudio, selkies, chromium, the CDP gateway, the auth service) and the nginx *workers* run as — unset/empty = `browser` (uid 1001, ships in the image); an existing username or `uid[:gid]`; `0` = everything runs as root. PID 1 and the nginx master stay root. See [Privilege drop (`RUN_USER`)](#privilege-drop-run_user) |
 
 ### Privilege drop (`RUN_USER`)
 
-By default every process in the container runs as root (the historical
-behavior). Set `RUN_USER` to move the desktop stack — Xvfb (or labwc), picom,
-PulseAudio, selkies and Chromium (and the CDP gateway with its context
-browsers), plus the nginx *workers* — to an unprivileged user:
+By default the desktop stack — Xvfb (or labwc), picom, PulseAudio, selkies
+and Chromium (and the CDP gateway with its context browsers, and the auth
+service), plus the nginx *workers* — runs as `browser`, the unprivileged user
+the image ships (uid 1001). `RUN_USER` picks another user, or opts back into
+running everything as root:
 
 ```bash
 # compose (.env)
-RUN_USER=browser       # or a numeric uid[:gid], e.g. 1000 to match the
-                       # uid that owns ./browser on the host
+#RUN_USER=browser      # the default (unset or empty means the same)
+RUN_USER=1000          # a numeric uid[:gid], e.g. to match the uid that
+                       # owns ./browser on the host
+RUN_USER=0             # no privilege drop: everything runs as root
 ```
 
 What it does:
 
-* Accepts an existing username (`browser`, uid 1001, ships in the image) or `uid[:gid]`; missing passwd/group entries for a numeric id are synthesized at startup.
+* Accepts an existing username (`browser`, uid 1001, ships in the image) or `uid[:gid]`; missing passwd/group entries for a numeric id are synthesized at startup. `0` (also `0:<gid>` or `root`) turns the drop off — none of the points below apply then.
 * PID 1 and the nginx **master** stay root: nginx binds the (by default privileged) listen ports and reads the TLS key, and the supervisor prepares the browser profile. Everything else is started via `setpriv`, with no capabilities.
-* The browser profile (`/browser/user-data`) is `chown`ed to the user on every start — the first migration of a large root-owned profile can take a moment; afterwards it is a no-op walk.
+* The browser profile (`/browser/user-data`) is `chown`ed to the user on every start — the first migration of a large root-owned profile (e.g. from a release before 0.2.0, which ran as root by default) can take a moment; afterwards it is a no-op walk.
 * GPU device nodes stay usable: the host gid of each `/dev/dri` / NVIDIA node is added to the supplementary group set.
 * The CDP/web ports stay as they are. The gain is filesystem/privilege isolation — a compromised browser can no longer write as root.
-* **Chromium's sandbox** (`CHROMIUM_SANDBOX=auto`) comes on as well when the container may also create user namespaces: Chromium then confines its renderers in their own user, PID and network namespaces plus seccomp-BPF (check `chrome://sandbox`). Docker's default seccomp profile forbids user namespaces, so this needs a profile that allows them — e.g. `security_opt: ["seccomp=unconfined"]` in a compose override (`--security-opt seccomp=unconfined` with `docker run`), at the cost of the container's own syscall filter. The entrypoint probes it at every start and logs `chromium: sandboxed …` or why not; without it the browsers keep `--no-sandbox`. Chromium's setuid helper is no way around this (it needs `CAP_SYS_ADMIN` for the same namespaces), so the image ships none. As root (no `RUN_USER`) Chromium cannot sandbox itself at all.
+* **Chromium's sandbox** (`CHROMIUM_SANDBOX=auto`) comes on as well when the container may also create user namespaces: Chromium then confines its renderers in their own user, PID and network namespaces plus seccomp-BPF (check `chrome://sandbox`). Docker's default seccomp profile forbids user namespaces, so this needs a profile that allows them — e.g. `security_opt: ["seccomp=unconfined"]` in a compose override (`--security-opt seccomp=unconfined` with `docker run`), at the cost of the container's own syscall filter. The entrypoint probes it at every start and logs `chromium: sandboxed …` or why not; without it the browsers keep `--no-sandbox`. Chromium's setuid helper is no way around this (it needs `CAP_SYS_ADMIN` for the same namespaces), so the image ships none. As root (`RUN_USER=0`) Chromium cannot sandbox itself at all.
 
 ### Timezone and language
 
@@ -581,14 +584,15 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 * **Set up the login right after the first start.** The setup form needs the setup code from the container log, so a visitor who cannot read the log cannot claim the browser; still, the CDP API stays open until a key is set. Skipping leaves the web UI open to everyone who can reach it — and, through DNS rebinding, to any web page a user on that network opens (a site that points its own host name at the container): set `ALLOWED_HOSTS` to the names you reach it by (IP addresses and `localhost` always work) to close that. The CDP API itself is not affected (it refuses every request with an `Origin`). Use HTTPS alongside the login whenever the web UI leaves a trusted network (plain HTTP sends the password and the session cookie in clear text).
 * **Browser pages cannot reach the CDP API.** Requests with an `Origin` header or from another site are refused unless `CDP_ALLOW_ORIGINS` lists the origin — this matters even with an API key, because pages inside the container's own browser can reach the gateway's loopback port, which nginx (and so the key) does not guard.
 * **`file://` is blocked in the browsers** (`CHROMIUM_ALLOW_FILE_URLS=false`): otherwise a CDP client could read the container's files through the browser, among them `/browser/settings/auth.json` (the session secret that signs logins) and the environment of its processes (passwords passed by environment). Only allow it if every CDP client may read those.
-* By default Chromium runs with `--no-sandbox` (as root, or without user namespaces in the container — standard for containerized Chrome). Set `RUN_USER` and allow user namespaces to get its sandbox (`CHROMIUM_SANDBOX`, see [Privilege drop (`RUN_USER`)](#privilege-drop-run_user)); either way, run the container as a dedicated user/VM you'd be comfortable exposing a browser to.
+* By default Chromium runs with `--no-sandbox` (Docker's default seccomp profile forbids the user namespaces it needs — standard for containerized Chrome; as root, `RUN_USER=0`, it cannot sandbox at all). Allow user namespaces to get its sandbox (`CHROMIUM_SANDBOX`, see [Privilege drop (`RUN_USER`)](#privilege-drop-run_user)); either way, run the container as a dedicated user/VM you'd be comfortable exposing a browser to.
 * Generated TLS keys are self-signed — browsers will warn; that is expected. Bring a real certificate for anything public.
-* The container runs as **root** by default (the entrypoint is PID 1 and binds the privileged ports 80/443 by default). Set `RUN_USER` (see [Privilege drop (`RUN_USER`)](#privilege-drop-run_user)) to move the desktop stack and the nginx workers off root — PID 1 and the nginx master remain root by design. `--security-opt=no-new-privileges` works as-is. `--cap-drop=ALL` on its own stops the container from starting (the entrypoint and nginx still chown, switch uids and bind 80); add back what the startup needs:
+* PID 1 and the nginx master run as **root** (the entrypoint binds the privileged ports 80/443 by default and prepares the profile); the desktop stack and the nginx workers run as the unprivileged `browser` user by default (`RUN_USER`, see [Privilege drop (`RUN_USER`)](#privilege-drop-run_user); `RUN_USER=0` keeps them on root as well). `--security-opt=no-new-privileges` works as-is. `--cap-drop=ALL` on its own stops the container from starting (the entrypoint and nginx still chown, switch uids and bind 80); add back what the startup needs:
 
   ```bash
   docker run --cap-drop=ALL --security-opt=no-new-privileges \
     --cap-add=CHOWN --cap-add=SETUID --cap-add=SETGID --cap-add=NET_BIND_SERVICE \
-    ...   # with RUN_USER also: --cap-add=FOWNER --cap-add=DAC_OVERRIDE --cap-add=KILL
+    --cap-add=FOWNER --cap-add=DAC_OVERRIDE --cap-add=KILL \
+    ...   # the last three are not needed with RUN_USER=0
   ```
 
 ## Troubleshooting

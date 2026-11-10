@@ -452,6 +452,30 @@ jobs:
           if docker logs restart-smoke 2>&1 | grep -F '[entrypoint] ERROR'; then exit 1; fi
           echo "RUN_USER restart smoke test OK"
 
+      - name: Smoke test — RUN_USER default (browser) and RUN_USER=0 (root)
+        run: |
+          set -euo pipefail
+          docker run -d --name user-default -p 9231:9222 \
+            -e ENABLE_SELKIES=false -e ENABLE_AUTH=false \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          docker run -d --name user-root -p 9232:9222 \
+            -e ENABLE_SELKIES=false -e ENABLE_AUTH=false -e RUN_USER=0 \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'for c in user-default user-root; do docker logs $c || true; docker rm -f $c >/dev/null; done' EXIT
+          for port in 9231 9232; do
+            for i in $(seq 1 60); do
+              curl -sf http://127.0.0.1:$port/json/version >/dev/null && break
+              sleep 1
+            done
+            curl -sf http://127.0.0.1:$port/json/version | jq -e '.Browser' >/dev/null
+          done
+          # the main browser's owner: unset RUN_USER = browser, 0 = root
+          owner() { docker exec "$1" sh -c 'ps -o user= -p "$(pgrep -o -f -- "--user-data-dir=/browser/user-data")"'; }
+          [ "$(owner user-default)" = browser ]
+          [ "$(owner user-root)" = root ]
+          docker logs user-root 2>&1 | grep -qF 'RUN_USER=0: everything runs as root'
+          echo "RUN_USER default/root smoke test OK"
+
       - name: Smoke test — chromium sandbox (RUN_USER + user namespaces)
         run: |
           set -euo pipefail

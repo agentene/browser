@@ -327,7 +327,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 主浏览器空闲(无 CDP 客户端、无隔离 context、无人观看串流)多少分钟后自动关闭;`0` = 不自动关闭 |
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
-| `CHROMIUM_SANDBOX`          | `auto`                                                                                              | Chromium 自身的沙箱(主浏览器和 context 浏览器):`auto` = 浏览器以非特权用户运行(`RUN_USER`)**且**容器允许创建 user namespace 时开启,否则使用 `--no-sandbox`;`off` = 始终 `--no-sandbox`。见[权限降级(`RUN_USER`)](#权限降级run_user) |
+| `CHROMIUM_SANDBOX`          | `auto`                                                                                              | Chromium 自身的沙箱(主浏览器和 context 浏览器):`auto` = 浏览器以非特权用户运行(`RUN_USER` 不为 `0`,即默认情况)**且**容器允许创建 user namespace 时开启,否则使用 `--no-sandbox`;`off` = 始终 `--no-sandbox`。见[权限降级(`RUN_USER`)](#权限降级run_user) |
 | `CHROMIUM_ALLOW_FILE_URLS`  | `false`                                                                                             | `true` = 浏览器可以打开 `file://` URL。默认禁止(托管策略 `URLBlocklist`),因为 CDP 客户端可以借浏览器读取其用户能读的任何文件 —— 包括登录的会话密钥和各进程的环境变量 |
 | `CDP_LISTEN_PORT`           | `9222`                                                                                              | 公开 CDP 端点在容器内的端口(nginx → CDP 网关 → chromium;见[端口](#端口))                                                                                                                   |
 | `CDP_INTERNAL_PORT`         | `9221`                                                                                              | Chromium 回环 DevTools 端口(nginx 后面)                                                                                                                                           |
@@ -349,28 +349,30 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `TZ`                | `UTC`          | 容器时区(任意 IANA 时区,如 `Asia/Shanghai`)                                                                                                                                                                          |
 | `DISPLAY_BACKEND`   | `wayland`      | 有头浏览器所在的桌面:`wayland` = labwc,一个无头 Wayland 合成器 + 窗口管理器,由 Selkies 在 GPU 上采集 —— 挂了 GPU 时,动画页面的 CPU 占用降低数倍,见 [Wayland 桌面](#wayland-桌面display_backendwayland);`x11` = Xvfb(+ picom)—— 使用 NVIDIA GPU 时请选它 |
 | `SCREEN_GEOMETRY`   | `1920x1080x24` | Xvfb 屏幕尺寸 `宽x高x深`(`wayland` 时为 labwc 输出的尺寸);同时决定 Selkies 串流分辨率                                                                                                                                 |
-| `RUN_USER`          | *(空)*         | 桌面栈(Xvfb 或 labwc、picom、PulseAudio、selkies、chromium、CDP 网关)与 nginx *worker* 以该用户而非 root 运行 —— 已存在的用户名(如 `browser`)或 `uid[:gid]`;PID 1 与 nginx master 保持 root。见[权限降级(`RUN_USER`)](#权限降级run_user) |
+| `RUN_USER`          | `browser`      | 桌面栈(Xvfb 或 labwc、picom、PulseAudio、selkies、chromium、CDP 网关、认证服务)与 nginx *worker* 的运行用户 —— 未设置/为空 = `browser`(uid 1001,镜像内置);也可填已存在的用户名或 `uid[:gid]`;`0` = 全部以 root 运行。PID 1 与 nginx master 保持 root。见[权限降级(`RUN_USER`)](#权限降级run_user) |
 
 ### 权限降级(`RUN_USER`)
 
-默认情况下容器内所有进程都以 root 运行(历史行为)。设置 `RUN_USER` 把
-桌面栈 —— Xvfb(或 labwc)、picom、PulseAudio、selkies、chromium(以及 CDP 网关和它的
-context 浏览器),还有 nginx 的 *worker* —— 迁移到非特权用户:
+默认情况下,桌面栈 —— Xvfb(或 labwc)、picom、PulseAudio、selkies、chromium(以及
+CDP 网关和它的 context 浏览器、认证服务),还有 nginx 的 *worker* —— 以镜像内置的非特权
+用户 `browser`(uid 1001)运行。`RUN_USER` 可以改用其他用户,或者重新让所有进程以 root 运行:
 
 ```bash
 # compose(.env)
-RUN_USER=browser       # 或数字 uid[:gid],例如 1000,与宿主机上
+#RUN_USER=browser      # 默认值(未设置或为空效果相同)
+RUN_USER=1000          # 数字 uid[:gid],例如与宿主机上
                        # ./browser 的属主 uid 对齐
+RUN_USER=0             # 不降权:所有进程以 root 运行
 ```
 
 具体行为:
 
-* 接受已存在的用户名(镜像内置 `browser`,uid 1001)或 `uid[:gid]`;数字 id 缺失的 passwd/group 条目会在启动时合成。
+* 接受已存在的用户名(镜像内置 `browser`,uid 1001)或 `uid[:gid]`;数字 id 缺失的 passwd/group 条目会在启动时合成。`0`(以及 `0:<gid>` 或 `root`)关闭降权 —— 此时下面各条都不适用。
 * PID 1 与 nginx **master** 保持 root:nginx 绑定(默认为特权的)监听端口并读取 TLS 密钥,监督进程负责准备浏览器 profile。其余进程经 `setpriv` 以无 capability 状态启动。
-* 浏览器 profile(`/browser/user-data`)每次启动都会 `chown` 给该用户 —— 首次迁移较大的 root 属主 profile 需要一点时间,之后只是空遍历。
+* 浏览器 profile(`/browser/user-data`)每次启动都会 `chown` 给该用户 —— 首次迁移较大的 root 属主 profile(例如 0.2.0 之前的版本默认以 root 运行留下的)需要一点时间,之后只是空遍历。
 * GPU 设备节点保持可用:`/dev/dri` / NVIDIA 节点的宿主机 gid 会被加入补充组。
 * CDP/web 端口保持不变。收益是文件系统/权限隔离 —— 浏览器被攻破后不再能以 root 写文件。
-* 如果容器还允许创建 user namespace,**Chromium 沙箱**(`CHROMIUM_SANDBOX=auto`)也会随之开启:Chromium 会把渲染进程限制在独立的 user、PID、network namespace 中,并加上 seccomp-BPF(可在 `chrome://sandbox` 查看)。Docker 默认的 seccomp 配置禁止 user namespace,因此需要一个允许它的配置 —— 例如在 compose override 里写 `security_opt: ["seccomp=unconfined"]`(`docker run` 用 `--security-opt seccomp=unconfined`),代价是容器本身失去 syscall 过滤。入口脚本每次启动都会探测,并在日志里输出 `chromium: sandboxed …` 或没有开启的原因;条件不满足时浏览器继续使用 `--no-sandbox`。Chromium 的 setuid 辅助程序绕不过这个限制(它创建同样的 namespace 也需要 `CAP_SYS_ADMIN`),所以镜像里没有安装它。以 root 运行(未设置 `RUN_USER`)时 Chromium 根本无法启用沙箱。
+* 如果容器还允许创建 user namespace,**Chromium 沙箱**(`CHROMIUM_SANDBOX=auto`)也会随之开启:Chromium 会把渲染进程限制在独立的 user、PID、network namespace 中,并加上 seccomp-BPF(可在 `chrome://sandbox` 查看)。Docker 默认的 seccomp 配置禁止 user namespace,因此需要一个允许它的配置 —— 例如在 compose override 里写 `security_opt: ["seccomp=unconfined"]`(`docker run` 用 `--security-opt seccomp=unconfined`),代价是容器本身失去 syscall 过滤。入口脚本每次启动都会探测,并在日志里输出 `chromium: sandboxed …` 或没有开启的原因;条件不满足时浏览器继续使用 `--no-sandbox`。Chromium 的 setuid 辅助程序绕不过这个限制(它创建同样的 namespace 也需要 `CAP_SYS_ADMIN`),所以镜像里没有安装它。以 root 运行(`RUN_USER=0`)时 Chromium 根本无法启用沙箱。
 
 ### 时区与语言
 
@@ -581,14 +583,15 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 * **首次启动后请立即设置登录。** 初始化表单需要容器日志里的设置码,看不到日志的访问者无法占用这个浏览器;但在设置 key 之前 CDP API 仍是开放的。跳过登录意味着任何能访问 web UI 的人都能使用它 —— 而且借助 DNS rebinding(某个网站把自己的域名指向这个容器),该网络里任何用户打开的网页也能使用它:把 `ALLOWED_HOSTS` 设为你访问它所用的主机名即可堵住(IP 地址和 `localhost` 始终可用)。CDP API 本身不受影响(它拒绝一切带 `Origin` 的请求)。web UI 离开可信网络时请同时启用 HTTPS(纯 HTTP 会以明文传输密码和会话 cookie)。
 * **网页无法访问 CDP API。** 带 `Origin` 请求头或来自其他站点的请求一律拒绝,除非 `CDP_ALLOW_ORIGINS` 列出了该 origin —— 即使设置了 API Key 这一点也很重要,因为容器自己浏览器里的网页可以直接访问网关的 loopback 端口,而那里不经过 nginx(也就不检查 key)。
 * **浏览器里禁止 `file://`**(`CHROMIUM_ALLOW_FILE_URLS=false`):否则 CDP 客户端可以借浏览器读取容器里的文件,其中包括 `/browser/settings/auth.json`(给登录会话签名的密钥)和各进程的环境变量(以环境变量传入的密码)。只有在每个 CDP 客户端都可以读取这些内容时才放开它。
-* 默认情况下 Chromium 以 `--no-sandbox` 运行(以 root 运行,或容器不允许 user namespace —— 容器化 Chrome 的常见情况)。设置 `RUN_USER` 并允许 user namespace 即可启用它的沙箱(`CHROMIUM_SANDBOX`,见[权限降级(`RUN_USER`)](#权限降级run_user));无论哪种情况,都请把容器当作"暴露一个浏览器"来对待,放在专用的用户/VM 里。
+* 默认情况下 Chromium 以 `--no-sandbox` 运行(Docker 默认的 seccomp 配置禁止它所需的 user namespace —— 容器化 Chrome 的常见情况;以 root 运行,即 `RUN_USER=0` 时,则根本无法启用沙箱)。允许 user namespace 即可启用它的沙箱(`CHROMIUM_SANDBOX`,见[权限降级(`RUN_USER`)](#权限降级run_user));无论哪种情况,都请把容器当作"暴露一个浏览器"来对待,放在专用的用户/VM 里。
 * 生成的 TLS 密钥是自签的 —— 浏览器会告警,属预期;对公网服务请换用正式证书。
-* 容器默认以 **root** 运行(入口脚本是 PID 1,且默认需绑定 80/443 特权端口)。设置 `RUN_USER`(见[权限降级(`RUN_USER`)](#权限降级run_user))可把桌面栈与 nginx worker 移出 root —— PID 1 与 nginx master 按设计保持 root。`--security-opt=no-new-privileges` 可直接使用。单独加 `--cap-drop=ALL` 会导致容器无法启动(入口脚本与 nginx 仍需 chown、切换 uid、绑定 80 端口),需加回启动所需的能力:
+* PID 1 与 nginx master 以 **root** 运行(入口脚本默认需绑定 80/443 特权端口并准备 profile);桌面栈与 nginx worker 默认以非特权用户 `browser` 运行(`RUN_USER`,见[权限降级(`RUN_USER`)](#权限降级run_user);`RUN_USER=0` 则它们也以 root 运行)。`--security-opt=no-new-privileges` 可直接使用。单独加 `--cap-drop=ALL` 会导致容器无法启动(入口脚本与 nginx 仍需 chown、切换 uid、绑定 80 端口),需加回启动所需的能力:
 
   ```bash
   docker run --cap-drop=ALL --security-opt=no-new-privileges \
     --cap-add=CHOWN --cap-add=SETUID --cap-add=SETGID --cap-add=NET_BIND_SERVICE \
-    ...   # 使用 RUN_USER 时还需: --cap-add=FOWNER --cap-add=DAC_OVERRIDE --cap-add=KILL
+    --cap-add=FOWNER --cap-add=DAC_OVERRIDE --cap-add=KILL \
+    ...   # RUN_USER=0 时不需要最后这三项
   ```
 
 ## 故障排查

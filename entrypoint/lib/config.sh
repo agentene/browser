@@ -89,7 +89,7 @@
 #                               after the entrypoint's own so they win
 #   CHROMIUM_SANDBOX=auto        chromium's own sandbox (main and context
 #                                browsers): auto = on when the browsers run
-#                                unprivileged (RUN_USER) AND the container
+#                                unprivileged (RUN_USER not 0) AND the container
 #                                allows user namespaces (docker's default
 #                                seccomp profile does not — see the README),
 #                                --no-sandbox otherwise; off = always
@@ -160,15 +160,17 @@
 #                                See nginx.sh (nginx_parse_port_forwards) for
 #                                details (late peer startup, WebSocket
 #                                support, collision rules).
-#   RUN_USER=""                  (resolved in privileges.sh) privilege drop
-#                                for the desktop stack (Xvfb/labwc,
-#                                picom, PulseAudio, selkies, chromium, the CDP
-#                                gateway) and the nginx workers. Empty (default) = everything
-#                                runs as root (the historical behavior). A
-#                                user name that exists in /etc/passwd (e.g.
-#                                browser) or uid[:gid] (missing passwd/group
-#                                entries are synthesized at startup) runs those
-#                                daemons as that user instead. PID 1 and the
+#   RUN_USER=browser             (resolved in privileges.sh) the user the
+#                                desktop stack (Xvfb/labwc, picom, PulseAudio,
+#                                selkies, chromium, the CDP gateway, the auth
+#                                service) and the nginx workers run as. Unset
+#                                or empty = browser, the unprivileged user the
+#                                image ships (uid 1001). A user name that
+#                                exists in /etc/passwd or uid[:gid] (missing
+#                                passwd/group entries are synthesized at
+#                                startup) runs those daemons as that user
+#                                instead; 0 (or 0:<gid>, root) = everything
+#                                runs as root, no privilege drop. PID 1 and the
 #                                nginx master always stay root: nginx binds the
 #                                (possibly privileged) listen ports and reads the
 #                                TLS key, and the supervisor keeps preparing
