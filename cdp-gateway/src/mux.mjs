@@ -22,7 +22,7 @@
 
 import WebSocket from 'ws';
 import { openWs } from './cdp-client.mjs';
-import { answerFor, guardCommand, needsGuard, parseCommand } from './client-frame.mjs';
+import { guardFrame, needsGuard } from './client-frame.mjs';
 import { INTERNAL_ID_BASE, WS_OPTIONS } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { forward } from './flow.mjs';
@@ -197,22 +197,29 @@ export class Mux {
       this.toMain(data);
       return;
     }
-    const parsed = parseCommand(data);
-    if (parsed.answer) {
-      // not CDP: answered with chromium's own error, never forwarded (the
-      // gateway cannot tell what chromium would read in it)
-      this.sendClient(parsed.answer);
+    const checked = guardFrame(data);
+    if (checked.note) log(`mux ${this.clientAddr}: ${checked.note}`);
+    if (checked.notes) for (const note of checked.notes) log(`mux ${this.clientAddr}: ${note}`);
+    if (!checked.msg) {
+      // not CDP, or a command the gateway answers itself (client-frame.mjs):
+      // a refusal, or a client's Browser.close, which succeeds and ends this
+      // client's connection — its isolated context with it —, as a closing
+      // browser would; the shared browser stays up
+      if (checked.answer) this.sendClient(checked.answer);
+      if (checked.close) this.close('client sent Browser.close');
       return;
     }
-    const guarded = guardCommand(parsed.msg);
-    if (guarded.answer) {
-      this.refuse(parsed.msg, guarded);
-      return;
-    }
-    for (const note of guarded.notes) log(`mux ${this.clientAddr}: ${note}`);
-    const { msg } = guarded;
+    const { msg } = checked;
     const { method, sessionId } = msg;
     const params = paramsOf(msg);
+
+    // The client detached one of its browser-target sessions: the stand-in
+    // the gateway holds for it in the context chromium goes down too, right
+    // now — the command itself still travels to the main chromium below,
+    // which owns the session
+    if (method === 'Target.detachFromTarget' && this.browserSessions.has(params.sessionId)) {
+      this.retireBrowserSession(params.sessionId);
+    }
 
     if (sessionId) {
       this.fromClientSession(msg);
@@ -266,16 +273,6 @@ export class Mux {
       return;
     }
     this.sendMain(msg);
-  }
-
-  // A command the gateway answers itself (client-frame.mjs): a refusal, or a
-  // client's Browser.close, which succeeds and ends this client's connection
-  // — its isolated context with it —, as a closing browser would; the
-  // shared browser stays up.
-  refuse(msg, { answer, close, note }) {
-    log(`mux ${this.clientAddr}: ${note}`);
-    if (msg.id !== undefined) this.sendClient(answerFor(msg, answer));
-    if (close) this.close('client sent Browser.close');
   }
 
   // A command on a session: the context chromium's, the main chromium's, or
@@ -375,10 +372,43 @@ export class Mux {
       entry.id = sessionId;
       this.browserSessionOf.set(sessionId, clientSession);
       flush();
+      if (entry.retired) {
+        // the client detached the session while this stand-in was opening:
+        // the queued commands went through first, in the order the client
+        // sent them (as they would have on the main chromium), and the
+        // fresh stand-in follows the session down
+        this.browserSessions.delete(clientSession);
+        this.detachStandIn(entry);
+      }
     }, (err) => {
       if (this.browserSessions.get(clientSession) === entry) this.browserSessions.delete(clientSession);
       flush(err);
     });
+  }
+
+  // A client browser-target session the client detached (the command is on
+  // its way to the main chromium, which owns the session): the stand-in the
+  // gateway opened for it in the context chromium goes down too, and both
+  // maps forget the pair — without this, a long-lived connection that keeps
+  // opening and closing browser sessions would pile them up for the context
+  // chromium's lifetime.
+  retireBrowserSession(clientSession) {
+    const entry = this.browserSessions.get(clientSession);
+    if (!entry) return;
+    entry.retired = true;
+    if (!entry.id) return; // still opening: retired once the stand-in is up
+    this.browserSessions.delete(clientSession);
+    this.detachStandIn(entry);
+  }
+
+  // Best effort: the context chromium (or the whole context) may be gone
+  // already. The browserSessionOf entry outlives this: whatever is still in
+  // flight on the stand-in keeps its rewrite, and the entry is dropped only
+  // when the context chromium reports the stand-in detached (fromUpstream).
+  detachStandIn(entry) {
+    const standIn = entry.id;
+    entry.id = '';
+    this.sendContext({ method: 'Target.detachFromTarget', params: { sessionId: standIn } });
   }
 
   // Target.createBrowserContext. One startup at a time: a client may create
@@ -426,7 +456,9 @@ export class Mux {
       this.context = context;
       this.contextWs = ws;
       context.mux = this;
-      this.alias = `CONTEXT${context.name.replace(/\W/g, '').toUpperCase()}${Date.now().toString(16).toUpperCase()}`;
+      // the alias carries the context's number (context-7 -> CONTEXT7…);
+      // the timestamp tells two aliases of one number apart across restarts
+      this.alias = `CONTEXT${context.name.replace(/\D/g, '')}${Date.now().toString(16).toUpperCase()}`;
       ws.on('message', (data) => this.fromUpstream('context', data));
       ws.on('close', () => {
         if (this.context === context) context.destroy('context connection closed');
@@ -482,7 +514,13 @@ export class Mux {
     if (origin === 'context') {
       // the gateway's own browser-target sessions stay invisible to the client
       if (msg.method === 'Target.attachedToTarget' && msg.params.targetInfo.type === 'browser') return;
-      if (msg.method === 'Target.detachedFromTarget' && this.browserSessionOf.has(msg.params.sessionId)) return;
+      if (msg.method === 'Target.detachedFromTarget' && this.browserSessionOf.has(msg.params.sessionId)) {
+        // a stand-in, gone by the gateway's own hand (retireBrowserSession):
+        // the client never knew the id — and only now, with nothing in
+        // flight on it any more, is the pair fully forgotten
+        this.browserSessionOf.delete(msg.params.sessionId);
+        return;
+      }
       if (this.browserSessionOf.has(msg.sessionId)) msg.sessionId = this.browserSessionOf.get(msg.sessionId);
       this.trackContextMessage(msg);
     }

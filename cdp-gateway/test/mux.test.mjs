@@ -158,6 +158,10 @@ before(async () => {
       const msg = JSON.parse(data.toString());
       contextReceived.push(msg);
       arrivals.push(['context', msg.method, msg.sessionId]);
+      // like chromium: a detach reports the session gone before its reply
+      if (msg.method === 'Target.detachFromTarget') {
+        ws.send(JSON.stringify({ method: 'Target.detachedFromTarget', params: { sessionId: msg.params.sessionId } }));
+      }
       ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result: CTX_RESULTS[msg.method] ?? {} }));
     });
   });
@@ -197,7 +201,7 @@ test('concurrent createBrowserContext: one context chromium, the second inside i
       client.command({ id: 21, method: 'Target.createBrowserContext', params: {} }),
     ]);
     assert.equal(stub.made.length, 1, 'only one context chromium started');
-    assert.match(first.result.browserContextId, /^CONTEXTCONTEXT1/);
+    assert.match(first.result.browserContextId, /^CONTEXT1/);
     assert.deepEqual(second.result, { browserContextId: 'INNER1' });
   } finally {
     client.close();
@@ -514,6 +518,63 @@ test('B3: a browser-target session addresses the context by the alias', async ()
     await client.command({ id: 242, method: 'Target.createBrowserContext', params: {} });
     await client.command({ id: 243, sessionId: 'MB', method: 'Storage.getCookies', params: { browserContextId: 'INNER1' } });
     assert.deepEqual(contextReceived.filter((m) => m.method === 'Storage.getCookies').at(-1).params, { browserContextId: 'INNER1' });
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+// --- Q3: a detached browser session takes its stand-in down with it ---------
+
+test('Q3: detaching a browser-target session retires its stand-in and both maps', async () => {
+  const { stub, client, mux, alias } = await contextConnection();
+  try {
+    // a stand-in exists once a command on the browser session reached the context
+    await client.command({ id: 250, method: 'Target.attachToBrowserTarget', params: {} });
+    await client.command({ id: 251, sessionId: 'MB', method: 'Storage.getCookies', params: { browserContextId: alias } });
+    assert.equal(mux.browserSessions.size, 1);
+    assert.equal(mux.browserSessionOf.size, 1);
+    contextReceived.length = 0;
+    // the client ends its browser session (Puppeteer's CDPSession.detach)
+    assert.equal((await client.command({ id: 252, method: 'Target.detachFromTarget', params: { sessionId: 'MB' } })).id, 252);
+    // the command reached the main chromium, which owns the session...
+    assert.ok(received.some((m) => m.id === 252 && m.method === 'Target.detachFromTarget'));
+    // ...and the stand-in was detached in the context chromium
+    assert.ok(contextReceived.some((m) => m.method === 'Target.detachFromTarget' && m.params.sessionId === 'CTXB'));
+    // the stand-in's own detach report is swallowed, and the maps forget the
+    // pair (the report lands asynchronously)
+    const deadline = Date.now() + 500;
+    while (mux.browserSessionOf.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(mux.browserSessions.size, 0);
+    assert.equal(mux.browserSessionOf.size, 0);
+    assert.ok(!client.inbox.some((m) => m.method === 'Target.detachedFromTarget' && m.params?.sessionId === 'CTXB'),
+      'the stand-in id never reaches the client');
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('Q3: nothing accumulates across browser sessions, and a fresh one works', async () => {
+  const { stub, client, mux, alias } = await contextConnection();
+  try {
+    for (let i = 0; i < 3; i++) {
+      await client.command({ id: 260 + i * 3, method: 'Target.attachToBrowserTarget', params: {} });
+      await client.command({ id: 261 + i * 3, sessionId: 'MB', method: 'Storage.getCookies', params: { browserContextId: alias } });
+      await client.command({ id: 262 + i * 3, method: 'Target.detachFromTarget', params: { sessionId: 'MB' } });
+      // the stand-in's own detach report lands before the next round starts
+      const deadline = Date.now() + 500;
+      while (mux.browserSessionOf.size > 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(mux.browserSessions.size, 0, `round ${i}`);
+      assert.equal(mux.browserSessionOf.size, 0, `round ${i}`);
+    }
+    // the round-trip still works on a fresh stand-in
+    const reply = await client.command({ id: 271, sessionId: 'MB', method: 'Storage.getCookies', params: { browserContextId: alias } });
+    assert.deepEqual(reply, { id: 271, sessionId: 'MB', result: {} });
   } finally {
     client.close();
     stub.restore();

@@ -60,7 +60,10 @@ class Context {
     this.browserWsPath = '';
     this.mux = null; // the client connection it is attached to (mux.mjs)
     this.destroyed = false;
-    this.onExit = null;
+    // armed from here on, before the process exists: an exit during startup
+    // is destroyed the same way (destroy is idempotent) instead of relying
+    // on the later openWs failing
+    this.onExit = () => this.destroy('chromium exited');
   }
 
   async start() {
@@ -104,8 +107,21 @@ class Context {
     this.browserWsPath = await devtoolsAnnounced(proc, port, logPath);
     this.port = port;
 
-    const cookies = await copyCookies(this.browserWsUrl());
-    const origins = await restoreLocalStorage(this.browserWsUrl(), localStorageSnapshot);
+    // Both sync steps are best effort: the profile clone on disk already
+    // carries most of the storage, so one of them failing must not fail the
+    // whole context — a warning is all it takes
+    let cookies = 0;
+    try {
+      cookies = await copyCookies(this.browserWsUrl());
+    } catch (err) {
+      log(`${this.name}: cookie sync skipped: ${err.message}`);
+    }
+    let origins = 0;
+    try {
+      origins = await restoreLocalStorage(this.browserWsUrl(), localStorageSnapshot);
+    } catch (err) {
+      log(`${this.name}: localStorage restore skipped: ${err.message}`);
+    }
     log(`${this.name}: up on 127.0.0.1:${this.port} (pid ${this.proc?.pid}; clone ${tClone - t0}ms, total ${Date.now() - t0}ms; synced from main: ${cookies} cookies, localStorage of ${origins} open origin(s))`);
   }
 
@@ -177,7 +193,6 @@ class ContextRegistry {
     }
     this.#contexts.set(context.name, context);
     notifyChange();
-    context.onExit = () => context.destroy('chromium exited');
     return context;
   }
 

@@ -125,8 +125,9 @@ export async function restoreLocalStorage(contextWsUrl, snapshot) {
   if (!snapshot.size) return 0;
   const cdp = await CdpClient.connect(contextWsUrl);
   let restored = 0;
+  let targetId; // the temporary tab; closed however the restoring went
   try {
-    const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank', background: true });
+    ({ targetId } = await cdp.send('Target.createTarget', { url: 'about:blank', background: true }));
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
     const opts = { sessionId };
     cdp.on('Fetch.requestPaused', ({ requestId }) => {
@@ -168,8 +169,10 @@ export async function restoreLocalStorage(contextWsUrl, snapshot) {
         log(`localStorage restore of ${origin} failed: ${err.message}`);
       }
     }
-    await cdp.send('Target.closeTarget', { targetId });
   } finally {
+    // closed on every way out: left open, the tab would surface as a page
+    // of the alias context (best effort — the connection may already be gone)
+    if (targetId) await cdp.send('Target.closeTarget', { targetId }).catch(() => {});
     cdp.close();
   }
   return restored;

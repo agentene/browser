@@ -79,3 +79,25 @@ function refuse(message) {
 export function answerFor(msg, answer) {
   return { id: msg.id, sessionId: msg.sessionId, ...answer };
 }
+
+// The whole check of one client frame, as every caller applies it (mux.mjs,
+// relay.mjs — one decision, not one per connection kind):
+//   { msg, forward, notes }  send forward upstream: the command re-serialized
+//                            (msg: the parsed command, for mux's routing)
+//   { answer, close, note }  never forwarded. Answer the client instead —
+//                            answer is null when the command has no id to
+//                            answer under (a parse error). close: end the
+//                            client's connection after the answer (its own
+//                            Browser.close, which is all a client can tell of
+//                            a closed browser). note: why, for the log.
+export function guardFrame(data) {
+  const parsed = parseCommand(data);
+  if (parsed.answer) return { answer: parsed.answer, close: false };
+  const guarded = guardCommand(parsed.msg);
+  if (guarded.msg) return { msg: guarded.msg, forward: JSON.stringify(guarded.msg), notes: guarded.notes };
+  return {
+    answer: parsed.msg.id === undefined ? null : answerFor(parsed.msg, guarded.answer),
+    close: guarded.close,
+    note: guarded.note,
+  };
+}

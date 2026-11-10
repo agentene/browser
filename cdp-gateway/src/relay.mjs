@@ -1,7 +1,7 @@
 // /devtools/page/<id>: a plain relay to whichever chromium owns the target.
 
 import WebSocket from 'ws';
-import { answerFor, guardCommand, needsGuard, parseCommand } from './client-frame.mjs';
+import { guardFrame, needsGuard } from './client-frame.mjs';
 import { WS_OPTIONS } from './config.mjs';
 import { forward } from './flow.mjs';
 import { log } from './util.mjs';
@@ -13,31 +13,23 @@ export function openRelays() {
   return relays;
 }
 
-// A client frame the gateway has to check (client-frame.mjs): a
-// Browser.close / Browser.crash, which on a page WebSocket ends the whole
-// browser just the same (browser-exit.mjs), or a command naming local files
-// (file-access.mjs). Returns what goes upstream instead of the frame: the
-// re-serialized command, or null when the gateway answered it itself.
-// Binary frames go as they came: chromium executes none (it drops the
-// connection on one).
-function guardFrame(client, data, isBinary) {
+// A client frame the gateway has to check (client-frame.mjs's guardFrame —
+// the same decision as on a browser connection, mux.mjs): a Browser.close /
+// Browser.crash, which on a page WebSocket ends the whole browser just the
+// same, or a command naming local files (file-access.mjs). Returns what
+// goes upstream instead of the frame: the re-serialized command, or null
+// when the gateway answered it itself. Binary frames go as they came:
+// chromium executes none (it drops the connection on one).
+function checkedFrame(client, data, isBinary) {
   if (isBinary || !needsGuard(data)) return data;
-  const parsed = parseCommand(data);
-  let answer = parsed.answer;
-  let close = false;
-  if (parsed.msg) {
-    const guarded = guardCommand(parsed.msg);
-    if (guarded.msg) {
-      for (const note of guarded.notes) log(`page relay: ${note}`);
-      return JSON.stringify(guarded.msg);
-    }
-    log(`page relay: ${guarded.note}`);
-    ({ close } = guarded);
-    if (parsed.msg.id === undefined) answer = null;
-    else answer = answerFor(parsed.msg, guarded.answer);
+  const checked = guardFrame(data);
+  if (checked.msg) {
+    for (const note of checked.notes) log(`page relay: ${note}`);
+    return checked.forward;
   }
-  if (answer && client.readyState === WebSocket.OPEN) client.send(JSON.stringify(answer), { binary: false });
-  if (close) client.close(); // after the answer; its 'close' takes the upstream down
+  log(`page relay: ${checked.note}`);
+  if (checked.answer && client.readyState === WebSocket.OPEN) client.send(JSON.stringify(checked.answer), { binary: false });
+  if (checked.close) client.close(); // after the answer; its 'close' takes the upstream down
   return null;
 }
 
@@ -59,7 +51,7 @@ export function relay(client, upstreamUrl) {
     client.resume?.();
   });
   client.on('message', (raw, isBinary) => {
-    const data = guardFrame(client, raw, isBinary);
+    const data = checkedFrame(client, raw, isBinary);
     if (data === null) return;
     if (upstream.readyState === WebSocket.OPEN) forward(upstream, data, { binary: isBinary }, [client]);
     else queue.push([data, isBinary]);
