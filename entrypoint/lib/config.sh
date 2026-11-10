@@ -79,6 +79,20 @@
 #                                0 = never
 #   CHROMIUM_EXTRA_ARGS=""      extra chromium flags (word-split), appended
 #                               after the entrypoint's own so they win
+#   CHROMIUM_SANDBOX=auto        chromium's own sandbox (main and context
+#                                browsers): auto = on when the browsers run
+#                                unprivileged (RUN_USER) AND the container
+#                                allows user namespaces (docker's default
+#                                seccomp profile does not — see the README),
+#                                --no-sandbox otherwise; off = always
+#                                --no-sandbox. Chromium cannot sandbox itself
+#                                as root.
+#   CHROMIUM_ALLOW_FILE_URLS=false  true = the browsers may open file:// URLs.
+#                                Blocked by default (managed policy
+#                                URLBlocklist): a CDP client could otherwise
+#                                read whatever the browser's user can,
+#                                /browser/settings/auth.json (the login's
+#                                session secret) and /proc/*/environ included
 #   CDP_INTERNAL_PORT=9221      chromium loopback DevTools port (behind nginx)
 #   (the CDP gateway always sits between nginx and chromium: every isolated
 #   CDP context — Target.createBrowserContext, e.g. a playwright-cli session
@@ -275,6 +289,18 @@ config_chromium() {
     # off = always software (the historical behavior); strict = hardware
     # only, never allow SwiftShader.
     CHROMIUM_GPU="${CHROMIUM_GPU:-auto}"
+    # The browsers' own sandbox (chromium.sh): auto = when possible.
+    CHROMIUM_SANDBOX="${CHROMIUM_SANDBOX:-auto}"
+    case "${CHROMIUM_SANDBOX}" in
+        auto|off) : ;;
+        *) die "CHROMIUM_SANDBOX='${CHROMIUM_SANDBOX}' must be auto or off" ;;
+    esac
+    # file:// URLs (a managed policy blocks them unless true; chromium.sh).
+    CHROMIUM_ALLOW_FILE_URLS="${CHROMIUM_ALLOW_FILE_URLS:-false}"
+    case "${CHROMIUM_ALLOW_FILE_URLS}" in
+        true|false) : ;;
+        *) die "CHROMIUM_ALLOW_FILE_URLS='${CHROMIUM_ALLOW_FILE_URLS}' must be true or false" ;;
+    esac
 }
 
 config_cdp_gateway() {

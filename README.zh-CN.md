@@ -325,6 +325,8 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 配合 `CHROMIUM_AUTOSTART=false`:主浏览器空闲(无 CDP 客户端、无隔离 context、无人观看串流)多少分钟后自动关闭;`0` = 不自动关闭 |
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
+| `CHROMIUM_SANDBOX`          | `auto`                                                                                              | Chromium 自身的沙箱(主浏览器和 context 浏览器):`auto` = 浏览器以非特权用户运行(`RUN_USER`)**且**容器允许创建 user namespace 时开启,否则使用 `--no-sandbox`;`off` = 始终 `--no-sandbox`。见[权限降级(`RUN_USER`)](#权限降级run_user) |
+| `CHROMIUM_ALLOW_FILE_URLS`  | `false`                                                                                             | `true` = 浏览器可以打开 `file://` URL。默认禁止(托管策略 `URLBlocklist`),因为 CDP 客户端可以借浏览器读取其用户能读的任何文件 —— 包括登录的会话密钥和各进程的环境变量 |
 | `CDP_LISTEN_PORT`           | `9222`                                                                                              | 公开 CDP 端点在容器内的端口(nginx → CDP 网关 → chromium;见[端口](#端口))                                                                                                                   |
 | `CDP_INTERNAL_PORT`         | `9221`                                                                                              | Chromium 回环 DevTools 端口(nginx 后面)                                                                                                                                           |
 
@@ -364,7 +366,8 @@ RUN_USER=browser       # 或数字 uid[:gid],例如 1000,与宿主机上
 * PID 1 与 nginx **master** 保持 root:nginx 绑定(默认为特权的)监听端口并读取 TLS 密钥,监督进程负责准备浏览器 profile。其余进程经 `setpriv` 以无 capability 状态启动。
 * 浏览器 profile(`/browser/user-data`)每次启动都会 `chown` 给该用户 —— 首次迁移较大的 root 属主 profile 需要一点时间,之后只是空遍历。
 * GPU 设备节点保持可用:`/dev/dri` / NVIDIA 节点的宿主机 gid 会被加入补充组。
-* 刻意**不**改变的:chromium 仍带 `--no-sandbox`(Docker 默认 seccomp 对任何 uid 都不允许 userns 沙箱),CDP/web 端口保持不变。收益是文件系统/权限隔离 —— 浏览器被攻破后不再能以 root 写文件。
+* CDP/web 端口保持不变。收益是文件系统/权限隔离 —— 浏览器被攻破后不再能以 root 写文件。
+* 如果容器还允许创建 user namespace,**Chromium 沙箱**(`CHROMIUM_SANDBOX=auto`)也会随之开启:Chromium 会把渲染进程限制在独立的 user、PID、network namespace 中,并加上 seccomp-BPF(可在 `chrome://sandbox` 查看)。Docker 默认的 seccomp 配置禁止 user namespace,因此需要一个允许它的配置 —— 例如在 compose override 里写 `security_opt: ["seccomp=unconfined"]`(`docker run` 用 `--security-opt seccomp=unconfined`),代价是容器本身失去 syscall 过滤。入口脚本每次启动都会探测,并在日志里输出 `chromium: sandboxed …` 或没有开启的原因;条件不满足时浏览器继续使用 `--no-sandbox`。Chromium 的 setuid 辅助程序绕不过这个限制(它创建同样的 namespace 也需要 `CAP_SYS_ADMIN`),所以镜像里没有安装它。以 root 运行(未设置 `RUN_USER`)时 Chromium 根本无法启用沙箱。
 
 ### 时区与语言
 
@@ -573,8 +576,9 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 * **在设置 [CDP API Key](#登录与-cdp-api-key) 之前,CDP 端点是开放的。** 没有 key 时,一次 TCP 连接即获得完整的浏览器控制权。即使设置了 key,也请只把 `9222` 发布到 localhost 或可信网络(或放在 TLS 后面:key 在请求头里传输,纯 HTTP 下是明文)。使用 [host 网络](#host-网络compose)时没有端口映射可以限制它,请设置 `NGINX_LISTEN_ADDR=127.0.0.1`。
 * **CDP 网关的隔离 context 继承你真实的登录态。** 每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 跟随[内置登录](#登录与-cdp-api-key)(跳过登录或 `ENABLE_AUTH=false` 时开放)。web UI 端口上的侧边栏副本(`cdp-console/`)同样跟随内置登录,设置了 `SELKIES_BASIC_AUTH_PASSWORD` 时还需要 Selkies 主密码。
 * **首次启动后请立即设置登录。** 在此之前,第一个访问 web UI 或控制台的人可以完成初始化(或跳过)。跳过登录意味着任何能访问 web UI 的人都能使用它。web UI 离开可信网络时请同时启用 HTTPS(纯 HTTP 会以明文传输密码和会话 cookie)。
-* Chromium 以 `--no-sandbox` 运行(容器化 Chrome 在没有允许 userns 的 seccomp 配置时的标准做法);请把容器当作"暴露一个浏览器"来对待,放在专用的用户/VM 里。
 * **网页无法访问 CDP API。** 带 `Origin` 请求头或来自其他站点的请求一律拒绝,除非 `CDP_ALLOW_ORIGINS` 列出了该 origin —— 即使设置了 API Key 这一点也很重要,因为容器自己浏览器里的网页可以直接访问网关的 loopback 端口,而那里不经过 nginx(也就不检查 key)。
+* **浏览器里禁止 `file://`**(`CHROMIUM_ALLOW_FILE_URLS=false`):否则 CDP 客户端可以借浏览器读取容器里的文件,其中包括 `/browser/settings/auth.json`(给登录会话签名的密钥)和各进程的环境变量(以环境变量传入的密码)。只有在每个 CDP 客户端都可以读取这些内容时才放开它。
+* 默认情况下 Chromium 以 `--no-sandbox` 运行(以 root 运行,或容器不允许 user namespace —— 容器化 Chrome 的常见情况)。设置 `RUN_USER` 并允许 user namespace 即可启用它的沙箱(`CHROMIUM_SANDBOX`,见[权限降级(`RUN_USER`)](#权限降级run_user));无论哪种情况,都请把容器当作"暴露一个浏览器"来对待,放在专用的用户/VM 里。
 * 生成的 TLS 密钥是自签的 —— 浏览器会告警,属预期;对公网服务请换用正式证书。
 * 容器默认以 **root** 运行(入口脚本是 PID 1,且默认需绑定 80/443 特权端口)。设置 `RUN_USER`(见[权限降级(`RUN_USER`)](#权限降级run_user))可把桌面栈与 nginx worker 移出 root —— PID 1 与 nginx master 按设计保持 root。`--security-opt=no-new-privileges` 可直接使用。单独加 `--cap-drop=ALL` 会导致容器无法启动(入口脚本与 nginx 仍需 chown、切换 uid、绑定 80 端口),需加回启动所需的能力:
 

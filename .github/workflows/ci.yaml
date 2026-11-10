@@ -208,6 +208,21 @@ jobs:
           # every console write needs X-CDP-Console, on the CDP port too
           [ "$(code -X DELETE http://127.0.0.1:9223/console/api/nope)" = 403 ]
           [ "$(code -X DELETE -H 'X-CDP-Console: 1' http://127.0.0.1:9223/console/api/nope)" = 404 ]
+          # file:// is blocked in the browsers (CHROMIUM_ALLOW_FILE_URLS=false)
+          docker exec -i gateway-smoke node --input-type=module - <<'EOF'
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          let id = 0; const pending = new Map();
+          ws.onmessage = (e) => { const m = JSON.parse(e.data); pending.get(m.id)?.(m); };
+          const send = (method, params = {}, sessionId) => new Promise((r) => { pending.set(++id, r); ws.send(JSON.stringify({ id, method, params, sessionId })); });
+          const { targetId } = (await send('Target.createTarget', { url: 'about:blank' })).result;
+          const { sessionId } = (await send('Target.attachToTarget', { targetId, flatten: true })).result;
+          const nav = await send('Page.navigate', { url: 'file:///etc/passwd' }, sessionId);
+          if (nav.result?.errorText !== 'net::ERR_BLOCKED_BY_ADMINISTRATOR') throw new Error(`file:// not blocked: ${JSON.stringify(nav)}`);
+          await send('Target.closeTarget', { targetId });
+          ws.close();
+          EOF
           # an isolated context must get its own chromium and be
           # destroyed again on dispose; driven with raw CDP from the image's node
           docker exec -i gateway-smoke node --input-type=module - <<'EOF'
@@ -355,6 +370,43 @@ jobs:
           [ "$(code $C/console/)" = 200 ] && [ "$(code $W/)" = 200 ]
           docker exec auth-smoke sh -c '! pgrep -f "[a]uth-server/server.mjs"'
           echo "built-in login smoke test OK"
+
+      - name: Smoke test — chromium sandbox (RUN_USER + user namespaces)
+        run: |
+          set -euo pipefail
+          docker run -d --name sandbox-smoke -p 9227:9222 \
+            -e ENABLE_SELKIES=false -e ENABLE_AUTH=false -e RUN_USER=browser \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker logs sandbox-smoke || true; docker rm -f sandbox-smoke >/dev/null' EXIT
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9227/json/version >/dev/null && break
+            sleep 1
+          done
+          # the browser works either way; sandboxed when the runner's kernel
+          # lets the container create user namespaces
+          curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser' >/dev/null
+          if ! docker logs sandbox-smoke 2>&1 | grep -q 'chromium: sandboxed'; then
+            echo "::warning::chromium ran without its sandbox on this runner: $(docker logs sandbox-smoke 2>&1 | grep 'chromium: no sandbox' || true)"
+            exit 0
+          fi
+          ! docker exec sandbox-smoke pgrep -af -- '--no-sandbox' >/dev/null
+          docker exec -i sandbox-smoke node --input-type=module - <<'EOF'
+          // chrome://sandbox reports the namespace + seccomp layers
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          let id = 0; const pending = new Map();
+          ws.onmessage = (e) => { const m = JSON.parse(e.data); pending.get(m.id)?.(m); };
+          const send = (method, params = {}, sessionId) => new Promise((r) => { pending.set(++id, r); ws.send(JSON.stringify({ id, method, params, sessionId })); });
+          const { targetId } = (await send('Target.createTarget', { url: 'chrome://sandbox' })).result;
+          const { sessionId } = (await send('Target.attachToTarget', { targetId, flatten: true })).result;
+          await new Promise((r) => setTimeout(r, 1500));
+          const text = (await send('Runtime.evaluate', { expression: 'document.body.innerText' }, sessionId)).result.result.value;
+          if (!/Namespace\s+Yes/.test(text) && !/PID namespaces\s+Yes/.test(text)) throw new Error(`not sandboxed: ${text.slice(0, 300)}`);
+          ws.close();
+          console.log('chromium sandbox smoke test OK');
+          EOF
 
       - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
         run: |

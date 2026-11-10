@@ -171,6 +171,14 @@ services:
       # SwiftShader software; off = force software; strict = never
       # SwiftShader (WebGL then requires the GPU).
       CHROMIUM_GPU: "${CHROMIUM_GPU:-auto}"
+      # Chromium's own sandbox: auto = on when RUN_USER is set and the
+      # container may create user namespaces (docker's default seccomp
+      # profile forbids it: add security_opt, see the README), --no-sandbox
+      # otherwise; off = always --no-sandbox
+      CHROMIUM_SANDBOX: "${CHROMIUM_SANDBOX:-auto}"
+      # true = the browsers may open file:// URLs; blocked by default so a
+      # CDP client cannot read the container's files through the browser
+      CHROMIUM_ALLOW_FILE_URLS: "${CHROMIUM_ALLOW_FILE_URLS:-false}"
 
       # --- CDP gateway ---
       # Every isolated CDP context (browser.newContext(), playwright-cli
