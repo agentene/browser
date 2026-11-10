@@ -27,6 +27,7 @@ privileges_setup() {
     RUN_NGINX_USER="${RUN_NAME}"
     privileges_own_profile
     privileges_clear_root_leftovers
+    privileges_clear_run_user_leftovers
 
     log "RUN_USER: desktop stack + nginx workers run as ${RUN_NAME} (uid=${RUN_UID} gid=${RUN_GID}${RUN_GROUPS:+ groups=${RUN_GROUPS}}); PID 1 + nginx master stay root"
 }
@@ -117,4 +118,15 @@ privileges_clear_root_leftovers() {
     rm -rf "${PULSE_RUNTIME_PATH}"
     rm -f /tmp/.X11-unix/X*
     mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+}
+
+# The reverse: files directly in /tmp that the previous start handed to the
+# run user (give_to_run_user) and this start rewrites as root. /tmp survives
+# `docker restart` (and so `restart: always` after a service exited), and
+# with fs.protected_regular (systemd's default) the kernel refuses even root
+# an O_CREAT open of a file in a sticky world-writable directory owned by
+# someone else — the rewrite would fail with EACCES and abort every start.
+# Remove them; their writers recreate them as root and hand them over again.
+privileges_clear_run_user_leftovers() {
+    rm -f /tmp/desktop-raise-new-windows /tmp/chromium.log
 }

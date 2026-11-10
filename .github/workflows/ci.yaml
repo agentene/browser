@@ -427,6 +427,31 @@ jobs:
           docker exec auth-smoke sh -c '! pgrep -f "[a]uth-server/server.mjs"'
           echo "built-in login smoke test OK"
 
+      - name: Smoke test — RUN_USER container survives docker restart
+        run: |
+          set -euo pipefail
+          # /tmp survives a restart; files the last start handed to the run
+          # user must not block this one (fs.protected_regular); Selkies on,
+          # so the desktop settings (/tmp/desktop-raise-new-windows) apply
+          docker run -d --name restart-smoke -p 9230:9222 \
+            -e ENABLE_AUTH=false -e RUN_USER=browser \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker logs restart-smoke || true; docker rm -f restart-smoke >/dev/null' EXIT
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9230/json/version >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9230/json/version | jq -e '.Browser' >/dev/null
+          docker restart restart-smoke >/dev/null
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9230/json/version >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9230/json/version | jq -e '.Browser' >/dev/null
+          [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' restart-smoke)" = "true 0" ]
+          if docker logs restart-smoke 2>&1 | grep -F '[entrypoint] ERROR'; then exit 1; fi
+          echo "RUN_USER restart smoke test OK"
+
       - name: Smoke test — chromium sandbox (RUN_USER + user namespaces)
         run: |
           set -euo pipefail
