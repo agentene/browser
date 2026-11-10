@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
 import { after, before, test } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
+import { INTERNAL_ID_BASE } from '../src/config.mjs';
+import { contexts } from '../src/contexts.mjs';
 import { Mux, openMuxes } from '../src/mux.mjs';
 
 // The fake main browser: answers every command, fails disposals of unknown
@@ -80,13 +82,119 @@ test('default-context traffic passes through verbatim, queued until the upstream
 test('sessions attached on main stay on main', async () => {
   const client = new FakeClient();
   const mux = new Mux(client, 'test', mainUrl);
-  const attached = client.next((m) => m.method === 'Target.attachedToTarget');
-  assert.equal((await client.command({ id: 2, method: 'Target.attachToTarget', params: { targetId: 'T1', flatten: true } })).result.sessionId, 'S1');
-  await attached;
-  assert.equal(mux.sessionOwner.get('S1'), 'main');
-  const ev = await client.command({ id: 3, sessionId: 'S1', method: 'Runtime.evaluate', params: { expression: '1' } });
-  assert.deepEqual(ev, { id: 3, sessionId: 'S1', result: { echo: 'Runtime.evaluate' } });
-  client.close();
+  try {
+    const attached = client.next((m) => m.method === 'Target.attachedToTarget');
+    assert.equal((await client.command({ id: 2, method: 'Target.attachToTarget', params: { targetId: 'T1', flatten: true } })).result.sessionId, 'S1');
+    await attached;
+    // only context sessions are tracked; anything else is main's
+    assert.equal(mux.sessionOwner.size, 0);
+    const ev = await client.command({ id: 3, sessionId: 'S1', method: 'Runtime.evaluate', params: { expression: '1' } });
+    assert.deepEqual(ev, { id: 3, sessionId: 'S1', result: { echo: 'Runtime.evaluate' } });
+  } finally {
+    client.close();
+  }
+});
+
+test('client ids in the gateway\'s own id range still get their replies', async () => {
+  const client = new FakeClient();
+  new Mux(client, 'test', mainUrl);
+  try {
+    const id = INTERNAL_ID_BASE + 5;
+    assert.deepEqual(await client.command({ id, method: 'Browser.getVersion', params: {} }), { id, result: { echo: 'Browser.getVersion' } });
+  } finally {
+    client.close();
+  }
+});
+
+test('main chromium replies are passed on as they came while nothing is awaited', async () => {
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', mainUrl);
+  try {
+    const big = 'x'.repeat(1024 * 1024);
+    const reply = await client.command({ id: 8, method: 'Runtime.evaluate', params: { expression: big } });
+    assert.deepEqual(reply, { id: 8, result: { echo: 'Runtime.evaluate' } });
+    assert.equal(received.find((m) => m.id === 8).params.expression.length, big.length);
+    assert.equal(mux.pending.size, 0);
+  } finally {
+    client.close();
+  }
+});
+
+// --- isolated contexts, with contexts.create() stubbed: a fake context
+// chromium instead of a real one -------------------------------------------
+let contextServer;
+let contextUrl;
+before(async () => {
+  contextServer = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await once(contextServer, 'listening');
+  contextUrl = `ws://127.0.0.1:${contextServer.address().port}/devtools/browser/ctx`;
+  contextServer.on('connection', (ws) => {
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString());
+      const result = msg.method === 'Target.createBrowserContext' ? { browserContextId: 'INNER1' } : {};
+      ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result }));
+    });
+  });
+});
+after(() => contextServer.close());
+
+function stubContexts(onCreate = () => {}) {
+  const made = [];
+  const realCreate = contexts.create;
+  contexts.create = async () => {
+    const context = {
+      name: `context-${made.length + 1}`,
+      destroyed: false,
+      mux: null,
+      browserWsUrl: () => contextUrl,
+      async destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+        this.mux?.contextGone(this);
+      },
+    };
+    made.push(context);
+    await new Promise((resolve) => setTimeout(resolve, 20)); // a startup takes a while
+    onCreate(context);
+    return context;
+  };
+  return { made, restore: () => { contexts.create = realCreate; } };
+}
+
+test('concurrent createBrowserContext: one context chromium, the second inside it', async () => {
+  const stub = stubContexts();
+  const client = new FakeClient();
+  new Mux(client, 'test', mainUrl);
+  try {
+    const [first, second] = await Promise.all([
+      client.command({ id: 20, method: 'Target.createBrowserContext', params: {} }),
+      client.command({ id: 21, method: 'Target.createBrowserContext', params: {} }),
+    ]);
+    assert.equal(stub.made.length, 1, 'only one context chromium started');
+    assert.match(first.result.browserContextId, /^CONTEXTCONTEXT1/);
+    assert.deepEqual(second.result, { browserContextId: 'INNER1' });
+  } finally {
+    client.close();
+    stub.restore();
+  }
+  assert.equal(stub.made[0].destroyed, true, 'destroyed with its client');
+});
+
+test('a client leaving while its context starts leaves no context behind', async () => {
+  const client = new FakeClient();
+  // the client goes away right after the chromium is up, while the gateway
+  // still opens its connection to it
+  const stub = stubContexts(() => setImmediate(() => client.close()));
+  const mux = new Mux(client, 'test', mainUrl);
+  try {
+    client.emit('message', Buffer.from(JSON.stringify({ id: 30, method: 'Target.createBrowserContext', params: {} })));
+    while (mux.attaching || !stub.made.length) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(stub.made.length, 1);
+    assert.equal(stub.made[0].destroyed, true);
+    assert.equal(mux.context, null);
+  } finally {
+    stub.restore();
+  }
 });
 
 test('disposing an unknown context succeeds instead of failing', async () => {

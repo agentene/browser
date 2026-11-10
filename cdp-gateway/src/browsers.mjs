@@ -3,7 +3,7 @@
 
 import { MAIN_PORT } from './config.mjs';
 import { contexts } from './contexts.mjs';
-import { pageTargets } from './devtools-http.mjs';
+import { allTargets } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
 
 export function browserNames() {
@@ -22,9 +22,11 @@ export function browserPid(name) {
 }
 
 // Which chromium (port) owns a target id: the main browser or a context.
+// Any target type (a worker's or an iframe's /devtools/page/<id> too); the
+// contexts are asked in parallel.
 export async function targetPort(targetId) {
-  for (const context of contexts.values()) {
-    if ((await pageTargets(context.port)).some((t) => t.id === targetId)) return context.port;
-  }
-  return MAIN_PORT;
+  const owners = await Promise.all(contexts.values().map(async (context) => (
+    (await allTargets(context.port)).some((t) => t.id === targetId) ? context.port : 0
+  )));
+  return owners.find(Boolean) || MAIN_PORT;
 }

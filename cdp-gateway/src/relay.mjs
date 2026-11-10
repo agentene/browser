@@ -2,6 +2,7 @@
 
 import WebSocket from 'ws';
 import { WS_OPTIONS } from './config.mjs';
+import { forward } from './flow.mjs';
 
 let relays = 0;
 
@@ -20,15 +21,15 @@ export function relay(client, upstreamUrl) {
   // answered)
   const queue = [];
   upstream.on('open', () => {
-    for (const [data, isBinary] of queue) upstream.send(data, { binary: isBinary });
+    for (const [data, isBinary] of queue) forward(upstream, data, { binary: isBinary }, [client]);
     queue.length = 0;
   });
   client.on('message', (data, isBinary) => {
-    if (upstream.readyState === WebSocket.OPEN) upstream.send(data, { binary: isBinary });
+    if (upstream.readyState === WebSocket.OPEN) forward(upstream, data, { binary: isBinary }, [client]);
     else queue.push([data, isBinary]);
   });
   upstream.on('message', (data, isBinary) => {
-    if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
+    if (client.readyState === WebSocket.OPEN) forward(client, data, { binary: isBinary }, [upstream]);
   });
   const closeBoth = () => {
     upstream.terminate();

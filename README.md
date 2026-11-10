@@ -205,7 +205,8 @@ Limits:
 
 * Each isolated context is a whole browser process, typically a few hundred MB of RAM. `CDP_CONTEXTS_MAX` caps how many run at once; past the cap, creating a context fails with a clear CDP error.
 * CDP carries no session names, so an isolated context is tied to one connection. Reopening a playwright-cli session with the same name gets a new one, not the old one.
-* Only the *first* isolated context of a connection gets its own profile-cloned browser. Further `browser.newContext()` calls on the same connection create plain incognito contexts inside that browser, without the logins; open a new connection for another logged-in context.
+* Only the *first* isolated context of a connection gets its own profile-cloned browser. Further `browser.newContext()` calls on the same connection — also ones made at the same time, e.g. in a `Promise.all` — create plain incognito contexts inside that browser, without the logins; open a new connection for another logged-in context.
+* The profile is copied while the main browser runs. Cookies and the localStorage of open origins are re-synced live (see above), but other databases (IndexedDB, the history, …) are copied as they are on disk at that moment, so a write the main browser makes during the copy may be missing or, rarely, half there in the clone.
 * Context options that need a fresh context (such as a per-context `proxy`) do not apply to an isolated context, which runs with the main browser's settings.
 
 ## Watching the desktop

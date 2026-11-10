@@ -11,10 +11,15 @@
 // main or the context's chromium, and its events get their browserContextId
 // rewritten to the alias. Target.disposeBrowserContext(alias) or the client
 // disconnecting destroys the context.
+//
+// Default-context traffic is not even parsed: a client message that names no
+// Target.* method goes to the main chromium as it came, and so does a main
+// chromium message while the gateway awaits no reply there itself.
 
 import WebSocket from 'ws';
 import { INTERNAL_ID_BASE, WS_OPTIONS } from './config.mjs';
 import { contexts } from './contexts.mjs';
+import { forward } from './flow.mjs';
 import { log } from './util.mjs';
 
 const muxes = new Set();
@@ -31,12 +36,13 @@ export class Mux {
     this.context = null;
     this.contextWs = null;
     this.alias = '';
+    this.attaching = null; // the context startup in progress (attachContext)
     this.innerContexts = new Set(); // real extra contexts created inside the context's chromium
     // In-flight client commands the gateway may have to answer itself, kept
     // until their reply: anything sent to the context chromium (which can
     // die before answering) and context disposals sent to the main chromium.
     this.pending = new Map(); // client command id -> { origin, msg }
-    this.sessionOwner = new Map(); // sessionId -> 'main' | 'context'
+    this.sessionOwner = new Map(); // context sessionId -> 'context' (any other session is main's)
     this.sessionTarget = new Map(); // context sessionId -> targetId
     this.sessionParent = new Map(); // context sessionId -> the client session it was attached on
     this.contextTargets = new Set();
@@ -56,8 +62,9 @@ export class Mux {
 
     this.main = new WebSocket(mainUrl, WS_OPTIONS);
     this.main.on('open', () => {
-      for (const m of this.queue) this.main.send(m);
-      this.queue = null;
+      const queued = this.queue;
+      this.queue = null; // before sending: toMain queues while it is set
+      for (const m of queued) this.toMain(m);
     });
     this.main.on('message', (data) => this.fromUpstream('main', data));
     this.main.on('close', () => this.close('main browser connection closed'));
@@ -69,14 +76,21 @@ export class Mux {
   }
 
   // --- sending ---------------------------------------------------------------
+  // Every frame goes out as text (a Buffer would go as binary, which
+  // chromium ignores), flow-controlled against the client (flow.mjs).
+  toMain(data) {
+    if (this.queue) this.queue.push(data);
+    else if (this.main.readyState === WebSocket.OPEN) forward(this.main, data, { binary: false }, [this.client]);
+  }
+
   sendMain(msg) {
-    const text = JSON.stringify(msg);
-    if (this.queue) this.queue.push(text);
-    else if (this.main.readyState === WebSocket.OPEN) this.main.send(text);
+    this.toMain(JSON.stringify(msg));
   }
 
   sendContext(msg) {
-    if (this.contextWs?.readyState === WebSocket.OPEN) this.contextWs.send(JSON.stringify(msg));
+    if (this.contextWs?.readyState === WebSocket.OPEN) {
+      forward(this.contextWs, JSON.stringify(msg), { binary: false }, [this.client]);
+    }
   }
 
   // A client command for the context chromium. Without one nothing would
@@ -100,8 +114,13 @@ export class Mux {
     else this.replyError(msg, 'isolated CDP context is gone');
   }
 
+  toClient(data) {
+    if (this.client.readyState !== WebSocket.OPEN) return;
+    forward(this.client, data, { binary: false }, this.contextWs ? [this.main, this.contextWs] : [this.main]);
+  }
+
   sendClient(msg) {
-    if (this.client.readyState === WebSocket.OPEN) this.client.send(JSON.stringify(msg));
+    this.toClient(JSON.stringify(msg));
   }
 
   reply(msg, result) {
@@ -125,6 +144,13 @@ export class Mux {
 
   // --- client -> upstreams ---------------------------------------------------
   fromClient(data) {
+    // nothing to route or rewrite without a context, unless it is one of the
+    // Target.* commands the gateway handles (their method name is a JSON
+    // string, so it always appears as "Target.)
+    if (!this.context && !this.attaching && !data.includes('"Target.')) {
+      this.toMain(data);
+      return;
+    }
     let msg;
     try {
       msg = JSON.parse(data.toString());
@@ -142,16 +168,7 @@ export class Mux {
 
     switch (method) {
       case 'Target.createBrowserContext':
-        if (this.context) {
-          // a second isolated context on the same connection: a plain
-          // incognito context inside this context's chromium
-          this.toContext(msg);
-        } else {
-          if (params.proxyServer) {
-            log(`mux ${this.clientAddr}: context proxy ${params.proxyServer} is not applied to contexts (they use the main browser's network settings)`);
-          }
-          this.attachContext(msg);
-        }
+        this.createContext(msg);
         return;
       case 'Target.disposeBrowserContext':
         if (this.alias && params.browserContextId === this.alias) {
@@ -220,6 +237,31 @@ export class Mux {
     }
   }
 
+  // Target.createBrowserContext. One startup at a time: a client may create
+  // contexts concurrently (Promise.all of newContext()), and the second must
+  // see the first one's chromium — as the incognito context inside it —
+  // instead of starting a chromium of its own that nothing would track.
+  createContext(msg) {
+    if (this.closed) return;
+    if (this.attaching) {
+      const retry = () => this.createContext(msg);
+      this.attaching.then(retry, retry);
+      return;
+    }
+    if (this.context) {
+      // a second isolated context on the same connection: a plain
+      // incognito context inside this context's chromium
+      this.toContext(msg);
+      return;
+    }
+    if (msg.params?.proxyServer) {
+      log(`mux ${this.clientAddr}: context proxy ${msg.params.proxyServer} is not applied to contexts (they use the main browser's network settings)`);
+    }
+    this.attaching = this.attachContext(msg)
+      .catch((err) => log(`mux ${this.clientAddr}: context attach: ${err.message}`))
+      .finally(() => { this.attaching = null; });
+  }
+
   async attachContext(msg) {
     let context;
     try {
@@ -233,6 +275,14 @@ export class Mux {
         ws.once('open', resolve);
         ws.once('error', reject);
       });
+      if (this.closed || context.destroyed) {
+        // the client left (or the chromium died) while the connection opened:
+        // nothing else would ever destroy the context
+        ws.terminate();
+        if (!this.closed) throw new Error('isolated CDP context exited during startup');
+        await context.destroy('client went away during startup');
+        return;
+      }
       this.context = context;
       this.contextWs = ws;
       context.mux = this;
@@ -257,19 +307,25 @@ export class Mux {
 
   // --- upstreams -> client ---------------------------------------------------
   fromUpstream(origin, data) {
+    // the main chromium's messages need no rewriting; only the replies the
+    // gateway waits for itself are picked out
+    if (origin === 'main' && this.pending.size === 0 && this.internal.size === 0) {
+      this.toClient(data);
+      return;
+    }
     let msg;
     try {
       msg = JSON.parse(data.toString());
     } catch {
       return;
     }
-    if (msg.id !== undefined && msg.id >= INTERNAL_ID_BASE) {
-      const p = this.internal.get(msg.id);
-      if (p) {
-        this.internal.delete(msg.id);
-        if (msg.error) p.reject(new Error(`${p.method}: ${msg.error.message}`));
-        else p.resolve(msg.result);
-      }
+    // a reply to one of the gateway's own commands — only when it is one
+    // (a client's command may use an id that large too) and from where it went
+    const own = msg.id >= INTERNAL_ID_BASE && this.internal.get(msg.id);
+    if (own && own.target === origin) {
+      this.internal.delete(msg.id);
+      if (msg.error) own.reject(new Error(`${own.method}: ${msg.error.message}`));
+      else own.resolve(msg.result);
       return;
     }
 
@@ -287,10 +343,6 @@ export class Mux {
       if (msg.method === 'Target.detachedFromTarget' && this.browserSessionOf.has(msg.params.sessionId)) return;
       if (this.browserSessionOf.has(msg.sessionId)) msg.sessionId = this.browserSessionOf.get(msg.sessionId);
       this.trackContextMessage(msg);
-    } else if (msg.method === 'Target.attachedToTarget') {
-      this.sessionOwner.set(msg.params.sessionId, 'main');
-    } else if (msg.method === 'Target.detachedFromTarget') {
-      this.sessionOwner.delete(msg.params.sessionId);
     }
     this.sendClient(msg);
   }
