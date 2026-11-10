@@ -264,6 +264,13 @@ RUN npm ci --omit=dev --no-audit --no-fund --prefix /usr/local/lib/cdp-gateway &
 COPY cdp-gateway/gateway.mjs cdp-gateway/dashboard.html cdp-gateway/panel.js cdp-gateway/raise-window.py cdp-gateway/front-window.py /usr/local/lib/cdp-gateway/
 COPY cdp-gateway/src/ /usr/local/lib/cdp-gateway/src/
 
+# Built-in login + CDP API key (ENABLE_AUTH=true, entrypoint/lib/auth.sh): a
+# dependency-free Node service nginx checks every web UI / console request
+# and every CDP request with; it also serves the setup/login forms and the
+# console's login + API key controls (ui.js).
+COPY auth-server/server.mjs auth-server/page.html auth-server/ui.js auth-server/keepalive.js /usr/local/lib/auth-server/
+COPY auth-server/src/ /usr/local/lib/auth-server/src/
+
 # The supervisor: a thin docker-entrypoint.sh that sources its stage modules
 # (lib/*.sh) and runs the helper scripts (helpers/*) from
 # /usr/local/lib/docker-entrypoint.

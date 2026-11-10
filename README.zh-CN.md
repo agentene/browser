@@ -35,6 +35,7 @@ docker run ─┬─ labwc       虚拟 Wayland 桌面(Selkies 采集的画面;D
 - [通过 CDP 接入 Playwright](#通过-cdp-接入-playwright)
 - [CDP 网关(带登录态的隔离 context)](#cdp-网关带登录态的隔离-context)
 - [观看桌面](#观看桌面)
+- [登录与 CDP API Key](#登录与-cdp-api-key)
 - [配置](#配置)
   - [构建参数](#构建参数)
   - [环境变量](#环境变量)
@@ -117,7 +118,7 @@ docker run -d --name agentene-browser \
 | Web UI(HTTPS,可选) | 443            | `NGINX_LISTEN_HTTPS_PORT` | 8443           | `NGINX_HTTPS_PORT` + [HTTPS](#https-1) |
 | Chromium CDP       | 9222           | `CDP_LISTEN_PORT`         | 9222           | `CDP_PORT`                             |
 
-修改容器侧端口主要用于 `network_mode: host` / 共享网络命名空间,或 docker 网络里的对端需要特定端口的场景;普通端口发布用默认值即可。它们彼此之间、与 `PORT_FORWARDS` 监听端口、与仅回环的 `SELKIES_INTERNAL_PORT` / `CDP_INTERNAL_PORT` / `CDP_GATEWAY_INTERNAL_PORT`([CDP 网关](#cdp-网关带登录态的隔离-context))都不得冲突 —— 冲突时入口脚本直接报错退出。用 `docker run` 时通过 `-e` 传入,并相应调整 `-p`(例如 `-e CDP_LISTEN_PORT=9333 -p 9222:9333`)。
+修改容器侧端口主要用于 `network_mode: host` / 共享网络命名空间,或 docker 网络里的对端需要特定端口的场景;普通端口发布用默认值即可。它们彼此之间、与 `PORT_FORWARDS` 监听端口、与仅回环的 `SELKIES_INTERNAL_PORT` / `CDP_INTERNAL_PORT` / `CDP_GATEWAY_INTERNAL_PORT` / `AUTH_INTERNAL_PORT`([CDP 网关](#cdp-网关带登录态的隔离-context))都不得冲突 —— 冲突时入口脚本直接报错退出。用 `docker run` 时通过 `-e` 传入,并相应调整 `-p`(例如 `-e CDP_LISTEN_PORT=9333 -p 9222:9333`)。
 
 除这些端口外,`PORT_FORWARDS` 可以追加额外的监听端口,反向代理到 docker 网络里的兄弟容器 —— 见 [Docker 网络(compose)](#docker-网络compose)。使用 host 网络时完全没有端口发布,容器侧端口直接绑定在宿主机上 —— 见 [Host 网络(compose)](#host-网络compose)。
 
@@ -152,6 +153,7 @@ await browser.close();  // 只关闭 CDP 会话,不关浏览器
 * 默认 context 使用**持久化配置目录**,登录态和 cookies 在多次运行间保留。
 * `curl http://localhost:9222/json/version` 是最快速的健康检查。
 * Puppeteer 同样适用:`puppeteer.connect({ browserURL: "http://localhost:9222" })`。
+* 设置了 [CDP API Key](#登录与-cdp-api-key) 之后,通过请求头携带:`chromium.connectOverCDP(url, { headers: { Authorization: "Bearer <key>" } })`(Puppeteer:`connect({ browserURL, headers })`;`examples/connect-playwright.mjs` 读取 `CDP_API_KEY`)。未设置时端点保持开放,与以前一样。
 
 ## CDP 网关(带登录态的隔离 context)
 
@@ -210,7 +212,7 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 打开 <http://localhost:8080>。Selkies 把虚拟显示器画面(含音频)直接串流到浏览器标签页 —— 键盘鼠标输入会送进容器。Chromium 默认有头运行(`CHROMIUM_HEADLESS=0`),每一步自动化都能在串流里看到。可用 `CHROMIUM_LANG` / `CHROMIUM_START_URL` 控制浏览器初始状态。
 
-设置密码(`SELKIES_BASIC_AUTH_PASSWORD`,用户名默认 `ubuntu`,见[环境变量](#环境变量))即可为串流启用登录页。
+首次访问时会要求设置管理员账号(或选择跳过)—— 见[登录与 CDP API Key](#登录与-cdp-api-key)。
 
 ### 挂载到子路径
 
@@ -232,6 +234,18 @@ location /desk/ {
     proxy_read_timeout 86400s;
 }
 ```
+
+## 登录与 CDP API Key
+
+`ENABLE_AUTH=true`(默认)时,nginx 后面会运行一个小型内置鉴权服务:
+
+* **首次启动。** 完成初始化之前,访问 web UI 或 CDP 控制台(CDP 端口上的 `/console/`)都会先显示初始化表单:创建管理员用户名 + 密码(至少 8 个字符),或选择 **跳过,不启用登录** —— 这个选择同样会被保存,web UI 保持开放,与以前一样。谁先打开页面谁就能完成初始化,所以请在首次启动后立即设置。
+* **登录。** 启用登录后,所有 web UI 请求(Selkies 页面及其 WebSocket、控制台侧边栏)以及 CDP 端口上的控制台都需要会话:否则就地显示登录表单(HTTP 401)。会话是 `HttpOnly`、`SameSite=Lax` 的 cookie,有效期 7 天,并会自动续期:只要还开着任一 web UI 或控制台页面(包括闲置在后台的标签页),它大约每天换一次新 cookie(只用一个定时器,每天至多一个很小的请求),所以会话要在最后一个页面关闭 6–7 天后才过期。可以同时在任意多个浏览器里登录;同一主机的 web 端口与 CDP 端口共用。携带该 cookie 的跨源写请求和 WebSocket 会被拒绝(403)。同一地址 15 分钟内密码错误 10 次后,在该时间窗内返回 429。
+* **CDP API Key。** 可选。设置后,CDP API(CDP 端口上的 `/json/*`、`/devtools/*`)需要在请求头里携带它 —— `Authorization: Bearer <key>` 或 `X-API-Key: <key>` —— 否则返回 401;留空即不需要 key,CDP 端点保持开放(这是默认值,已有客户端不受影响)。会话 cookie 不能打开 CDP API。
+* **修改。** 控制台的设置菜单(`/console/` 及 Selkies 页面侧边栏里的齿轮)里有 *访问控制* 一组:**登录 → 修改…**(当前密码、新用户名 + 密码;用户名和两个密码框都留空即关闭登录 —— 之前跳过的也可以在这里设置登录)、**CDP API Key → 修改…**(手动输入或 *随机生成*、*复制*;留空即移除)以及 **退出登录**。修改登录账号会让其他所有会话退出。没有控制台时(`ENABLE_CDP=false`),同样的控件在账号页 `<web UI>/__auth/` 上。
+* **存放位置。** `/browser` 挂载下的 `/browser/settings/auth.json`(权限 0600):密码以加盐 scrypt 哈希保存,API Key 以 SHA-256 哈希保存(无法再次查看 —— 设置时请复制),外加会话密钥。容器重启或重建后依然保留,没有对应的环境变量。**忘记密码?** 删除该文件(`docker compose exec browser rm /browser/settings/auth.json`,或宿主机上的 `./browser/settings/auth.json`):下次访问会重新显示初始化表单,无需重启。文件存在但无法解析时,web UI 和 CDP API 会保持锁定,直到修复或删除它。
+
+`ENABLE_AUTH=false` 关闭以上全部功能:没有初始化表单、没有登录、没有 API Key —— web UI 与 CDP 端点像旧版本一样开放。Selkies 自带的 Basic Auth(`SELKIES_BASIC_AUTH_PASSWORD`)与内置登录相互独立,仍然可用(两者都开启时都会生效)。`PORT_FORWARDS` 监听端口不受登录保护。
 
 ## 配置
 
@@ -258,6 +272,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | ---------------- | ------ | -------------------------------------------------- |
 | `ENABLE_SELKIES` | `true` | `false` = 跳过 Web UI + 显示器 + 音频(纯 CDP 容器) |
 | `ENABLE_CDP`     | `true` | `false` = 跳过 Chromium + CDP 网关(纯远程桌面容器) |
+| `ENABLE_AUTH`    | `true` | web UI + CDP 控制台的内置登录,以及可选的 CDP API Key,均在控制台中管理(见[登录与 CDP API Key](#登录与-cdp-api-key));`false` = 全部开放 |
 
 **Web UI / TLS**
 
@@ -316,6 +331,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDP_CONTEXTS_MAX`          | `4`                         | 同时存在的隔离 context 上限(每个都是完整浏览器);超出后新建 context 返回 CDP 错误                                                        |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | 网关回环端口(nginx 后面)                                                                                                                |
+| `AUTH_INTERNAL_PORT`        | `9219`                      | 内置鉴权服务的回环端口(nginx 后面;`ENABLE_AUTH=true`) |
 
 **桌面 / 容器**
 
@@ -425,6 +441,7 @@ COMPOSE_FILE=compose.yaml:compose.gpu.yaml
 | 宿主路径(compose)      | 容器路径               | 内容                                                           |
 | ---------------------- | ---------------------- | -------------------------------------------------------------- |
 | `./browser/user-data`  | `/browser/user-data`   | Chromium 配置:cookies、登录态、扩展、`navigator.language` 偏好 |
+| `./browser/settings`   | `/browser/settings`    | 控制台设置(`settings.json`)以及[登录 + CDP API Key](#登录与-cdp-api-key)(`auth.json`) |
 | `./browser/contexts`   | `/browser/contexts`    | [CDP 网关](#cdp-网关带登录态的隔离-context)的浏览器 context,各自一份 profile 克隆(每次启动清空) |
 | `./tls`                | `/etc/nginx/tls`       | TLS 证书(你自己的,或生成的自签对);仅在使用 `compose.https.yaml` 时挂载 |
 
@@ -454,7 +471,7 @@ PORT_FORWARDS=3080=web:80
 #PORT_FORWARDS=3080=web:80 6080=onlyoffice-documentserver:80
 ```
 
-转发由同一个 nginx 前门提供(无额外进程):支持 WebSocket;经容器的 DNS 服务器(compose 网络下即 docker 内嵌 DNS)按请求解析对端 —— 对端容器还没起来时本容器照常启动(对端上线前请求返回 502),对端重建换 IP 后也能自动跟上。转发监听端口不得与 `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT`(默认 80/443/9222)、仅回环的内部端口(`SELKIES_INTERNAL_PORT` 8081、`CDP_INTERNAL_PORT` 9221、`CDP_GATEWAY_INTERNAL_PORT` 9220)或其他转发端口冲突 —— 冲突时入口脚本拒绝启动。
+转发由同一个 nginx 前门提供(无额外进程):支持 WebSocket;经容器的 DNS 服务器(compose 网络下即 docker 内嵌 DNS)按请求解析对端 —— 对端容器还没起来时本容器照常启动(对端上线前请求返回 502),对端重建换 IP 后也能自动跟上。转发监听端口不得与 `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT`(默认 80/443/9222)、仅回环的内部端口(`SELKIES_INTERNAL_PORT` 8081、`CDP_INTERNAL_PORT` 9221、`CDP_GATEWAY_INTERNAL_PORT` 9220、`AUTH_INTERNAL_PORT` 9219)或其他转发端口冲突 —— 冲突时入口脚本拒绝启动。
 
 ### Host 网络(compose)
 
@@ -470,7 +487,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # 建议:CDP 与 Web UI 不暴露到网络
 该模式下的变化:
 
 * 不发布任何端口,nginx 直接在宿主机上绑定端口。`NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` 默认取 `NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` / `CDP_PORT`(8080 / 8443 / 9222),访问地址与 bridge 模式保持一致;显式设置即可覆盖。HTTPS 只需 `ENABLE_HTTPS=true`(不需要 `compose.https.yaml`,它的端口映射会被丢弃)。
-* 仅回环的内部端口 —— `SELKIES_INTERNAL_PORT`(8081)、`CDP_INTERNAL_PORT`(9221)和 `CDP_GATEWAY_INTERNAL_PORT`(9220)—— 同样占用宿主机回环(context 浏览器自行选择空闲端口)。若与你自己的应用冲突,在 `.env` 里换掉;端口绑定失败会导致容器退出。
+* 仅回环的内部端口 —— `SELKIES_INTERNAL_PORT`(8081)、`CDP_INTERNAL_PORT`(9221)、`CDP_GATEWAY_INTERNAL_PORT`(9220)和 `AUTH_INTERNAL_PORT`(9219)—— 同样占用宿主机回环(context 浏览器自行选择空闲端口)。若与你自己的应用冲突,在 `.env` 里换掉;端口绑定失败会导致容器退出。
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` 与 `hostname` 不再生效。`PORT_FORWARDS` 仍可用,但通过宿主机的 DNS 解析(容器名无法解析)—— 通常直接让浏览器访问 `localhost:<端口>` 即可。
 * 使用 `DISPLAY_BACKEND=x11` 时,若宿主机自己在 `:0` 上跑着 X server,入口脚本会自动换用下一个空闲 display。Xvfb 只监听文件系统 socket,宿主机进程无法接入容器里无认证的 display。
 
@@ -549,9 +566,9 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 
 ## 安全注意事项
 
-* **CDP 端点没有认证。** 一次 TCP 连接即获得完整的浏览器控制权 —— `9222` 只发布到 localhost 或可信网络,绝不要暴露公网 IP。使用 [host 网络](#host-网络compose)时没有端口映射可以限制它,请设置 `NGINX_LISTEN_ADDR=127.0.0.1`。
-* **CDP 网关的隔离 context 继承你真实的登录态。** 每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 与 CDP 端口一样没有认证。web UI 端口上的侧边栏副本(`cdp-console/`)则跟随 Selkies 登录:只认主密码,web UI 未设登录时则不鉴权。
-* **Web UI 默认无认证。** 只要串流可能被不信任的人访问,就设置 `SELKIES_BASIC_AUTH_PASSWORD`;同时配合 HTTPS(纯 HTTP + basic auth 会泄露密码)。
+* **在设置 [CDP API Key](#登录与-cdp-api-key) 之前,CDP 端点是开放的。** 没有 key 时,一次 TCP 连接即获得完整的浏览器控制权。即使设置了 key,也请只把 `9222` 发布到 localhost 或可信网络(或放在 TLS 后面:key 在请求头里传输,纯 HTTP 下是明文)。使用 [host 网络](#host-网络compose)时没有端口映射可以限制它,请设置 `NGINX_LISTEN_ADDR=127.0.0.1`。
+* **CDP 网关的隔离 context 继承你真实的登录态。** 每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 跟随[内置登录](#登录与-cdp-api-key)(跳过登录或 `ENABLE_AUTH=false` 时开放)。web UI 端口上的侧边栏副本(`cdp-console/`)同样跟随内置登录,设置了 `SELKIES_BASIC_AUTH_PASSWORD` 时还需要 Selkies 主密码。
+* **首次启动后请立即设置登录。** 在此之前,第一个访问 web UI 或控制台的人可以完成初始化(或跳过)。跳过登录意味着任何能访问 web UI 的人都能使用它。web UI 离开可信网络时请同时启用 HTTPS(纯 HTTP 会以明文传输密码和会话 cookie)。
 * Chromium 以 `--no-sandbox` 运行(容器化 Chrome 在没有允许 userns 的 seccomp 配置时的标准做法);请把容器当作"暴露一个浏览器"来对待,放在专用的用户/VM 里。
 * 生成的 TLS 密钥是自签的 —— 浏览器会告警,属预期;对公网服务请换用正式证书。
 * 容器默认以 **root** 运行(入口脚本是 PID 1,且默认需绑定 80/443 特权端口)。设置 `RUN_USER`(见[权限降级(`RUN_USER`)](#权限降级run_user))可把桌面栈与 nginx worker 移出 root —— PID 1 与 nginx master 按设计保持 root。`--security-opt=no-new-privileges` 可直接使用。单独加 `--cap-drop=ALL` 会导致容器无法启动(入口脚本与 nginx 仍需 chown、切换 uid、绑定 80 端口),需加回启动所需的能力:
@@ -567,7 +584,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 | 现象                                           | 处理                                                                                                                                                                                                                    |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `curl :9222/json/version` 失败                 | `docker compose logs`;查看容器内 `/tmp/chromium.log`。端口被占?改 `CDP_PORT`。                                                                                                                                          |
-| 使用 host 网络时容器反复重启                   | 某个监听端口或内部端口已被宿主机占用 —— 查看 `docker compose logs` / `/tmp/nginx/error.log`、`/tmp/chromium.log`,然后更换 `NGINX_LISTEN_HTTP_PORT`、`CDP_LISTEN_PORT`、`SELKIES_INTERNAL_PORT`、`CDP_INTERNAL_PORT` 或 `CDP_GATEWAY_INTERNAL_PORT`。 |
+| 使用 host 网络时容器反复重启                   | 某个监听端口或内部端口已被宿主机占用 —— 查看 `docker compose logs` / `/tmp/nginx/error.log`、`/tmp/chromium.log`,然后更换 `NGINX_LISTEN_HTTP_PORT`、`CDP_LISTEN_PORT`、`SELKIES_INTERNAL_PORT`、`CDP_INTERNAL_PORT`、`CDP_GATEWAY_INTERNAL_PORT` 或 `AUTH_INTERNAL_PORT`。 |
 | Web UI 打不开                                  | 是否设了 `ENABLE_SELKIES=false`?查看 `/tmp/nginx/error.log` 及 Selkies 是否起来(其输出在 `docker compose logs` 里)。                                                                                                     |
 | 串流里看不到浏览器窗口                         | 是否设了 `CHROMIUM_HEADLESS=1`?默认 `0` 有头并显示在串流桌面。                                                                                                                                                          |
 | 隔离 session 报错 `CDP context limit reached`  | 已有 `CDP_CONTEXTS_MAX` 个隔离 context 在运行:关闭空闲的 session(或在 `/console/` 上删除),或者调高上限。网关日志在 `/tmp/cdp-gateway.log`,各 context 的 Chromium 日志在 `$CDP_CONTEXTS_DIR/<context>/chromium.log`(仅在 context 存活期间存在:目录随 context 一起删除,启动失败时也一样 —— 此时原因见网关日志)。     |

@@ -3,7 +3,7 @@
 #   lint        : hadolint + docker build --check (Dockerfile), shellcheck
 #                 (entrypoint), node --check, py_compile (python helpers)
 #   verify      : docker build + runtime smoke tests (CDP endpoint, Selkies web,
-#                 CDP gateway, Wayland desktop)
+#                 CDP gateway, built-in login + CDP API key, Wayland desktop)
 #   release-tag : on merges to main (the only place a release is cut — dev
 #                 and feature branches never release) — a VERSION change (code
 #                 release, the dev -> main merge) tags v<VERSION> (e.g.
@@ -78,6 +78,7 @@ jobs:
         run: |
           node --check update-chrome-node.mjs
           for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
+          for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
           node --check entrypoint/helpers/chromium-close.mjs
           python3 -m py_compile entrypoint/helpers/*.py
 
@@ -85,6 +86,9 @@ jobs:
         run: |
           npm ci --no-audit --no-fund --prefix cdp-gateway
           npm test --prefix cdp-gateway
+
+      - name: auth server unit tests
+        run: npm test --prefix auth-server
 
       - name: docker build --check (Dockerfile lint, BuildKit)
         run: docker build --check .
@@ -161,10 +165,14 @@ jobs:
           docker run -d --name web-smoke -p 8080:80 \
             -e ENABLE_CDP=false localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker logs web-smoke || true; docker rm -f web-smoke >/dev/null' EXIT
+          # fresh container: the built-in login's setup form, in place (401)
           for i in $(seq 1 60); do
-            curl -sf http://127.0.0.1:8080/ >/dev/null && break
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)" = 401 ] && break
             sleep 1
           done
+          curl -s http://127.0.0.1:8080/ | grep -c 'data-mode="setup"' >/dev/null
+          # skipped: the Selkies page itself
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"skip":true}' http://127.0.0.1:8080/__auth/api/setup >/dev/null
           curl -sf http://127.0.0.1:8080/ | grep -ci '<html' >/dev/null \
             && echo "web UI smoke test OK"
 
@@ -181,6 +189,8 @@ jobs:
           done
           curl -sf http://127.0.0.1:9223/json/version \
             | jq -e '.webSocketDebuggerUrl | startswith("ws://127.0.0.1:9223/")' >/dev/null
+          # the console (live state below) waits for the login setup: skip it
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"skip":true}' http://127.0.0.1:9223/__auth/api/setup >/dev/null
           # an isolated context must get its own chromium and be
           # destroyed again on dispose; driven with raw CDP from the image's node
           docker exec -i gateway-smoke node --input-type=module - <<'EOF'
@@ -224,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name panel-smoke -p 9225:9222 -p 8082:80 \
-            -e SELKIES_BASIC_AUTH_PASSWORD=pw \
+            -e SELKIES_BASIC_AUTH_PASSWORD=pw -e ENABLE_AUTH=false \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec panel-smoke cat /tmp/cdp-gateway.log /tmp/nginx/error.log || true; docker logs panel-smoke || true; docker rm -f panel-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
@@ -252,6 +262,83 @@ jobs:
           curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
           echo "CDP console sidebar smoke test OK"
 
+      - name: Smoke test — built-in login and CDP API key
+        run: |
+          set -euo pipefail
+          docker run -d --name auth-smoke -p 9228:9222 -p 8084:80 \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker exec auth-smoke cat /tmp/auth-server.log /tmp/nginx/error.log || true; docker logs auth-smoke || true; docker rm -f auth-smoke >/dev/null' EXIT
+          W=http://127.0.0.1:8084 C=http://127.0.0.1:9228 J=$(mktemp)
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          ws() { curl -s -o /dev/null -m 2 -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" || true; }
+          json() { curl -s -H 'Content-Type: application/json' "$@"; }
+          for i in $(seq 1 60); do
+            curl -sf $C/json/version >/dev/null && [ "$(code $W/)" = 401 ] && break
+            sleep 1
+          done
+          # not set up: the setup form on both ports, the CDP API open
+          curl -s $W/ | grep -c 'data-mode="setup"' >/dev/null
+          curl -s $C/console/ | grep -c 'data-mode="setup"' >/dev/null
+          [ "$(code $C/json/version)" = 200 ]
+          # setup: cross-origin refused, then the admin login (session cookie)
+          [ "$(code -X POST -H 'Origin: http://evil.example' -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $W/__auth/api/setup)" = 403 ]
+          json -c "$J" -X POST -d '{"username":"admin","password":"password1"}' $W/__auth/api/setup | jq -e '.ok' >/dev/null
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"skip":true}' $W/__auth/api/setup)" = 409 ]
+          # without a session: the login form; with it: Selkies + sidebar, console, WebSockets
+          curl -s $W/ | grep -c 'data-mode="login"' >/dev/null
+          curl -sf -b "$J" $W/ | grep -c 'cdp-console/panel.js' >/dev/null
+          curl -sf -b "$J" $W/ | grep -c '__auth/keepalive.js' >/dev/null
+          curl -sf $W/__auth/keepalive.js | grep -c 'api/renew' >/dev/null
+          # renewal: a fresh session is not due yet; none without a session
+          json -b "$J" -X POST -d '{}' $W/__auth/api/renew | jq -e '.renewIn > 0' >/dev/null
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{}' $W/__auth/api/renew)" = 401 ]
+          [ "$(code -b "$J" $C/console/)" = 200 ] && [ "$(code $C/console/)" = 401 ]
+          [ "$(ws -b "$J" $W/cdp-console/ws)" = 101 ] && [ "$(ws $W/cdp-console/ws)" = 401 ]
+          [ "$(ws -b "$J" -H 'Origin: http://evil.example' $W/cdp-console/ws)" = 403 ]
+          # login API
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-pass"}' $W/__auth/api/login)" = 401 ]
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $C/__auth/api/login)" = 200 ]
+          # API key: only with a session; then the CDP API needs it, in either header
+          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey)" = 401 ]
+          json -b "$J" -X PUT -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey | jq -e '.ok' >/dev/null
+          [ "$(code $C/json/version)" = 401 ] && [ "$(code -b "$J" $C/json/version)" = 401 ]
+          [ "$(code -H 'Authorization: Bearer ci-key-0123' $C/json/version)" = 200 ]
+          [ "$(code -H 'X-API-Key: ci-key-0123' $C/json/list)" = 200 ]
+          [ "$(ws $C/devtools/browser/x)" = 401 ]
+          # ws() does the upgrade over http:// (the runner's curl 8.5 has no ws:// scheme)
+          [ "$(ws -H 'X-API-Key: ci-key-0123' "$(curl -s -H 'X-API-Key: ci-key-0123' $C/json/version | jq -r .webSocketDebuggerUrl | sed 's#^ws://#http://#')")" = 101 ]
+          # persisted (hashed) across a restart
+          ! docker exec auth-smoke grep -q 'ci-key-0123\|password1' /browser/settings/auth.json
+          docker restart auth-smoke >/dev/null
+          for i in $(seq 1 60); do
+            curl -sf -H 'X-API-Key: ci-key-0123' $C/json/version >/dev/null && break
+            sleep 1
+          done
+          [ "$(code -b "$J" $W/)" = 200 ] && [ "$(code $C/json/version)" = 401 ]
+          # a new login ends the other sessions; the login off opens the web UI
+          J2=$(mktemp); cp "$J" "$J2"
+          json -b "$J" -c "$J" -X PUT -d '{"currentPassword":"password1","username":"boss","password":"password2"}' $W/__auth/api/credentials | jq -e '.ok' >/dev/null
+          [ "$(code -b "$J" $W/)" = 200 ] && [ "$(code -b "$J2" $W/)" = 401 ]
+          json -b "$J" -X PUT -d '{"currentPassword":"password2","username":"","password":""}' $W/__auth/api/credentials | jq -e '.ok' >/dev/null
+          [ "$(code $W/)" = 200 ] && [ "$(code $C/console/)" = 200 ] && [ "$(code $C/json/version)" = 401 ]
+          # deleting the file starts over
+          docker exec auth-smoke rm /browser/settings/auth.json
+          sleep 2
+          curl -s $W/ | grep -c 'data-mode="setup"' >/dev/null
+          [ "$(code $C/json/version)" = 200 ]
+          # ENABLE_AUTH=false: no auth service, nothing gated
+          docker rm -f auth-smoke >/dev/null
+          docker run -d --name auth-smoke -p 9228:9222 -p 8084:80 -e ENABLE_AUTH=false \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          for i in $(seq 1 60); do
+            curl -sf $C/json/version >/dev/null && curl -sf $W/ >/dev/null && break
+            sleep 1
+          done
+          [ "$(code $C/console/)" = 200 ] && [ "$(code $W/)" = 200 ]
+          docker exec auth-smoke sh -c '! pgrep -f "[a]uth-server/server.mjs"'
+          echo "built-in login smoke test OK"
+
       - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
         run: |
           set -euo pipefail
@@ -269,6 +356,8 @@ jobs:
             curl -sf http://127.0.0.1:9226/json/list >/dev/null && break
             sleep 1
           done
+          # the console (API, live state) waits for the login setup: skip it
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"skip":true}' http://127.0.0.1:9226/__auth/api/setup >/dev/null
           # no chromium until something asks for it; listings do not
           [ "$(state)" = stopped ]
           [ "$(curl -sf http://127.0.0.1:9226/json/list)" = "[]" ]
@@ -353,11 +442,11 @@ jobs:
           trap 'docker exec wayland-smoke cat /tmp/labwc.log || true; docker logs wayland-smoke || true; docker rm -f wayland-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9224/json/version >/dev/null \
-              && curl -sf http://127.0.0.1:8081/ >/dev/null && break
+              && curl -s -o /dev/null http://127.0.0.1:8081/ && break
             sleep 1
           done
           curl -sf http://127.0.0.1:9224/json/version | jq -e '.Browser' >/dev/null
-          curl -sf http://127.0.0.1:8081/ | grep -ci '<html' >/dev/null
+          curl -s http://127.0.0.1:8081/ | grep -ci '<html' >/dev/null
           # the headed main browser must be a window of labwc (no X server)
           docker exec wayland-smoke sh -c \
             'XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY="$(cat /tmp/labwc-display)" wlrctl toplevel list' \
@@ -373,11 +462,11 @@ jobs:
           trap 'docker exec x11-smoke cat /tmp/xvfb.log || true; docker logs x11-smoke || true; docker rm -f x11-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9227/json/version >/dev/null \
-              && curl -sf http://127.0.0.1:8083/ >/dev/null && break
+              && curl -s -o /dev/null http://127.0.0.1:8083/ && break
             sleep 1
           done
           curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser' >/dev/null
-          curl -sf http://127.0.0.1:8083/ | grep -ci '<html' >/dev/null
+          curl -s http://127.0.0.1:8083/ | grep -ci '<html' >/dev/null
           # the headed main browser must run on Xvfb (no labwc)
           docker exec x11-smoke pgrep -x Xvfb >/dev/null
           docker exec x11-smoke sh -c '! pgrep -x labwc'

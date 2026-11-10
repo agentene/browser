@@ -7,7 +7,10 @@
 // so SELKIES_SUBFOLDER works — to /console/ on the gateway. Same origin as
 // Selkies on purpose: the browser resends the page's Basic Auth, which the
 // gateway checks against Selkies' master password (view-only users get 401
-// and never see the handle).
+// and never see the handle), and the built-in login's session cookie, which
+// nginx checks (ENABLE_AUTH). Its settings menu also carries the built-in
+// login's controls (login, CDP API key, log out): __auth/ui.js, served by
+// the auth service next to the page.
 //
 // Keyboard: the Selkies core grabs keys in the window capture phase and only
 // leaves those whose target sits under an `allow-native-input` element;
@@ -347,6 +350,7 @@
     for (const b of settings.querySelectorAll('[data-lang]')) b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
     $('.raise-label').textContent = t('raiseNew');
     $('.raise-hint').textContent = t('raiseNewHint');
+    window.AgenteneAuth?.setLang(lang);
     for (const v of views.values()) v.card.remove();
     views.clear();
     browsers.forEach((b, name) => update(name));
@@ -373,6 +377,17 @@
     settingsBtn.focus();
   });
   for (const b of settings.querySelectorAll('[data-lang]')) b.addEventListener('click', () => setLang(b.dataset.lang, true));
+
+  // The built-in login's rows in the menu and their dialogs (in the shadow
+  // root, so the panel's keyboard rules cover them); absent without
+  // ENABLE_AUTH.
+  const authUi = document.createElement('script');
+  authUi.src = new URL('__auth/ui.js', document.baseURI).href;
+  authUi.onload = () => {
+    window.AgenteneAuth?.setLang(lang);
+    window.AgenteneAuth?.mount({ menu: settingsMenu, root, onError: showError });
+  };
+  document.head.append(authUi);
 
   // --- open / close ----------------------------------------------------------
   // The live state streams in only while the panel is open.

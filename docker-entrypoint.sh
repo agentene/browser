@@ -14,6 +14,8 @@
 #      CDP gateway     the gateway in front of it (always on with the CDP
 #                       endpoint); with CHROMIUM_AUTOSTART=false the gateway starts the
 #                       main browser on demand instead, as its own child
+#      auth service    the built-in login + CDP API key nginx checks every
+#                       request with (ENABLE_AUTH=true)
 #   5. nginx           the public front door (web UI over HTTP/HTTPS, the CDP
 #                       endpoint, PORT_FORWARDS), on the container ports
 #                       NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT /
@@ -42,6 +44,7 @@
 #   selkies.sh          Selkies
 #   chromium.sh         chromium flags, profile, launch
 #   cdp-gateway.sh      CDP gateway
+#   auth.sh             built-in login + CDP API key (ENABLE_AUTH)
 #   tls.sh              HTTPS certificate reuse / self-signing
 #   nginx.sh            nginx config generation + start
 #
@@ -80,6 +83,8 @@ ENTRYPOINT_HELPERS="${ENTRYPOINT_HOME}/helpers"
 . "${ENTRYPOINT_HOME}/lib/chromium.sh"
 # shellcheck source=entrypoint/lib/cdp-gateway.sh
 . "${ENTRYPOINT_HOME}/lib/cdp-gateway.sh"
+# shellcheck source=entrypoint/lib/auth.sh
+. "${ENTRYPOINT_HOME}/lib/auth.sh"
 # shellcheck source=entrypoint/lib/tls.sh
 . "${ENTRYPOINT_HOME}/lib/tls.sh"
 # shellcheck source=entrypoint/lib/nginx.sh
@@ -105,6 +110,10 @@ main() {
     if [ "${ENABLE_CDP}" = "true" ]; then
         chromium_start
         cdp_gateway_start
+    fi
+
+    if [ "${ENABLE_AUTH}" = "true" ]; then
+        auth_start
     fi
 
     if [ "${ENABLE_SELKIES}" = "true" ]; then

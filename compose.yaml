@@ -88,6 +88,14 @@ services:
       # Set either to "false" to skip that group of services
       ENABLE_SELKIES: "${ENABLE_SELKIES:-true}"
       ENABLE_CDP: "${ENABLE_CDP:-true}"
+      # Built-in login: the web UI and the CDP console (/console/) need a
+      # session — the first visit sets up the administrator login or skips
+      # it — and the CDP API needs the API key once one is set
+      # (Authorization: Bearer <key> or X-API-Key: <key>). Login, the skip
+      # choice and the key are changed in the console settings and kept in
+      # settings/auth.json under BROWSER_DATA_HOST_DIR (delete it to start
+      # over). false = no login, no API key (both open, as before).
+      ENABLE_AUTH: "${ENABLE_AUTH:-true}"
 
       # --- nginx front door ---
       # Ports nginx LISTENS ON inside the container (not the published host
@@ -97,8 +105,8 @@ services:
       CDP_LISTEN_PORT: "${CDP_LISTEN_PORT:-9222}" # public CDP endpoint
       # Address every nginx listener binds to; empty = all interfaces. Mainly
       # for the compose.host.yaml overlay (no port mapping there to restrict
-      # exposure): 127.0.0.1 keeps the unauthenticated CDP endpoint and the
-      # web UI host-local.
+      # exposure): 127.0.0.1 keeps the CDP endpoint (open until a CDP API key
+      # is set) and the web UI host-local.
       NGINX_LISTEN_ADDR: "${NGINX_LISTEN_ADDR:-}"
       # true = nginx also serves HTTPS on NGINX_LISTEN_HTTPS_PORT (published to the
       # host only via the compose.https.yaml overlay, which also mounts ./tls).
@@ -196,10 +204,11 @@ services:
     healthcheck:
       # The web UI on container port NGINX_LISTEN_HTTP_PORT counts as healthy
       # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
-      # or 401 when the login screen is on (502 = Selkies not up). With
+      # or 401 when a login is on (502 = Selkies not up). With
       # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
       # probed instead — /json/list with CHROMIUM_AUTOSTART=false, which
-      # (unlike /json/version) does not start the main browser. A dead service is caught by the entrypoint itself (it
+      # (unlike /json/version) does not start the main browser; 401 there
+      # means a CDP API key is set (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
       # exits and docker restarts the container). $$ = evaluated in the
       # container at check time, not by compose.
       test:
@@ -207,7 +216,8 @@ services:
         - >-
           if [ "$${ENABLE_SELKIES:-true}" = false ]; then
           if [ "$${CHROMIUM_AUTOSTART:-true}" = false ]; then probe=json/list; else probe=json/version; fi;
-          curl -sf -o /dev/null "http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/$$probe";
+          case "$$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/$$probe")" in
+          2??|401) true ;; *) false ;; esac;
           else
           case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}/)" in
           2??|3??|401) true ;; *) false ;; esac;
