@@ -39,6 +39,7 @@
 //   http.mjs            HTTP dispatch -> routes-json.mjs (/json/*),
 //                       routes-console.mjs (/console/*), respond.mjs
 //   upgrade.mjs         WebSocket dispatch -> mux.mjs, relay.mjs, console-live.mjs
+//   cdp-origin.mjs      who may use the CDP API from a web page (CDP_ALLOW_ORIGINS)
 //   mux.mjs             per-connection CDP multiplexer (main <-> context routing)
 //   relay.mjs           /devtools/page/<id> pass-through
 //   flow.mjs            backpressure between the WebSockets mux/relay join

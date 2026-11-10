@@ -39,9 +39,13 @@ export const CONTEXTS_HEADLESS = env.CDP_CONTEXTS_HEADLESS === '1';
 export const RAISE_SWITCH = env.CDP_GATEWAY_RAISE_SWITCH || '';
 // the console's persisted settings (settings.mjs)
 export const SETTINGS_FILE = env.CDP_GATEWAY_SETTINGS_FILE || '/browser/settings/settings.json';
-// Selkies' master password: console requests that came in through the web
-// port (nginx marks them, see console-auth.mjs) must carry it. Empty = no login.
-export const WEB_PASSWORD = env.CDP_CONSOLE_WEB_PASSWORD || '';
+// The SHA-256 (hex) of Selkies' master password: console requests that came
+// in through the web port (nginx marks them, see console-auth.mjs) must carry
+// the password. Empty = no login.
+export const WEB_PASSWORD_SHA256 = (env.CDP_CONSOLE_WEB_PASSWORD_SHA256 || '').toLowerCase();
+// CDP_ALLOW_ORIGINS: the web page origins that may use the CDP API, like
+// chromium's --remote-allow-origins (cdp-origin.mjs); parsed there.
+export const ALLOW_ORIGINS_RAW = env.CDP_ALLOW_ORIGINS || '';
 
 // The gateway's install dir: dashboard.html, panel.js and the Python helpers
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');

@@ -36,10 +36,14 @@ cdp_gateway_start() {
     # The console sidebar on the Selkies page (nginx.sh) is guarded by
     # Selkies' master password, resolved like selkies.sh does (empty = the
     # web UI has no login, so neither has the sidebar). Only the master
-    # password: a view-only login must not manage contexts.
-    local console_password=""
+    # password: a view-only login must not manage contexts. The gateway gets
+    # its SHA-256 only — all it compares against.
+    local console_password="" console_password_sha256=""
     if [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] && [ "${SELKIES_ENABLE_BASIC_AUTH:-}" != "false" ]; then
         console_password="${SELKIES_BASIC_AUTH_PASSWORD:-${PASSWORD:-${PASSWD:-}}}"
+    fi
+    if [ -n "${console_password}" ]; then
+        console_password_sha256="$(printf '%s' "${console_password}" | sha256sum | cut -d' ' -f1)"
     fi
 
     # Selkies viewers keep the idle timer from closing the main browser
@@ -52,18 +56,19 @@ cdp_gateway_start() {
     local raise_switch=""
     [ "${CDP_CONTEXTS_HEADLESS}" = "0" ] && raise_switch="${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh"
 
-    log "starting CDP gateway on 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT} (main browser autostart=${CHROMIUM_AUTOSTART} idle-timeout=${CHROMIUM_IDLE_TIMEOUT}m, max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR})"
+    log "starting CDP gateway on 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT} (main browser autostart=${CHROMIUM_AUTOSTART} idle-timeout=${CHROMIUM_IDLE_TIMEOUT}m, max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR}, web page origins allowed: ${CDP_ALLOW_ORIGINS:-none})"
     start_service /tmp/cdp-gateway.log \
         env CHROME_BIN="${CHROME_BIN}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
         CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT}" CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" \
         CDP_GATEWAY_INTERNAL_PORT="${CDP_GATEWAY_INTERNAL_PORT}" \
         CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX}" CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
-        CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD="${console_password}" \
+        CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD_SHA256="${console_password_sha256}" \
         CDP_MAIN_CHROMIUM_PID="${CHROMIUM_PID}" CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \
         CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT}" CDP_GATEWAY_VIEWER_PORT="${viewer_port}" \
         CDP_GATEWAY_MAIN_FLAGS_FILE="${CHROMIUM_MAIN_FLAGS_FILE}" \
         CDP_GATEWAY_RAISE_SWITCH="${raise_switch}" CDP_GATEWAY_SETTINGS_FILE="${SETTINGS_FILE}" \
+        CDP_ALLOW_ORIGINS="${CDP_ALLOW_ORIGINS}" \
         "${CHROMIUM_ENV[@]}" \
         "${DROP[@]}" node /usr/local/lib/cdp-gateway/gateway.mjs
 }

@@ -179,6 +179,11 @@ services:
       # closes. Dashboard: http://host:${CDP_PORT}/console/
       # Most isolated contexts alive at once (each is a whole browser)
       CDP_CONTEXTS_MAX: "${CDP_CONTEXTS_MAX:-4}"
+      # Web page origins that may use the CDP API (comma-separated, * = any),
+      # like chromium's --remote-allow-origins; empty = none: any request
+      # with an Origin header (a page's WebSocket or fetch) is refused.
+      # CDP clients such as Playwright send none.
+      CDP_ALLOW_ORIGINS: "${CDP_ALLOW_ORIGINS:-}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: wayland = labwc, a headless

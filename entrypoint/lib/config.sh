@@ -89,6 +89,16 @@
 #   CDP_CONTEXTS_MAX=4           most isolated contexts alive at once (each is
 #                                a whole browser); more get a CDP error
 #   CDP_GATEWAY_INTERNAL_PORT=9220 gateway loopback port (behind nginx)
+#   CDP_ALLOW_ORIGINS=""         web page origins allowed to use the CDP API
+#                                (comma-separated, * = any), like chromium's
+#                                --remote-allow-origins: the gateway refuses
+#                                every CDP request that carries an Origin
+#                                header (a browser page's WebSocket or fetch)
+#                                or comes cross-site, so no site a user has
+#                                open can drive the browser. CDP clients
+#                                (Playwright, Puppeteer, ...) send no Origin;
+#                                e.g. devtools://devtools for a DevTools
+#                                frontend
 #   CHROMIUM_HEADLESS=1          run the browser headless instead (default 0:
 #                                the browser window opens on the desktop
 #                                and is visible live in the Selkies stream)
@@ -278,6 +288,13 @@ config_cdp_gateway() {
     # The profile clones (wiped on every start) sit on the /browser mount next
     # to the profile, so they are reflinks where the filesystem supports it.
     CDP_CONTEXTS_DIR="/browser/contexts"
+    # Web page origins that may use the CDP API (the gateway's cdp-origin.mjs
+    # parses the list); empty = none.
+    CDP_ALLOW_ORIGINS="${CDP_ALLOW_ORIGINS:-}"
+    case "${CDP_ALLOW_ORIGINS}" in
+        *[!A-Za-z0-9.:/_*,\ \[\]-]*)
+            die "CDP_ALLOW_ORIGINS='${CDP_ALLOW_ORIGINS}' must be a comma-separated list of origins like https://tools.example:8443 (or *)" ;;
+    esac
     # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
     # needs the web UI to sit in and the gateway to talk to.
     CDP_CONSOLE_PANEL_ACTIVE=false
