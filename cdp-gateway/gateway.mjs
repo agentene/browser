@@ -43,7 +43,9 @@
 //   cdp-origin.mjs      who may use the CDP API from a web page (CDP_ALLOW_ORIGINS)
 //   mux.mjs             per-connection CDP multiplexer (main <-> context routing)
 //   relay.mjs           /devtools/page/<id> pass-through
+//   client-frame.mjs    what is checked in a client's command (parse, guard, re-serialize)
 //   browser-exit.mjs    a client's Browser.close spares the shared browser (CDP_ALLOW_BROWSER_CLOSE)
+//   file-access.mjs     local files a client names stay in CDP_FILE_DIRS
 //   flow.mjs            backpressure between the WebSockets mux/relay join
 //   contexts.mjs        isolated contexts: a chromium each, and their registry
 //   profile.mjs         profile cloning and the clone's Preferences

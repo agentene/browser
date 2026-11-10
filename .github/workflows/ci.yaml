@@ -224,6 +224,42 @@ jobs:
           await send('Target.closeTarget', { targetId });
           ws.close();
           EOF
+          # local files a CDP client names stay in CDP_FILE_DIRS (default
+          # /browser/downloads): an upload from elsewhere is refused, a
+          # download directory elsewhere is redirected there, and a file in
+          # there can be uploaded
+          docker exec -i gateway-smoke node --input-type=module - <<'EOF'
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          let id = 0; const pending = new Map(); const events = [];
+          ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id) pending.get(m.id)?.(m); else events.push(m); };
+          const send = (method, params = {}, sessionId) => new Promise((r) => { pending.set(++id, r); ws.send(JSON.stringify({ id, method, params, sessionId })); });
+          const { targetId } = (await send('Target.createTarget', { url: 'about:blank' })).result;
+          const { sessionId } = (await send('Target.attachToTarget', { targetId, flatten: true })).result;
+          const evaluate = async (expression) => (await send('Runtime.evaluate', { expression, awaitPromise: true }, sessionId)).result?.result?.value;
+          await evaluate("document.body.innerHTML = '<input type=file id=f>'");
+          const { root } = (await send('DOM.getDocument', {}, sessionId)).result;
+          const { nodeId } = (await send('DOM.querySelector', { nodeId: root.nodeId, selector: '#f' }, sessionId)).result;
+          const refused = await send('DOM.setFileInputFiles', { files: ['/browser/settings/../../etc/passwd'], nodeId }, sessionId);
+          if (!/outside CDP_FILE_DIRS/.test(refused.error?.message)) throw new Error(`upload not refused: ${JSON.stringify(refused)}`);
+          await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: '/browser/settings', eventsEnabled: true });
+          await evaluate("const a = document.createElement('a'); a.href = 'data:text/plain,smoke'; a.download = 'smoke.txt'; document.body.append(a); a.click()");
+          let done;
+          for (let i = 0; i < 50 && !done; i++) {
+            await new Promise((r) => setTimeout(r, 200));
+            done = events.find((m) => m.method === 'Browser.downloadProgress' && m.params.state === 'completed');
+          }
+          if (!done?.params.filePath?.startsWith('/browser/downloads/')) throw new Error(`download not redirected: ${JSON.stringify(done)}`);
+          await send('Browser.setDownloadBehavior', { behavior: 'default' });
+          const ok = await send('DOM.setFileInputFiles', { files: [done.params.filePath], nodeId }, sessionId);
+          if (ok.error) throw new Error(`upload from CDP_FILE_DIRS failed: ${JSON.stringify(ok)}`);
+          if (await evaluate("document.getElementById('f').files[0].text()") !== 'smoke') throw new Error('uploaded file not read');
+          await send('Target.closeTarget', { targetId });
+          ws.close();
+          console.log('CDP_FILE_DIRS smoke test OK');
+          EOF
+          ! docker exec gateway-smoke test -e /browser/settings/smoke.txt
           # an isolated context must get its own chromium and be
           # destroyed again on dispose; driven with raw CDP from the image's node
           docker exec -i gateway-smoke node --input-type=module - <<'EOF'

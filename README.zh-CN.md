@@ -156,6 +156,7 @@ await browser.close();  // 只关闭 CDP 会话,不关浏览器
 * 设置了 [CDP API Key](#登录与-cdp-api-key) 之后,通过请求头携带:`chromium.connectOverCDP(url, { headers: { Authorization: "Bearer <key>" } })`(Puppeteer:`connect({ browserURL, headers })`;`examples/connect-playwright.mjs` 读取 `CDP_API_KEY`)。未设置时端点保持开放,与以前一样。
 * 网页无法使用 CDP API:凡是带 `Origin` 请求头的 CDP 请求(某个浏览器里网页发起的 WebSocket 握手或 `fetch`)或跨站请求,网关一律拒绝(403),与 Chromium 的 `--remote-allow-origins` 规则一致。因此无论是否设置了 API Key,你(或容器自己的浏览器)打开的任何网站都无法接管浏览器。Playwright、Puppeteer 等 CDP 客户端不发送 `Origin`,不受影响;在地址栏打开 `/json/version` 也不受影响。需要放行某个页面(例如 DevTools 前端 `devtools://devtools`)时,把它的 origin 写进 `CDP_ALLOW_ORIGINS`。少数非浏览器客户端也会发送 `Origin` —— 例如 Python 的 `websocket-client`,除非传入 `suppress_origin=True` —— 它们会收到 403,与 Chromium 111 起自身的行为一致;网关日志里会写明被拒绝的 origin。
 * `/json/new` 只接受 `PUT`,与 Chromium 本身一致(`GET` 返回 405),因此一个链接或图片无法打开标签页。
+* **本地文件只限于 `CDP_FILE_DIRS`**(默认 `/browser/downloads`,即宿主机上的 `./browser/downloads`)。让浏览器按路径读取文件的 CDP 命令(文件输入框的 `DOM.setFileInputFiles`、拖放、PWA 启动、加载解压的扩展),只有文件位于这些目录之内时才放行,否则拒绝;Playwright 以 buffer 方式上传(`setInputFiles({ name, mimeType, buffer })`)不受影响,客户端本机上的路径也不受影响(它们在容器里本来就不存在)。客户端指定的下载目录如果不在其中(Playwright 的 `connectOverCDP` 会指定客户端本机的临时目录),会被改到第一个目录,浏览器自己的下载也保存在那里。
 
 ## CDP 网关(带登录态的隔离 context)
 
@@ -328,7 +329,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
 | `CHROMIUM_SANDBOX`          | `auto`                                                                                              | Chromium 自身的沙箱(主浏览器和 context 浏览器):`auto` = 浏览器以非特权用户运行(`RUN_USER` 不为 `0`,即默认情况)**且**容器允许创建 user namespace 时开启,否则使用 `--no-sandbox`;`off` = 始终 `--no-sandbox`。见[权限降级(`RUN_USER`)](#权限降级run_user) |
-| `CHROMIUM_ALLOW_FILE_URLS`  | `false`                                                                                             | `true` = 浏览器可以打开 `file://` URL。默认禁止(托管策略 `URLBlocklist`),因为 CDP 客户端可以借浏览器读取其用户能读的任何文件 —— 包括登录的会话密钥和各进程的环境变量 |
+| `CHROMIUM_ALLOW_FILE_URLS`  | `false`                                                                                             | `true` = 浏览器可以打开 `file://` URL。默认禁止(托管策略 `URLBlocklist`),因为网页或 CDP 客户端可以借浏览器读取其用户能读的任何文件 —— 包括登录的会话密钥。按路径指定文件的 CDP 命令由 `CDP_FILE_DIRS` 管 |
 | `CDP_LISTEN_PORT`           | `9222`                                                                                              | 公开 CDP 端点在容器内的端口(nginx → CDP 网关 → chromium;见[端口](#端口))                                                                                                                   |
 | `CDP_INTERNAL_PORT`         | `9221`                                                                                              | Chromium 回环 DevTools 端口(nginx 后面)                                                                                                                                           |
 
@@ -339,6 +340,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CDP_CONTEXTS_MAX`          | `4`                         | 同时存在的隔离 context 上限(每个都是完整浏览器);超出后新建 context 返回 CDP 错误                                                        |
 | `CDP_ALLOW_ORIGINS`         | *(空)*                      | 允许使用 CDP API 的网页 origin,逗号分隔(`*` = 任意),与 Chromium 的 `--remote-allow-origins` 相同;空 = 都不允许 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |
 | `CDP_ALLOW_BROWSER_CLOSE`   | `false`                     | 客户端的 `Browser.close`(Puppeteer 的 `browser.close()`)是否关闭共享的浏览器(容器不会退出,下一个客户端会再把它启动起来);`false` = 只关闭该客户端自己的连接(及其隔离 context),`Browser.crash*` 一律拒绝 |
+| `CDP_FILE_DIRS`             | `/browser/downloads`        | CDP 客户端可以指定本地文件的目录(冒号分隔):按路径读取文件的命令(`DOM.setFileInputFiles`、拖放、PWA 启动、`Extensions.loadUnpacked`)读取其他位置的文件一律拒绝(先解析符号链接),不在其中的下载目录会被改到第一个目录。第一个目录同时也是浏览器的下载目录(托管策略 `DownloadDirectory`;启动时创建并交给 `RUN_USER`)。没有这项限制,CDP 客户端可以读取浏览器用户能读的任何文件(登录的 `auth.json`),并往它能写的目录里写入新文件。`*` = 不检查,也不设策略 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |
 | `CDP_GATEWAY_INTERNAL_PORT` | `9220`                      | 网关回环端口(nginx 后面)                                                                                                                |
 | `AUTH_INTERNAL_PORT`        | `9219`                      | 内置鉴权服务的回环端口(nginx 后面;`ENABLE_AUTH=true`) |
 
@@ -455,6 +457,7 @@ COMPOSE_FILE=compose.yaml:compose.gpu.yaml
 | `./browser/user-data`  | `/browser/user-data`   | Chromium 配置:cookies、登录态、扩展、`navigator.language` 偏好 |
 | `./browser/settings`   | `/browser/settings`    | 控制台设置(`settings.json`)以及[登录 + CDP API Key](#登录与-cdp-api-key)(`auth.json`) |
 | `./browser/contexts`   | `/browser/contexts`    | [CDP 网关](#cdp-网关带登录态的隔离-context)的浏览器 context,各自一份 profile 克隆(每次启动清空) |
+| `./browser/downloads`  | `/browser/downloads`   | 浏览器的下载文件,以及 CDP 客户端可以按路径上传的文件(`CDP_FILE_DIRS`) |
 | `./tls`                | `/etc/nginx/tls`       | TLS 证书(你自己的,或生成的自签对);仅在使用 `compose.https.yaml` 时挂载 |
 
 `./browser` 是同一个挂载(`BROWSER_DATA_HOST_DIR`,默认 `./browser`),profile 与网关的克隆因此位于同一文件系统:宿主机是 XFS 或 btrfs 时,每个隔离 context 都从 profile 的 reflink 启动,而不是完整复制。两个宿主目录都已 git-ignore;`./tls` 只在使用 HTTPS overlay 时才会创建。配置目录就是浏览器的 `--user-data-dir`,本次运行登录的账号在 `docker compose down && up` 之后依然有效。容器停止时,entrypoint 会先用 CDP `Browser.close` 有序关闭浏览器(与关闭最后一个窗口相同),再向各服务发信号,所以即使是刚刚写入的 cookie 也会落盘;直接发信号会丢掉它们。上一容器遗留的 `Singleton*` 锁文件(Chromium 的运行时产物)会在启动时自动清理。
@@ -582,7 +585,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 * **CDP 网关的隔离 context 继承你真实的登录态。** 每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 跟随[内置登录](#登录与-cdp-api-key)(跳过登录或 `ENABLE_AUTH=false` 时开放)。web UI 端口上的侧边栏副本(`cdp-console/`)同样跟随内置登录,设置了 `SELKIES_BASIC_AUTH_PASSWORD` 时还需要 Selkies 主密码。
 * **首次启动后请立即设置登录。** 初始化表单需要容器日志里的设置码,看不到日志的访问者无法占用这个浏览器;但在设置 key 之前 CDP API 仍是开放的。跳过登录意味着任何能访问 web UI 的人都能使用它 —— 而且借助 DNS rebinding(某个网站把自己的域名指向这个容器),该网络里任何用户打开的网页也能使用它:把 `ALLOWED_HOSTS` 设为你访问它所用的主机名即可堵住(IP 地址和 `localhost` 始终可用)。CDP API 本身不受影响(它拒绝一切带 `Origin` 的请求)。web UI 离开可信网络时请同时启用 HTTPS(纯 HTTP 会以明文传输密码和会话 cookie)。
 * **网页无法访问 CDP API。** 带 `Origin` 请求头或来自其他站点的请求一律拒绝,除非 `CDP_ALLOW_ORIGINS` 列出了该 origin —— 即使设置了 API Key 这一点也很重要,因为容器自己浏览器里的网页可以直接访问网关的 loopback 端口,而那里不经过 nginx(也就不检查 key)。
-* **浏览器里禁止 `file://`**(`CHROMIUM_ALLOW_FILE_URLS=false`):否则 CDP 客户端可以借浏览器读取容器里的文件,其中包括 `/browser/settings/auth.json`(给登录会话签名的密钥)和各进程的环境变量(以环境变量传入的密码)。只有在每个 CDP 客户端都可以读取这些内容时才放开它。
+* **CDP 客户端只能接触 `CDP_FILE_DIRS` 里的本地文件。** 浏览器以容器用户的身份运行,否则 CDP 客户端可以借它读取该用户能读的任何文件 —— 其中包括 `/browser/settings/auth.json`(给登录会话签名的密钥) —— 还能往它能写的目录里写入新文件(在完成初始化之前写入一个新的 `auth.json` 就能占用登录)。有两道防线:浏览器里禁止 `file://` URL(`CHROMIUM_ALLOW_FILE_URLS=false`),以及网关把 CDP 命令里出现的所有路径(文件输入框、拖放、下载目录等)限制在 `CDP_FILE_DIRS` 之内。只有在每个 CDP 客户端都可以读取这些文件时才放宽其中任何一项。即使会话被盗用,修改登录或 API Key 也需要当前密码。
 * 默认情况下 Chromium 以 `--no-sandbox` 运行(Docker 默认的 seccomp 配置禁止它所需的 user namespace —— 容器化 Chrome 的常见情况;以 root 运行,即 `RUN_USER=0` 时,则根本无法启用沙箱)。允许 user namespace 即可启用它的沙箱(`CHROMIUM_SANDBOX`,见[权限降级(`RUN_USER`)](#权限降级run_user));无论哪种情况,都请把容器当作"暴露一个浏览器"来对待,放在专用的用户/VM 里。
 * 生成的 TLS 密钥是自签的 —— 浏览器会告警,属预期;对公网服务请换用正式证书。
 * PID 1 与 nginx master 以 **root** 运行(入口脚本默认需绑定 80/443 特权端口并准备 profile);桌面栈与 nginx worker 默认以非特权用户 `browser` 运行(`RUN_USER`,见[权限降级(`RUN_USER`)](#权限降级run_user);`RUN_USER=0` 则它们也以 root 运行)。`--security-opt=no-new-privileges` 可直接使用。单独加 `--cap-drop=ALL` 会导致容器无法启动(入口脚本与 nginx 仍需 chown、切换 uid、绑定 80 端口),需加回启动所需的能力:

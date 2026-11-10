@@ -97,10 +97,10 @@
 #                                as root.
 #   CHROMIUM_ALLOW_FILE_URLS=false  true = the browsers may open file:// URLs.
 #                                Blocked by default (managed policy
-#                                URLBlocklist): a CDP client could otherwise
-#                                read whatever the browser's user can,
-#                                /browser/settings/auth.json (the login's
-#                                session secret) and /proc/*/environ included
+#                                URLBlocklist): a page or CDP client could
+#                                otherwise read whatever the browser's user
+#                                can. The CDP commands that name local files
+#                                are CDP_FILE_DIRS' business, not this one's
 #   CDP_INTERNAL_PORT=9221      chromium loopback DevTools port (behind nginx)
 #   (the CDP gateway always sits between nginx and chromium: every isolated
 #   CDP context — Target.createBrowserContext, e.g. a playwright-cli session
@@ -129,6 +129,22 @@
 #                                Browser.crash* are refused. true: passed
 #                                through — the browser exits (the container
 #                                keeps running; the next client restarts it)
+#   CDP_FILE_DIRS=/browser/downloads  directories (colon-separated) CDP
+#                                clients may name local files in: file
+#                                inputs, drops, PWA launches, unpacked
+#                                extensions (DOM.setFileInputFiles, ...) read
+#                                only from them — anything else is refused —
+#                                and a download directory outside them is
+#                                redirected into the first (the gateway's
+#                                file-access.mjs; symlinks resolved). The
+#                                browsers' own download directory is the
+#                                first one too (managed policy
+#                                DownloadDirectory; created and handed to
+#                                RUN_USER at start). Otherwise a CDP client
+#                                could read any file the browser's user can
+#                                (/browser/settings/auth.json, the login's
+#                                session secret) and write new ones into its
+#                                directories. * = no check, no policy
 #   CHROMIUM_HEADLESS=1          run the browser headless instead (default 0:
 #                                the browser window opens on the desktop
 #                                and is visible live in the Selkies stream)
@@ -355,6 +371,24 @@ config_cdp_gateway() {
         true|false) ;;
         *) die "CDP_ALLOW_BROWSER_CLOSE='${CDP_ALLOW_BROWSER_CLOSE}' must be true or false" ;;
     esac
+    # Where CDP clients may name local files (the gateway's file-access.mjs;
+    # the first one is also the browsers' download directory, chromium.sh).
+    # Plain absolute paths only: they end up in the policy JSON as they are.
+    CDP_FILE_DIRS="${CDP_FILE_DIRS:-/browser/downloads}"
+    if [ "${CDP_FILE_DIRS}" != "*" ]; then
+        local dir dirs
+        IFS=: read -r -a dirs <<<"${CDP_FILE_DIRS}"
+        [ "${#dirs[@]}" -gt 0 ] || die "CDP_FILE_DIRS is empty (use * to allow any directory)"
+        for dir in "${dirs[@]}"; do
+            case "${dir}" in
+                /*) : ;;
+                *) die "CDP_FILE_DIRS='${CDP_FILE_DIRS}': '${dir}' is not an absolute path (colon-separated absolute directories, or *)" ;;
+            esac
+            case "${dir}" in
+                *[!A-Za-z0-9._/@+=,~-]*) die "CDP_FILE_DIRS='${CDP_FILE_DIRS}': '${dir}' may only contain letters, digits and ._/@+=,~-" ;;
+            esac
+        done
+    fi
     # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
     # needs the web UI to sit in and the gateway to talk to.
     CDP_CONSOLE_PANEL_ACTIVE=false

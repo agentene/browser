@@ -190,6 +190,13 @@ services:
       # true = the browsers may open file:// URLs; blocked by default so a
       # CDP client cannot read the container's files through the browser
       CHROMIUM_ALLOW_FILE_URLS: "${CHROMIUM_ALLOW_FILE_URLS:-false}"
+      # Directories CDP clients may name local files in (colon-separated):
+      # file uploads (setInputFiles with a container path) read only from
+      # them, and a download directory outside them is redirected into the
+      # first, which is also the browsers' own download directory (on the
+      # /browser mount by default). * = anywhere the browser's user can
+      # reach, the login's /browser/settings/auth.json included
+      CDP_FILE_DIRS: "${CDP_FILE_DIRS:-/browser/downloads}"
 
       # --- CDP gateway ---
       # Every isolated CDP context (browser.newContext(), playwright-cli

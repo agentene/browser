@@ -15,6 +15,7 @@ import { Mux, openMuxes } from '../src/mux.mjs';
 let server;
 let mainUrl;
 const received = [];
+const rawReceived = []; // the frames as they came, for re-serialization checks
 const arrivals = []; // [upstream, method, sessionId] across both fake chromiums, in arrival order
 
 before(async () => {
@@ -23,6 +24,7 @@ before(async () => {
   mainUrl = `ws://127.0.0.1:${server.address().port}/devtools/browser/fake`;
   server.on('connection', (ws) => {
     ws.on('message', (data) => {
+      rawReceived.push(data.toString());
       const msg = JSON.parse(data.toString());
       received.push(msg);
       arrivals.push(['main', msg.method, msg.sessionId]);
@@ -345,5 +347,68 @@ test('context replies with nothing to track pass as they came, their bookkeeping
   } finally {
     client.close();
     stub.restore();
+  }
+});
+
+test('a frame JSON.parse rejects is answered with a parse error, never forwarded', async () => {
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', mainUrl);
+  try {
+    // chromium reads a raw TAB in a string; JSON.parse does not, so the
+    // gateway could not have checked it: before the fix this closed the browser
+    const reply = client.next((m) => m.error?.code === -32700);
+    client.emit('message', Buffer.from('{"id":11,"method":"Browser.close","params":{"a":"\t"}}'));
+    assert.match((await reply).error.message, /^JSON: /);
+    const notObject = client.next((m) => m.error?.code === -32600);
+    client.emit('message', Buffer.from('["Browser.close"]'));
+    await notObject;
+    // the connection is still there, and nothing of it reached chromium
+    assert.deepEqual(await client.command({ id: 12, method: 'Browser.getVersion' }), { id: 12, result: { echo: 'Browser.getVersion' } });
+    assert.equal(received.some((m) => m.id === 11), false);
+    assert.equal(mux.closed, false);
+  } finally {
+    client.close();
+  }
+});
+
+test('file paths outside CDP_FILE_DIRS are refused; download directories redirected', async () => {
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', mainUrl);
+  try {
+    const refused = await client.command({ id: 21, sessionId: 'S9', method: 'DOM.setFileInputFiles', params: { files: ['/browser/settings/auth.json'], nodeId: 3 } });
+    assert.equal(refused.sessionId, 'S9');
+    assert.match(refused.error.message, /outside CDP_FILE_DIRS/);
+    const drop = await client.command({ id: 22, sessionId: 'S9', method: 'Input.dispatchDragEvent', params: { type: 'drop', x: 1, y: 1, data: { items: [], files: ['/proc/1/environ'], dragOperationsMask: 1 } } });
+    assert.match(drop.error.message, /outside CDP_FILE_DIRS/);
+    assert.equal(received.some((m) => m.id === 21 || m.id === 22), false, 'never reached chromium');
+    // Playwright's connectOverCDP: a temp dir of the client machine
+    await client.command({ id: 23, method: 'Browser.setDownloadBehavior', params: { behavior: 'allowAndName', downloadPath: '/tmp/playwright-artifacts-x', eventsEnabled: true } });
+    assert.equal(received.find((m) => m.id === 23).params.downloadPath, '/browser/downloads');
+    // inside the dirs: forwarded (re-serialized: a duplicate key collapses
+    // to the value the gateway checked, the last, as JSON.parse reads it)
+    const frame = '{"id":24,"sessionId":"S9","method":"DOM.setFileInputFiles","params":{"files":["/etc/passwd"],"files":["/browser/downloads/a.txt"],"nodeId":3}}';
+    client.emit('message', Buffer.from(frame));
+    await client.next((m) => m.id === 24);
+    assert.equal(rawReceived.find((r) => r.includes('"id":24')), '{"id":24,"sessionId":"S9","method":"DOM.setFileInputFiles","params":{"files":["/browser/downloads/a.txt"],"nodeId":3}}');
+    // an escaped method name is caught too
+    const escaped = client.next((m) => m.id === 25);
+    client.emit('message', Buffer.from('{"id":25,"method":"DOM.\\u0073etFileInputFiles","params":{"files":["/etc/passwd"]}}'));
+    assert.match((await escaped).error.message, /outside CDP_FILE_DIRS/);
+    assert.equal(mux.closed, false);
+  } finally {
+    client.close();
+  }
+});
+
+test('a non-object params does not take the gateway down', async () => {
+  const client = new FakeClient();
+  new Mux(client, 'test', mainUrl);
+  try {
+    for (const [id, params] of [[31, null], [32, 'x'], [33, 7]]) {
+      const reply = await client.command({ id, method: 'Target.getTargets', params });
+      assert.equal(reply.result.echo, 'Target.getTargets');
+    }
+  } finally {
+    client.close();
   }
 });

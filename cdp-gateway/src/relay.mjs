@@ -1,7 +1,7 @@
 // /devtools/page/<id>: a plain relay to whichever chromium owns the target.
 
 import WebSocket from 'ws';
-import { REFUSED_MESSAGE, browserExitAction, mayEndBrowser } from './browser-exit.mjs';
+import { answerFor, guardCommand, needsGuard, parseCommand } from './client-frame.mjs';
 import { WS_OPTIONS } from './config.mjs';
 import { forward } from './flow.mjs';
 import { log } from './util.mjs';
@@ -13,33 +13,32 @@ export function openRelays() {
   return relays;
 }
 
-// A client's Browser.close / Browser.crash on a page WebSocket ends the whole
-// browser just the same (browser-exit.mjs): answered here, never forwarded.
-// Returns true when the frame was such a command.
-function endsBrowser(client, data, isBinary) {
-  if (isBinary || !mayEndBrowser(data)) return false;
-  let msg;
-  try {
-    msg = JSON.parse(data.toString());
-  } catch {
-    return false;
-  }
-  const action = browserExitAction(msg.method);
-  if (!action) return false;
-  const answer = (body) => {
-    if (msg.id !== undefined && client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, ...body }), { binary: false });
+// A client frame the gateway has to check (client-frame.mjs): a
+// Browser.close / Browser.crash, which on a page WebSocket ends the whole
+// browser just the same (browser-exit.mjs), or a command naming local files
+// (file-access.mjs). Returns what goes upstream instead of the frame: the
+// re-serialized command, or null when the gateway answered it itself.
+// Binary frames go as they came: chromium executes none (it drops the
+// connection on one).
+function guardFrame(client, data, isBinary) {
+  if (isBinary || !needsGuard(data)) return data;
+  const parsed = parseCommand(data);
+  let answer = parsed.answer;
+  let close = false;
+  if (parsed.msg) {
+    const guarded = guardCommand(parsed.msg);
+    if (guarded.msg) {
+      for (const note of guarded.notes) log(`page relay: ${note}`);
+      return JSON.stringify(guarded.msg);
     }
-  };
-  if (action === 'refuse') {
-    log(`page relay: ${msg.method} refused`);
-    answer({ error: { code: -32000, message: `${msg.method} ${REFUSED_MESSAGE}` } });
-  } else {
-    log('page relay: Browser.close: closing this client\'s connection, not the shared browser');
-    answer({ result: {} });
-    client.close(); // after the answer; its 'close' takes the upstream down
+    log(`page relay: ${guarded.note}`);
+    ({ close } = guarded);
+    if (parsed.msg.id === undefined) answer = null;
+    else answer = answerFor(parsed.msg, guarded.answer);
   }
-  return true;
+  if (answer && client.readyState === WebSocket.OPEN) client.send(JSON.stringify(answer), { binary: false });
+  if (close) client.close(); // after the answer; its 'close' takes the upstream down
+  return null;
 }
 
 export function relay(client, upstreamUrl) {
@@ -59,8 +58,9 @@ export function relay(client, upstreamUrl) {
     queue.length = 0;
     client.resume?.();
   });
-  client.on('message', (data, isBinary) => {
-    if (endsBrowser(client, data, isBinary)) return;
+  client.on('message', (raw, isBinary) => {
+    const data = guardFrame(client, raw, isBinary);
+    if (data === null) return;
     if (upstream.readyState === WebSocket.OPEN) forward(upstream, data, { binary: isBinary }, [client]);
     else queue.push([data, isBinary]);
   });

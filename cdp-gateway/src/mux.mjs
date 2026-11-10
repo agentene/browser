@@ -13,13 +13,14 @@
 // disconnecting destroys the context.
 //
 // Default-context traffic is not even parsed: a client message that names no
-// Target.* method (nor a Browser.close, browser-exit.mjs) goes to the main
-// chromium as it came, and so does an upstream message the gateway has no
-// business with (needsParse).
+// Target.* method (nor a command client-frame.mjs checks: Browser.close, local
+// file paths) goes to the main chromium as it came, and so does an upstream
+// message the gateway has no business with (needsParse). A parsed message
+// goes upstream re-serialized (client-frame.mjs).
 
 import WebSocket from 'ws';
-import { REFUSED_MESSAGE, browserExitAction, hasEscape, mayEndBrowser } from './browser-exit.mjs';
 import { openWs } from './cdp-client.mjs';
+import { answerFor, guardCommand, needsGuard, parseCommand } from './client-frame.mjs';
 import { INTERNAL_ID_BASE, WS_OPTIONS } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { forward } from './flow.mjs';
@@ -32,6 +33,12 @@ const REPLY_HEAD = /^\{"id":(-?\d+)[,}]/;
 // What a context chromium's message has to contain for the gateway to track
 // or rewrite it (targets, contexts, sessions: trackContextMessage).
 const CONTEXT_MARKERS = ['"Target.', '"targetId"', '"browserContextId"', '"targetInfo"'];
+
+// A client command's params as an object: chromium refuses any other kind
+// itself, but the gateway reads them first (and a null would throw).
+function paramsOf(msg) {
+  return msg.params !== null && typeof msg.params === 'object' ? msg.params : {};
+}
 
 // open client connections, for idle.mjs
 export function openMuxes() {
@@ -166,26 +173,29 @@ export class Mux {
   fromClient(data) {
     // nothing to route or rewrite without a context, unless it is one of the
     // Target.* commands the gateway handles (their method name is a JSON
-    // string, so it appears as "Target. — or escaped, browser-exit.mjs)
-    if (!this.context && !this.attaching && !data.includes('"Target.') && !hasEscape(data) && !mayEndBrowser(data)) {
+    // string, so it appears as "Target. — or escaped, browser-exit.mjs) or
+    // one it checks (client-frame.mjs)
+    if (!this.context && !this.attaching && !data.includes('"Target.') && !needsGuard(data)) {
       this.toMain(data);
       return;
     }
-    let msg;
-    try {
-      msg = JSON.parse(data.toString());
-    } catch {
-      // not CDP: chromium answers it with its parse error, as without a context
-      this.toMain(data);
+    const parsed = parseCommand(data);
+    if (parsed.answer) {
+      // not CDP: answered with chromium's own error, never forwarded (the
+      // gateway cannot tell what chromium would read in it)
+      this.sendClient(parsed.answer);
       return;
     }
-    const { method, params = {}, sessionId } = msg;
+    const guarded = guardCommand(parsed.msg);
+    if (guarded.answer) {
+      this.refuse(parsed.msg, guarded);
+      return;
+    }
+    for (const note of guarded.notes) log(`mux ${this.clientAddr}: ${note}`);
+    const { msg } = guarded;
+    const { method, sessionId } = msg;
+    const params = paramsOf(msg);
 
-    const exit = browserExitAction(method);
-    if (exit) {
-      this.endBrowser(msg, exit);
-      return;
-    }
     if (sessionId) {
       this.fromClientSession(msg);
       return;
@@ -238,24 +248,21 @@ export class Mux {
     this.sendMain(msg);
   }
 
-  // A client's Browser.close / Browser.crash (browser-exit.mjs): the shared
-  // browser stays up. A close succeeds and ends this client's connection —
-  // its isolated context with it —, as a closing browser would.
-  endBrowser(msg, action) {
-    if (action === 'refuse') {
-      log(`mux ${this.clientAddr}: ${msg.method} refused`);
-      if (msg.id !== undefined) this.replyError(msg, `${msg.method} ${REFUSED_MESSAGE}`);
-      return;
-    }
-    log(`mux ${this.clientAddr}: Browser.close: closing this client's connection, not the shared browser`);
-    if (msg.id !== undefined) this.reply(msg, {});
-    this.close('client sent Browser.close');
+  // A command the gateway answers itself (client-frame.mjs): a refusal, or a
+  // client's Browser.close, which succeeds and ends this client's connection
+  // — its isolated context with it —, as a closing browser would; the
+  // shared browser stays up.
+  refuse(msg, { answer, close, note }) {
+    log(`mux ${this.clientAddr}: ${note}`);
+    if (msg.id !== undefined) this.sendClient(answerFor(msg, answer));
+    if (close) this.close('client sent Browser.close');
   }
 
   // A command on a session: the context chromium's, the main chromium's, or
   // a browser-target session on main that addresses the context chromium.
   fromClientSession(msg) {
-    const { params = {}, sessionId } = msg;
+    const { sessionId } = msg;
+    const params = paramsOf(msg);
     // while that session's stand-in in the context chromium is being opened,
     // everything on it waits, so its commands keep their order
     const browserSession = this.browserSessions.get(sessionId);
@@ -288,7 +295,7 @@ export class Mux {
       for (const m of waiting) {
         // without a stand-in what needed one fails (no retry loop); the rest
         // takes its usual way
-        if (err && this.addressesContext(m.params ?? {})) this.replyError(m, err.message);
+        if (err && this.addressesContext(paramsOf(m))) this.replyError(m, err.message);
         else this.fromClientSession(m);
       }
     };

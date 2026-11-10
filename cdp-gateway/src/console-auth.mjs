@@ -14,9 +14,9 @@ const KEYLEN = 32;
 // (CDP_CONSOLE_WEB_PASSWORD_HASH, made by entrypoint/helpers/password-hash.mjs)
 // — all the gateway compares against, so it is never given the password
 // itself, and a leaked environment does not give it away cheaply either.
-// (What keeps a CDP client from reading the environment of the container's
-// processes through the browser is the file:// block, chromium.sh's
-// CHROMIUM_ALLOW_FILE_URLS.)
+// (What keeps a CDP client from reading the container's files through the
+// browser: the file:// block, chromium.sh's CHROMIUM_ALLOW_FILE_URLS, and for
+// the CDP commands that name files by path, file-access.mjs' CDP_FILE_DIRS.)
 export async function hashPassword(password, salt = crypto.randomBytes(16)) {
   const hash = await scrypt(password, salt, KEYLEN, SCRYPT);
   const b64 = (buf) => buf.toString('base64url');

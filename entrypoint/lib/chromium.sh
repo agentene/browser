@@ -86,23 +86,44 @@ chromium_resolve_sandbox() {
     fi
 }
 
-# --- managed policy (CHROMIUM_ALLOW_FILE_URLS) ---------------------------------
-# A CDP client drives the browser, and the browser reads files as its user:
-# file:///browser/settings/auth.json (the login's session secret),
-# /proc/<pid>/environ (passwords handed in by environment), the profile ...
-# Blocked by policy unless allowed — it also covers the context browsers,
-# whatever their flags. Written at every start, so the knob can change.
+# --- managed policy (CHROMIUM_ALLOW_FILE_URLS, CDP_FILE_DIRS) -------------------
+# Read by every browser, the context browsers too, whatever their flags.
+# Written at every start, so the knobs can change.
+#   URLBlocklist file://*  a page or CDP client opening file:// URLs could
+#                          read whatever the browser's user can
+#   DownloadDirectory      the browsers' own download directory, the first
+#                          CDP_FILE_DIRS entry: fixed, so a CDP client cannot
+#                          point it elsewhere (through chrome://settings,
+#                          say). Download directories a CDP client names
+#                          itself are the gateway's business (file-access.mjs)
+# What reaches local files through CDP commands without a URL (a file
+# input's DOM.setFileInputFiles, ...) is checked by the gateway, not here.
 chromium_write_policy() {
-    local policy="${CHROMIUM_POLICY_DIR}/agentene.json"
+    local policy="${CHROMIUM_POLICY_DIR}/agentene.json" entries=()
     if [ "${CHROMIUM_ALLOW_FILE_URLS}" = "true" ]; then
-        rm -f "${policy}"
         log "chromium: file:// URLs allowed (CHROMIUM_ALLOW_FILE_URLS=true)"
+    else
+        entries+=('"URLBlocklist": ["file://*"]')
+    fi
+    if [ "${CDP_FILE_DIRS}" = "*" ]; then
+        log "chromium: CDP clients may name local files anywhere (CDP_FILE_DIRS=*)"
+    else
+        local download_dir="${CDP_FILE_DIRS%%:*}"
+        { mkdir -p "${download_dir}" && give_to_run_user "${download_dir}"; } \
+            || die "cannot create the download directory ${download_dir} (the first CDP_FILE_DIRS entry)"
+        # config.sh allows no character that would need escaping in JSON
+        entries+=("\"DownloadDirectory\": \"${download_dir}\"")
+    fi
+    if [ "${#entries[@]}" -eq 0 ]; then
+        rm -f "${policy}"
         return 0
     fi
+    local body
+    body="$(printf '  %s,\n' "${entries[@]}")"
     { mkdir -p "${CHROMIUM_POLICY_DIR}" \
-        && printf '{\n  "URLBlocklist": ["file://*"]\n}\n' >"${policy}" \
+        && printf '{\n%s\n}\n' "${body%,}" >"${policy}" \
         && chmod 644 "${policy}"; } \
-        || die "cannot write the chromium policy ${policy} (read-only root filesystem?); set CHROMIUM_ALLOW_FILE_URLS=true to run without it"
+        || die "cannot write the chromium policy ${policy} (read-only root filesystem?); set CHROMIUM_ALLOW_FILE_URLS=true and CDP_FILE_DIRS=* to run without it"
 }
 
 # desktop_ready: true when the display a headed browser needs exists.

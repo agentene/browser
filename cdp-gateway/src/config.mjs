@@ -49,6 +49,20 @@ export const ALLOW_ORIGINS_RAW = env.CDP_ALLOW_ORIGINS || '';
 // reaches the shared browser (browser-exit.mjs)
 export const ALLOW_BROWSER_CLOSE = env.CDP_ALLOW_BROWSER_CLOSE === 'true';
 
+// CDP_FILE_DIRS: the directories CDP clients may name local files in
+// (file-access.mjs), colon-separated; * = any (null here).
+export function parseFileDirs(raw) {
+  const value = (raw ?? '').trim();
+  if (value === '*') return null;
+  const dirs = value.split(':').map((d) => d.trim()).filter(Boolean);
+  if (!dirs.length) throw new Error('CDP_FILE_DIRS is empty (use * to allow any directory)');
+  for (const d of dirs) {
+    if (!path.isAbsolute(d)) throw new Error(`CDP_FILE_DIRS: ${d} is not an absolute path`);
+  }
+  return dirs.map((d) => path.resolve(d));
+}
+export const FILE_DIRS = parseFileDirs(env.CDP_FILE_DIRS ?? '/browser/downloads');
+
 // The gateway's install dir: dashboard.html, panel.js and the Python helpers
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
