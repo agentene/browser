@@ -77,3 +77,17 @@ test('a context whose chromium exits during startup is not registered and holds 
   assert.equal(contexts.size, 2);
   await Promise.all([a.destroy('test'), b.destroy('test')]);
 });
+
+test('a context log that cannot be opened fails that context, not the gateway', async () => {
+  // the next context's name: one after a context created right now
+  const probe = await contexts.create('t');
+  const next = Number(probe.name.replace(/\D/g, '')) + 1;
+  await probe.destroy('test');
+  const logDir = path.join(tmp, 'contexts', `context-${next}`, 'chromium.log');
+  fs.mkdirSync(logDir, { recursive: true }); // a directory: opening it for writing fails
+  await assert.rejects(contexts.create('t'), /EISDIR/);
+  assert.equal(contexts.size, 0);
+  const ok = await contexts.create('t'); // the failed one holds no slot
+  assert.equal(contexts.size, 1);
+  await ok.destroy('test');
+});

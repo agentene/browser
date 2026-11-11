@@ -86,7 +86,19 @@ class Context {
     if (WAYLAND && !CONTEXTS_HEADLESS) flags.push(`--class=${appId(this.name)}`);
     const logPath = path.join(this.dir, 'chromium.log');
     const logFile = createWriteStream(logPath, { flags: 'a' });
-    await new Promise((resolve) => logFile.once('open', resolve));
+    // an error on the log (cannot be opened, the disk filled up) would be an
+    // unhandled 'error' event otherwise, which takes the whole gateway (and
+    // so the container) down. A write error unpipes stderr from it: what
+    // chromium writes there is discarded from then on, so it never blocks on
+    // a full pipe.
+    logFile.on('error', (err) => {
+      log(`${this.name}: ${logPath}: ${err.message}`);
+      this.proc?.stderr?.resume();
+    });
+    await new Promise((resolve, reject) => {
+      logFile.once('open', resolve);
+      logFile.once('error', reject);
+    });
     const proc = spawn(CHROME_BIN, flags, {
       detached: true, // own process group: destroy() takes renderers down too
       stdio: ['ignore', logFile, 'pipe'], // stderr: read below, then into the log

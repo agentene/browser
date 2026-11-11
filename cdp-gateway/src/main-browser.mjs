@@ -59,6 +59,9 @@ class MainBrowser {
         await fs.rm(path.join(MAIN_PROFILE, name), { force: true });
       }
       const logFile = createWriteStream(MAIN_LOG, { flags: 'a' });
+      // for good, not just while it opens: a later error with no listener
+      // would take the gateway down (chromium writes to the file itself)
+      logFile.on('error', (err) => log(`main browser: ${MAIN_LOG}: ${err.message}`));
       await new Promise((resolve, reject) => {
         logFile.once('open', resolve);
         logFile.once('error', reject);
