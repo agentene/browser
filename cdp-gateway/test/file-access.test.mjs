@@ -133,6 +133,21 @@ test('mayTouchFiles / needsGuard: the cheap pre-checks on raw frames', () => {
   assert.equal(needsGuard(Buffer.from('{"id":1,"method":"DOM.\\u0073etFileInputFiles"}')), true, 'escaped');
   assert.equal(needsGuard(Buffer.from('{"id":1,"method":"DOM.setFileInputFiles"}')), true);
   assert.equal(needsGuard(Buffer.from('{"id":1,"method":"Browser.close"}')), true);
+  assert.equal(needsGuard(Buffer.from('{"id":1,"method":"Target.exposeDevToolsProtocol","params":{"targetId":"T"}}')), true);
+});
+
+test('guardCommand: Target.exposeDevToolsProtocol is refused, wrapped or not', () => {
+  // the page's binding would speak CDP to the browser target past every check
+  const expose = { id: 1, method: 'Target.exposeDevToolsProtocol', params: { targetId: 'T', bindingName: 'cdp' } };
+  const direct = guardCommand(expose);
+  assert.equal(direct.close, false);
+  assert.equal(direct.answer.error.code, -32000);
+  assert.match(direct.answer.error.message, /exposeDevToolsProtocol refused by the CDP gateway/);
+  const wrapped = guardCommand({ id: 2, method: 'Target.sendMessageToTarget', params: { sessionId: 's', message: JSON.stringify(expose) } });
+  assert.match(wrapped.answer.error.message, /exposeDevToolsProtocol refused/);
+  // with CDP_FILE_DIRS=* and CDP_ALLOW_BROWSER_CLOSE=true it stays refused:
+  // it would bypass whatever checks are on
+  assert.equal(guardCommand({ ...expose, params: { ...expose.params, inheritPermissions: true } }).answer.error.code, -32000);
 });
 
 test('parseCommand: chromium\'s own errors for what is no JSON object', () => {

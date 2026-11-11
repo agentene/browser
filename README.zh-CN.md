@@ -157,6 +157,7 @@ await browser.close();  // 只关闭 CDP 会话,不关浏览器
 * 网页无法使用 CDP API:凡是带 `Origin` 请求头的 CDP 请求(某个浏览器里网页发起的 WebSocket 握手或 `fetch`,比照 Chromium 的 `--remote-allow-origins` 规则检查)或 `Sec-Fetch-Site` 不是 `none` 的请求,网关一律拒绝(403)—— 网页的请求要么跨站、要么同站、要么(在 DNS rebinding 之后,即某个网站把自己的域名指向这个容器)同源,而同源 GET 连 `Origin` 都不带,只有 `Sec-Fetch-Site` 能把它和客户端请求区分开。因此无论是否设置了 API Key,你(或容器自己的浏览器)打开的任何网站都无法接管浏览器。Playwright、Puppeteer 等 CDP 客户端既不发 `Origin` 也不发 `Sec-Fetch-*`,不受影响;在地址栏打开 `/json/version`(`Sec-Fetch-Site: none`)也不受影响。需要放行某个页面(例如 DevTools 前端 `devtools://devtools`)时,把它的 origin 写进 `CDP_ALLOW_ORIGINS`。少数非浏览器客户端也会发送 `Origin` —— 例如 Python 的 `websocket-client`,除非传入 `suppress_origin=True` —— 它们会收到 403,与 Chromium 111 起自身的行为一致;网关日志里会写明被拒绝的 origin。
 * `/json/new` 只接受 `PUT`,与 Chromium 本身一致(`GET` 返回 405),因此一个链接或图片无法打开标签页。
 * **本地文件只限于 `CDP_FILE_DIRS`**(默认 `/browser/downloads`,即宿主机上的 `./browser/downloads`)。让浏览器按路径读取文件的 CDP 命令(文件输入框的 `DOM.setFileInputFiles`、拖放、PWA 启动、加载解压的扩展),只有文件位于这些目录之内时才放行,否则拒绝;Playwright 以 buffer 方式上传(`setInputFiles({ name, mimeType, buffer })`)不受影响,客户端本机上的路径也不受影响(它们在容器里本来就不存在)。客户端指定的下载目录如果不在其中(Playwright 的 `connectOverCDP` 会指定客户端本机的临时目录),会被改到第一个目录,浏览器自己的下载也保存在那里。
+* **`Target.exposeDevToolsProtocol` 一律拒绝**(不论 `CDP_FILE_DIRS` / `CDP_ALLOW_BROWSER_CLOSE` 如何设置):它会让页面脚本拥有一条直通浏览器的 CDP 通道,上面这些检查都看不到。
 
 ## CDP 网关(带登录态的隔离 context)
 

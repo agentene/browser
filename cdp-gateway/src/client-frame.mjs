@@ -1,7 +1,8 @@
 // What the gateway checks in a client's CDP command before it goes upstream,
 // on a browser connection (mux.mjs) and on a page one (relay.mjs) alike:
-// Browser.close / Browser.crash (browser-exit.mjs) and local file paths
-// (file-access.mjs).
+// Browser.close / Browser.crash (browser-exit.mjs), local file paths
+// (file-access.mjs), and the commands that would open a CDP channel the
+// gateway never sees (UNCHECKED_CHANNELS).
 //
 // Most frames are not even parsed (needsGuard: none of the methods can be in
 // them). A frame that is parsed goes upstream re-serialized from the parsed
@@ -19,9 +20,19 @@ const WRAPPER = 'Target.sendMessageToTarget';
 // attached, with flatten: false, inside another); deeper ones are refused
 const MAX_DEPTH = 8;
 
+// Commands that hand a page a CDP channel of its own, which the checks here
+// would never see: Target.exposeDevToolsProtocol gives the page's script a
+// binding that speaks CDP to the browser target, and from there it can
+// attach to anything (Target.attachToBrowserTarget) and send any command —
+// the method names assembled at run time, so no frame the gateway reads
+// ever names them. Refused at any depth.
+const UNCHECKED_CHANNELS = new Set(['Target.exposeDevToolsProtocol']);
+const CHANNEL_MARKERS = ['exposeDevToolsProtocol'];
+
 // Whether a raw frame may hold a command the gateway checks.
 export function needsGuard(data) {
-  return hasEscape(data) || mayEndBrowser(data) || mayTouchFiles(data);
+  return hasEscape(data) || mayEndBrowser(data) || mayTouchFiles(data)
+    || CHANNEL_MARKERS.some((marker) => data.includes(marker));
 }
 
 // A raw frame as a command: { msg } or { answer } (chromium's own error for
@@ -46,6 +57,9 @@ export function parseCommand(data) {
 //                            the command's id and sessionId) instead; close:
 //                            end the client's connection afterwards
 export function guardCommand(msg, depth = 0) {
+  if (UNCHECKED_CHANNELS.has(msg.method)) {
+    return refuse(`${msg.method} refused by the CDP gateway: it would give the page a CDP channel the gateway cannot check`);
+  }
   const exit = browserExitAction(msg.method);
   if (exit === 'close' && depth === 0) {
     return { answer: { result: {} }, close: true, note: 'Browser.close: closing this client\'s connection, not the shared browser' };

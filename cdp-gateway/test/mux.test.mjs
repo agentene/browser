@@ -274,6 +274,19 @@ test('Browser.close ends only this client\'s connection; the crash commands are 
   assert.ok(!received.some((m) => m.method === 'Browser.close' || m.method === 'Browser.crash'), 'never reached chromium');
 });
 
+test('Target.exposeDevToolsProtocol is refused and never reaches chromium', async () => {
+  const client = new FakeClient();
+  new Mux(client, 'test', mainUrl);
+  try {
+    const answer = await client.command({ id: 45, method: 'Target.exposeDevToolsProtocol', params: { targetId: 'T', bindingName: 'cdp' } });
+    assert.equal(answer.error.code, -32000);
+    assert.match(answer.error.message, /exposeDevToolsProtocol refused/);
+    assert.ok(!received.some((m) => m.method === 'Target.exposeDevToolsProtocol'), 'never reached chromium');
+  } finally {
+    client.close();
+  }
+});
+
 test('a browser-target session keeps its command order while its stand-in opens', async () => {
   const stub = stubContexts();
   const client = new FakeClient();
