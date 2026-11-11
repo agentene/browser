@@ -25,6 +25,7 @@ class MainBrowser {
     this.state = 'stopped'; // | 'starting' | 'running'
     this.proc = null;
     this.starting = null; // the launch in progress, shared by concurrent callers
+    this.stopping = null; // the shutdown in progress, likewise
     this.lastActive = Date.now(); // last time idle.mjs saw it in use
   }
 
@@ -117,7 +118,15 @@ class MainBrowser {
   // SIGTERM exits with code 0 as well but drops what is still in memory
   // (verified: a cookie set seconds before was gone after the restart), so
   // it is only the fallback; the group is killed after a grace period.
-  async stop() {
+  // One shutdown at a time: the console's Stop, an idle tick (every 15 s
+  // while Browser.close is still underway) and a failed launch all wait for
+  // the same one instead of each sending signals and arming timers of its own.
+  stop() {
+    this.stopping ??= this.#shutdown().finally(() => { this.stopping = null; });
+    return this.stopping;
+  }
+
+  async #shutdown() {
     const proc = this.proc;
     if (!proc?.pid || proc.exitCode !== null || proc.signalCode !== null) return;
     const exited = new Promise((resolve) => proc.once('exit', resolve));
