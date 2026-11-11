@@ -346,7 +346,6 @@ $(nginx_fwd_headers)
             proxy_set_header If-None-Match "";
             proxy_set_header If-Modified-Since "";
             sub_filter_once on;
-            sub_filter_types text/html;
             sub_filter '</head>' '${scripts}</head>';
             add_header Cache-Control "no-cache" always;
             proxy_pass http://unix:${SELKIES_SOCKET};
