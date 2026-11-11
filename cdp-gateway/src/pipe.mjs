@@ -64,7 +64,7 @@ export class CdpPipe extends EventEmitter {
   #partial = []; // the chunks of a frame not complete yet
   #nextId = 1;
   #calls = new Map(); // pipe id -> the gateway's own command: { method, resolve, reject }
-  #forwarded = new Map(); // pipe id -> a connection's command: { conn, id, method, dispose }
+  #forwarded = new Map(); // pipe id -> a connection's command: { conn, id, session, dispose }
   #sessions = new Map(); // sessionId -> the PipeConnection that owns it
   #stalls = new Map(); // connection whose client cannot keep up -> its stall timer
   closed = false;
@@ -80,6 +80,11 @@ export class CdpPipe extends EventEmitter {
     output.on('error', () => { /* likewise */ });
     output.on('data', (chunk) => this.#read(chunk));
     output.on('close', () => this.close());
+  }
+
+  // The connections' commands still waiting for their replies.
+  get pending() {
+    return this.#forwarded.size;
   }
 
   // What waits to be written to chromium (the connections' bufferedAmount).
@@ -158,9 +163,10 @@ export class CdpPipe extends EventEmitter {
       this.#forwarded.set(id, {
         conn,
         id: msg.id,
-        method: msg.method,
+        session: sessionId,
         dispose: msg.method === 'Target.createBrowserContext' && params.disposeOnDetach !== false,
       });
+      conn.pending.add(id);
     }
     this.#write({ ...msg, id, sessionId }, cb);
   }
@@ -168,12 +174,30 @@ export class CdpPipe extends EventEmitter {
   // The connection closed on its client's side: its session is detached
   // (its child sessions go with it) and its contexts disposed.
   release(conn) {
-    this.unstall(conn);
-    for (const session of conn.sessions) this.#sessions.delete(session);
+    this.drop(conn);
     if (this.closed) return;
     this.#write({ id: this.#nextId++, method: 'Target.detachFromTarget', params: { sessionId: conn.session } });
     for (const browserContextId of conn.contexts) {
       this.#write({ id: this.#nextId++, method: 'Target.disposeBrowserContext', params: { browserContextId } });
+    }
+  }
+
+  // The connection closed, on either side: nothing waits for it any more.
+  // Its unanswered commands are forgotten — chromium answers none of a
+  // detached session's — but a context it asked for is still disposed when
+  // the reply comes after all (#reply).
+  drop(conn) {
+    this.unstall(conn);
+    for (const session of conn.sessions) this.#sessions.delete(session);
+    this.#forget(conn, () => true);
+  }
+
+  #forget(conn, which) {
+    for (const id of conn.pending) {
+      const sent = this.#forwarded.get(id);
+      if (sent && !which(sent)) continue;
+      conn.pending.delete(id);
+      if (!sent?.dispose) this.#forwarded.delete(id);
     }
   }
 
@@ -237,10 +261,8 @@ export class CdpPipe extends EventEmitter {
       const sent = this.#forwarded.get(id);
       if (!sent) return; // the gateway's own fire-and-forget, or a connection gone since
       this.#forwarded.delete(id);
-      if (sent.dispose) {
-        const contextId = parse(buf)?.result?.browserContextId;
-        if (typeof contextId === 'string') sent.conn.contexts.add(contextId);
-      }
+      sent.conn.pending.delete(id);
+      if (sent.dispose) this.#created(sent.conn, parse(buf)?.result?.browserContextId);
       sent.conn.deliver(buf, { headLength: reply[0].length, id: sent.id, session });
       return;
     }
@@ -260,10 +282,19 @@ export class CdpPipe extends EventEmitter {
         } else {
           this.#sessions.delete(child);
           conn.sessions.delete(child);
+          this.#forget(conn, (sent) => sent.session === child);
         }
       }
     }
     conn.deliver(buf, { session });
+  }
+
+  // A context a connection created to be disposed with it: kept until then,
+  // or disposed at once when the connection closed before the reply came.
+  #created(conn, browserContextId) {
+    if (typeof browserContextId !== 'string') return;
+    if (conn.readyState === OPEN) conn.contexts.add(browserContextId);
+    else this.#write({ id: this.#nextId++, method: 'Target.disposeBrowserContext', params: { browserContextId } });
   }
 
   // Root session events: a connection's own session detached (its target
@@ -273,10 +304,7 @@ export class CdpPipe extends EventEmitter {
     if (method !== 'Target.detachedFromTarget') return;
     const sessionId = parse(buf)?.params?.sessionId;
     const conn = this.#sessions.get(sessionId);
-    if (conn?.session === sessionId) {
-      for (const session of conn.sessions) this.#sessions.delete(session);
-      conn.gone();
-    }
+    if (conn?.session === sessionId) conn.gone();
     this.emit('detached', sessionId);
   }
 }
@@ -291,6 +319,7 @@ export class PipeConnection extends EventEmitter {
     this.session = session; // its own session: implied in both directions
     this.sessions = new Set([session]); // every session it owns
     this.contexts = new Set(); // contexts to dispose when it closes
+    this.pending = new Set(); // pipe ids of its commands not answered yet
   }
 
   get bufferedAmount() {
@@ -361,7 +390,7 @@ export class PipeConnection extends EventEmitter {
   gone() {
     if (this.readyState === CLOSED) return;
     this.readyState = CLOSED;
-    this.pipe.unstall(this);
+    this.pipe.drop(this);
     this.emit('close');
   }
 }

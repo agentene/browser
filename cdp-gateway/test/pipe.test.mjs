@@ -12,10 +12,15 @@ import { CLOSED, CdpPipe, OPEN } from '../src/pipe.mjs';
 import { listEntry, pickCurrent, versionEntry } from '../src/targets.mjs';
 
 // The fake chromium: what it got (parsed), and an answer per command.
-function fakeBrowser() {
+//   answers: method -> params => result, in place of the default answer
+//   hold:    msg => true for a command left unanswered (a tab with a dialog
+//            open, an await that never ends): it goes to held, answer it
+//            later with answer(msg) or never
+function fakeBrowser({ answers = {}, hold = () => false } = {}) {
   const toChrome = new PassThrough();
   const fromChrome = new PassThrough();
   const got = [];
+  const held = [];
   let nextSession = 1;
   let nextContext = 1;
   const emit = (msg) => fromChrome.write(`${JSON.stringify(msg)}\0`);
@@ -27,9 +32,17 @@ function fakeBrowser() {
       const msg = JSON.parse(buf.slice(0, i));
       buf = buf.slice(i + 1);
       got.push(msg);
+      if (hold(msg)) held.push(msg);
+      else answer(msg);
+    }
+  });
+  function answer(msg) {
+    {
       const { id, method, params = {}, sessionId } = msg;
       const reply = (result) => emit({ id, result, ...(sessionId ? { sessionId } : {}) });
-      if (method === 'Target.attachToBrowserTarget' || method === 'Target.attachToTarget') {
+      if (answers[method]) {
+        reply(answers[method](params));
+      } else if (method === 'Target.attachToBrowserTarget' || method === 'Target.attachToTarget') {
         const child = `S${nextSession++}`;
         emit({ method: 'Target.attachedToTarget', params: { sessionId: child, targetInfo: { targetId: params.targetId ?? 'BROWSER', type: params.targetId ? 'page' : 'browser' } }, ...(sessionId ? { sessionId } : {}) });
         reply({ sessionId: child });
@@ -44,9 +57,9 @@ function fakeBrowser() {
         reply({ echo: method, params });
       }
     }
-  });
+  }
   const pipe = new CdpPipe(toChrome, fromChrome, 'fake');
-  return { pipe, got, emit, fromChrome };
+  return { pipe, got, held, answer, emit, fromChrome };
 }
 
 // What a connection hands its client, parsed.
@@ -175,6 +188,73 @@ test('the browser going away closes every connection', async () => {
   pipe.close();
   await Promise.all(closed);
   assert.ok(conns.every((c) => c.readyState === CLOSED));
+});
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test('a closed connection\'s unanswered commands are forgotten, on either side; others\' still answered', async () => {
+  const { pipe, held, answer, emit } = fakeBrowser({ hold: (m) => m.method === 'Hang.me' });
+  const other = await pipe.connect();
+  const otherNext = inbox(other);
+  other.send({ id: 7, method: 'Hang.me' });
+  await tick();
+  assert.equal(pipe.pending, 1);
+  // the client leaves while an await of its own never ends, again and again
+  for (let i = 0; i < 3; i++) {
+    const conn = await pipe.connect({ targetId: 'P1' });
+    conn.send({ id: 1, method: 'Hang.me' });
+    await tick();
+    assert.equal(pipe.pending, 2);
+    conn.close();
+    assert.equal(pipe.pending, 1);
+  }
+  // its target closes under it (the browser's side)
+  const page = await pipe.connect({ targetId: 'P2' });
+  page.send({ id: 1, method: 'Hang.me' });
+  await tick();
+  assert.equal(pipe.pending, 2);
+  emit({ method: 'Target.detachedFromTarget', params: { sessionId: page.session, targetId: 'P2' } });
+  await tick();
+  assert.equal(page.readyState, CLOSED);
+  assert.equal(pipe.pending, 1);
+  // a child session of an open connection detaches: only its commands go
+  const pageNext = inbox(await pipe.connect({ targetId: 'P3' }));
+  const browser = await pipe.connect();
+  const next = inbox(browser);
+  browser.send({ id: 1, method: 'Target.attachToTarget', params: { targetId: 'P4', flatten: true } });
+  const { result: { sessionId: child } } = await next((m) => m.id === 1);
+  browser.send({ id: 2, method: 'Hang.me', sessionId: child });
+  browser.send({ id: 3, method: 'Hang.me' });
+  await tick();
+  assert.equal(pipe.pending, 3);
+  browser.send({ id: 4, method: 'Target.detachFromTarget', params: { sessionId: child } });
+  await next((m) => m.id === 4);
+  assert.equal(pipe.pending, 2);
+  // the late replies: the other connection's arrives under its own id,
+  // the forgotten ones reach nobody
+  for (const msg of held) answer(msg);
+  assert.deepEqual(await otherNext((m) => m.id === 7), { id: 7, result: { echo: 'Hang.me', params: {} } });
+  assert.deepEqual(await next((m) => m.id === 3), { id: 3, result: { echo: 'Hang.me', params: {} } });
+  await tick();
+  assert.equal(pipe.pending, 0);
+  assert.equal(await Promise.race([pageNext(() => true), tick().then(() => 'nothing')]), 'nothing');
+  pipe.close();
+});
+
+test('a context created for a connection that closed before the reply is disposed when it comes', async () => {
+  const { pipe, got, held, answer } = fakeBrowser({ hold: (m) => m.method === 'Target.createBrowserContext' });
+  const conn = await pipe.connect();
+  conn.send({ id: 1, method: 'Target.createBrowserContext', params: {} });
+  conn.send({ id: 2, method: 'Target.createBrowserContext', params: { disposeOnDetach: false } });
+  await tick();
+  conn.close();
+  for (const msg of held) answer(msg);
+  await tick();
+  assert.equal(pipe.pending, 0);
+  assert.deepEqual(got.filter((m) => m.method === 'Target.disposeBrowserContext').map((m) => m.params), [
+    { browserContextId: 'CTX1' },
+  ]);
+  pipe.close();
 });
 
 test('a connection whose client cannot keep up stops the pipe being read, and lets go', async () => {
