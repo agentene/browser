@@ -50,8 +50,8 @@ the Wayland (default) and X11 desktops (see `.github/workflows/ci.yaml`).
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |
 | `.env.example` | documented runtime configuration template (commonly changed knobs only) |
 | `update-chrome-node.mjs` | version-sync helper (Chrome for Testing ↔ Node) |
-| `VERSION` | the project version `X.Y.Z` (semver, bumped by hand); code releases are tagged `v<VERSION>` (e.g. `v0.1.0`), daily Chrome bumps `v<VERSION>-<chrome-version>` (e.g. `v0.1.0-150.0.7871.100`) |
-| `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag (`v<VERSION>` / `v<VERSION>-<chrome-version>`) → publish |
+| `VERSION` | the project version `X.Y.Z` (semver, bumped by hand); code releases are git-tagged `v<VERSION>` (e.g. `v0.1.0`), daily Chrome bumps publish image tag `<VERSION>-<chrome-version>` (e.g. `0.1.0-150.0.7871.100`) without a git tag |
+| `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag (code: git tag `v<VERSION>`; Chrome bump: tagless) → publish |
 | `.github/workflows/chrome-update.yaml` | daily Chrome for Testing (Stable) watch → bump PR → auto-merge → release → `chore/chrome-update` branch cleanup (in `ci.yaml`) |
 | `examples/` | CDP client examples |
 
