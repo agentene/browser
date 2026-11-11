@@ -428,9 +428,6 @@ export class Mux {
       this.toContext(msg);
       return;
     }
-    if (msg.params?.proxyServer) {
-      log(`mux ${this.clientAddr}: context proxy ${msg.params.proxyServer} is not applied to contexts (they use the main browser's network settings)`);
-    }
     this.attaching = this.attachContext(msg)
       .catch((err) => log(`mux ${this.clientAddr}: context attach: ${err.message}`))
       .finally(() => { this.attaching = null; });
@@ -439,7 +436,9 @@ export class Mux {
   async attachContext(msg) {
     let context;
     try {
-      context = await contexts.create(this.clientAddr);
+      // its proxy becomes the context chromium's own (contexts.mjs)
+      const { proxyServer, proxyBypassList } = paramsOf(msg);
+      context = await contexts.create(this.clientAddr, { proxyServer, proxyBypassList });
       if (this.closed) {
         await context.destroy('client went away during startup');
         return;

@@ -15,6 +15,7 @@ const fakeChrome = path.join(tmp, 'chrome.sh');
 fs.writeFileSync(fakeChrome, `#!/bin/sh
 for a in "$@"; do case "$a" in --remote-debugging-port=*) p="\${a#*=}" ;; esac; done
 echo "DevTools listening on ws://127.0.0.1:$p/devtools/browser/fake" >&2
+printf '%s\n' "$@" > "${tmp}/args-$p"
 if [ -f "${tmp}/exit-after" ]; then sleep "$(cat "${tmp}/exit-after")"; exit 0; fi
 exec sleep 60
 `, { mode: 0o755 });
@@ -90,4 +91,30 @@ test('a context log that cannot be opened fails that context, not the gateway', 
   const ok = await contexts.create('t'); // the failed one holds no slot
   assert.equal(contexts.size, 1);
   await ok.destroy('test');
+});
+
+test('proxyFlags: the client\'s context proxy as chromium flags, junk refused', async () => {
+  const { proxyFlags } = await import('../src/contexts.mjs');
+  assert.deepEqual(proxyFlags(), []);
+  assert.deepEqual(proxyFlags({ proxyServer: '' }), []);
+  assert.deepEqual(proxyFlags({ proxyServer: 'http://proxy:3128' }), ['--proxy-server=http://proxy:3128']);
+  assert.deepEqual(proxyFlags({ proxyServer: 'socks5://p:1080', proxyBypassList: '<-loopback>, *.internal' }),
+    ['--proxy-server=socks5://p:1080', '--proxy-bypass-list=<-loopback>, *.internal']);
+  assert.throws(() => proxyFlags({ proxyServer: 'http://p:1 --no-sandbox' }), /not a valid proxy server/);
+  assert.throws(() => proxyFlags({ proxyServer: 42 }), /not a valid proxy server/);
+  assert.throws(() => proxyFlags({ proxyServer: 'p:1', proxyBypassList: 'a\nb' }), /not a valid bypass list/);
+  assert.throws(() => proxyFlags({ proxyBypassList: 'a' }), /needs a proxyServer/);
+});
+
+test('a context gets its client\'s proxy on its command line; a bad one starts nothing', async () => {
+  const c = await contexts.create('t', { proxyServer: 'http://proxy.test:3128', proxyBypassList: 'localhost' });
+  const args = fs.readFileSync(path.join(tmp, `args-${c.port}`), 'utf8').split('\n');
+  assert.ok(args.includes('--proxy-server=http://proxy.test:3128'), args.join(' '));
+  assert.ok(args.includes('--proxy-bypass-list=localhost'));
+  await c.destroy('test');
+  const plain = await contexts.create('t');
+  assert.ok(!fs.readFileSync(path.join(tmp, `args-${plain.port}`), 'utf8').includes('--proxy-'), 'no proxy, no flag');
+  await plain.destroy('test');
+  await assert.rejects(contexts.create('t', { proxyServer: 'a b' }), /not a valid proxy server/);
+  assert.equal(contexts.busy, false);
 });

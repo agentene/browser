@@ -171,9 +171,10 @@ after(() => contextServer.close());
 function stubContexts(onCreate = () => {}) {
   const made = [];
   const realCreate = contexts.create;
-  contexts.create = async () => {
+  contexts.create = async (clientAddr, options) => {
     const context = {
       name: `context-${made.length + 1}`,
+      options,
       destroyed: false,
       mux: null,
       browserWsUrl: () => contextUrl,
@@ -208,6 +209,20 @@ test('concurrent createBrowserContext: one context chromium, the second inside i
     stub.restore();
   }
   assert.equal(stub.made[0].destroyed, true, 'destroyed with its client');
+});
+
+test('the proxy of a createBrowserContext goes to the context chromium it starts', async () => {
+  const stub = stubContexts();
+  const client = new FakeClient();
+  new Mux(client, 'test', mainUrl);
+  try {
+    const answer = await client.command({ id: 25, method: 'Target.createBrowserContext', params: { proxyServer: 'http://proxy:3128', proxyBypassList: '<-loopback>' } });
+    assert.match(answer.result.browserContextId, /^CONTEXT1/);
+    assert.deepEqual(stub.made[0].options, { proxyServer: 'http://proxy:3128', proxyBypassList: '<-loopback>' });
+  } finally {
+    client.close();
+    stub.restore();
+  }
 });
 
 test('a client leaving while its context starts leaves no context behind', async () => {

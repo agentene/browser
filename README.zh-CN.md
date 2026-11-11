@@ -211,7 +211,7 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 * CDP 协议里不带 session 名,所以一个隔离 context 绑定一个连接。用同一个名字重新打开 playwright-cli session,得到的是新的隔离 context,而不是原来那个。
 * 只有一个连接上的*第一个*隔离 context 会获得独立的 profile 克隆浏览器。同一连接上再调用 `browser.newContext()`(包括同时发起的,例如放在 `Promise.all` 里),得到的是该浏览器内部的普通无痕 context,不带登录态;需要另一个带登录态的 context 时请新开一个连接。
 * profile 是在主浏览器运行期间复制的。cookie 和已打开站点的 localStorage 会实时补同步(见上文),但其他数据库(IndexedDB、历史记录等)按复制那一刻磁盘上的状态复制,因此主浏览器在复制期间写入的内容可能在克隆里缺失,极少数情况下只写了一半。
-* 需要全新 context 才能生效的 context 选项(例如按 context 设置的 `proxy`)对隔离 context 不起作用,它沿用主浏览器的设置。
+* 按 context 设置的 `proxy`(`browser.newContext({ proxy })`,即 CDP 的 `proxyServer` / `proxyBypassList`)会成为该隔离 context 自己的代理:它的浏览器以 `--proxy-server` / `--proxy-bypass-list` 启动(排在 `CHROMIUM_EXTRA_ARGS` 之后,因此优先于那里设置的代理),代理认证照常可用。格式不合法时,创建 context 会失败。其他需要全新 context 才生效的选项不起作用:隔离 context 沿用主浏览器的设置。
 
 ## 观看桌面
 

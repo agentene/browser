@@ -46,12 +46,35 @@ function devtoolsAnnounced(proc, port, logPath) {
   });
 }
 
+// The chromium flags for the proxy a client's Target.createBrowserContext
+// names (proxyServer, proxyBypassList — Playwright's newContext({ proxy })).
+// The context is a chromium of its own, so they become its command line,
+// after the main browser's flags (CHROMIUM_EXTRA_ARGS included): the
+// client asked for this context in particular. Each is one argv element,
+// so nothing in them can become another flag; control characters and
+// (in the server) whitespace are refused all the same.
+export function proxyFlags({ proxyServer, proxyBypassList } = {}) {
+  const flags = [];
+  if (proxyServer === undefined || proxyServer === '') {
+    if (proxyBypassList !== undefined && proxyBypassList !== '') throw new Error('proxyBypassList needs a proxyServer');
+    return flags;
+  }
+  if (typeof proxyServer !== 'string' || /[\x00-\x20\x7f]/.test(proxyServer)) throw new Error('proxyServer is not a valid proxy server');
+  flags.push(`--proxy-server=${proxyServer}`);
+  if (proxyBypassList !== undefined && proxyBypassList !== '') {
+    if (typeof proxyBypassList !== 'string' || /[\x00-\x1f\x7f]/.test(proxyBypassList)) throw new Error('proxyBypassList is not a valid bypass list');
+    flags.push(`--proxy-bypass-list=${proxyBypassList}`);
+  }
+  return flags;
+}
+
 class Context {
-  constructor(registry, index, client) {
+  constructor(registry, index, client, proxy = []) {
     this.registry = registry;
     this.name = `context-${index}`;
     this.color = CONTEXT_COLORS[(index - 1) % CONTEXT_COLORS.length];
     this.client = client; // remote address of the CDP client that owns it
+    this.proxy = proxy; // proxyFlags() of the client's createBrowserContext
     this.dir = path.join(CONTEXTS_DIR, this.name);
     this.profile = path.join(this.dir, 'profile');
     this.createdAt = new Date().toISOString();
@@ -81,6 +104,7 @@ class Context {
       `--user-data-dir=${this.profile}`,
       `--remote-debugging-port=${port}`,
       '--no-startup-window',
+      ...this.proxy,
     ]);
     // the Wayland app_id focus() raises this context's windows by
     if (WAYLAND && !CONTEXTS_HEADLESS) flags.push(`--class=${appId(this.name)}`);
@@ -189,12 +213,14 @@ class ContextRegistry {
     return [...this.#contexts.values()];
   }
 
-  async create(clientAddr) {
+  // options: the client's Target.createBrowserContext params (its proxy)
+  async create(clientAddr, options = {}) {
+    const proxy = proxyFlags(options); // a bad one fails before anything starts
     if (this.#contexts.size + this.#creating >= MAX_CONTEXTS) {
       throw new Error(`CDP context limit reached (${MAX_CONTEXTS}); close another isolated session or raise CDP_CONTEXTS_MAX`);
     }
     this.#creating++;
-    const context = new Context(this, ++this.#counter, clientAddr);
+    const context = new Context(this, ++this.#counter, clientAddr, proxy);
     try {
       await context.start();
       // its chromium may exit while the storage sync runs: destroy() has run
