@@ -36,6 +36,8 @@ before(async () => {
       } else if (msg.method === 'Target.attachToTarget') {
         ws.send(JSON.stringify({ method: 'Target.attachedToTarget', params: { sessionId: 'S1', targetInfo: { targetId: msg.params.targetId, type: 'page' } } }));
         ws.send(JSON.stringify({ id: msg.id, result: { sessionId: 'S1' } }));
+      } else if (msg.method === 'Target.attachToBrowserTarget') {
+        ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result: { sessionId: 'MAINB' } }));
       } else if (msg.method === 'Target.getTargets') {
         ws.send(JSON.stringify({ id: msg.id, result: { targetInfos: MAIN_TARGET_INFOS } }));
       } else if (msg.method === 'Target.getBrowserContexts') {
@@ -504,6 +506,28 @@ test('B2: getTargets and getBrowserContexts list the isolated context too', asyn
     const contexts = await client.command({ id: 222, method: 'Target.getBrowserContexts', params: {} });
     assert.deepEqual(contexts.result.browserContextIds, ['MAINCTX', alias, 'INNER1']);
     assert.equal(contexts.result.defaultBrowserContextId, 'MAINDEFAULT');
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('B2: the lists are merged on a browser-target session too (newCDPSession on the browser)', async () => {
+  const { stub, client, mux, alias } = await contextConnection();
+  try {
+    const { result: { sessionId } } = await client.command({ id: 225, method: 'Target.attachToBrowserTarget', params: {} });
+    assert.equal(sessionId, 'MAINB');
+    const listed = await client.command({ id: 226, sessionId, method: 'Target.getTargets', params: {} });
+    assert.equal(listed.sessionId, sessionId, 'answered on the session it was asked on');
+    assert.deepEqual(listed.result.targetInfos.map((t) => [t.targetId, t.browserContextId]), [['MT1', 'MAINCTX'], ['CT1', alias]]);
+    const contexts = await client.command({ id: 227, sessionId, method: 'Target.getBrowserContexts', params: {} });
+    assert.deepEqual(contexts.result.browserContextIds, ['MAINCTX', alias]);
+    // once detached it is a session like any other: no merging, chromium answers
+    await client.command({ id: 228, method: 'Target.detachFromTarget', params: { sessionId } });
+    assert.equal(mux.clientBrowserSessions.size, 0);
+    // a page session's lists stay chromium's own
+    const page = await client.command({ id: 229, sessionId: 'S1', method: 'Target.getTargets', params: {} });
+    assert.deepEqual(page.result.targetInfos, MAIN_TARGET_INFOS);
   } finally {
     client.close();
     stub.restore();

@@ -43,6 +43,11 @@ const CONTEXT_MARKERS = ['"Target.', '"targetId"', '"browserContextId"', '"targe
 // knows only its own targets and contexts.
 const MERGED = new Set(['Target.getTargets', 'Target.getBrowserContexts']);
 
+// Main chromium replies the gateway reads (needsParse), kept in pending until
+// they come: a disposal it may answer itself, and the session id of a
+// client's browser-target session (clientBrowserSessions).
+const READ_MAIN_REPLIES = new Set(['Target.disposeBrowserContext', 'Target.attachToBrowserTarget']);
+
 // A client command's params as an object: chromium refuses any other kind
 // itself, but the gateway reads them first (and a null would throw).
 function paramsOf(msg) {
@@ -74,7 +79,7 @@ export class Mux {
     this.innerContexts = new Set(); // real extra contexts created inside the context's chromium
     // In-flight client commands the gateway may have to answer itself, kept
     // until their reply: anything sent to the context chromium (which can
-    // die before answering) and context disposals sent to the main chromium.
+    // die before answering) and the main chromium commands of READ_MAIN_REPLIES.
     this.pending = new Map(); // upstream command id -> { origin, msg: the client's command }
     this.sessionTarget = new Map(); // context chromium's sessionId -> targetId (any other session is main's)
     this.sessionParent = new Map(); // context sessionId -> the client session it was attached on
@@ -85,6 +90,9 @@ export class Mux {
     // the gateway opens there instead.
     this.browserSessions = new Map(); // client sessionId -> { id: context browser sessionId ('' while opening), waiting: [msg] }
     this.browserSessionOf = new Map(); // context browser sessionId -> client sessionId
+    // the client's browser-target sessions on the main chromium, which get the
+    // merged lists (mergedTargets) like the root connection does
+    this.clientBrowserSessions = new Set();
     this.autoAttach = null; // last Target.setAutoAttach params from the client
     this.discover = null; // last Target.setDiscoverTargets params
     this.nextInternalId = INTERNAL_ID_BASE;
@@ -216,8 +224,9 @@ export class Mux {
     // the gateway holds for it in the context chromium goes down too, right
     // now — the command itself still travels to the main chromium below,
     // which owns the session
-    if (method === 'Target.detachFromTarget' && this.browserSessions.has(params.sessionId)) {
-      this.retireBrowserSession(params.sessionId);
+    if (method === 'Target.detachFromTarget') {
+      this.clientBrowserSessions.delete(params.sessionId);
+      if (this.browserSessions.has(params.sessionId)) this.retireBrowserSession(params.sessionId);
     }
 
     if (sessionId) {
@@ -253,6 +262,10 @@ export class Mux {
         this.discover = params;
         if (this.context) this.internalSend('context', method, params).catch(() => {});
         break;
+      case 'Target.attachToBrowserTarget':
+        // its reply names the session (fromUpstream); it goes to main below
+        if (msg.id !== undefined) this.pending.set(msg.id, { origin: 'main', msg });
+        break;
       default:
         break;
     }
@@ -285,7 +298,11 @@ export class Mux {
     // everything on it waits, so its commands keep their order
     const browserSession = this.browserSessions.get(sessionId);
     if (browserSession && !browserSession.id) browserSession.waiting.push(msg);
-    else if (this.sessionTarget.has(sessionId)) {
+    else if (this.context && msg.id !== undefined && MERGED.has(msg.method) && this.clientBrowserSessions.has(sessionId)) {
+      // the lists a browser-target session asks for are the browser's: both
+      // chromiums', as on the root connection
+      this.mergedTargets(msg, params);
+    } else if (this.sessionTarget.has(sessionId)) {
       this.toContext(params.browserContextId === this.alias ? strippedAlias(msg) : msg);
     } else if (this.context && params.browserContextId === this.alias) {
       this.viaContextBrowserSession(msg, true);
@@ -508,6 +525,9 @@ export class Mux {
         this.answerGone(pending.msg);
         return;
       }
+      if (pending.msg.method === 'Target.attachToBrowserTarget' && typeof msg.result?.sessionId === 'string') {
+        this.clientBrowserSessions.add(msg.result.sessionId);
+      }
     }
     if (origin === 'context') {
       // the gateway's own browser-target sessions stay invisible to the client
@@ -540,7 +560,7 @@ export class Mux {
       if (this.internal.get(id)?.target === origin) return true;
       const pending = this.pending.get(id);
       if (pending?.origin === origin) {
-        if (pending.msg.id !== id || pending.msg.method === 'Target.disposeBrowserContext') return true;
+        if (pending.msg.id !== id || READ_MAIN_REPLIES.has(pending.msg.method)) return true;
         this.pending.delete(id);
       }
     }
