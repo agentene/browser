@@ -18,11 +18,9 @@
 #                          HTTPS on and mounts ./tls; its port mapping is dropped)
 #       CDP_LISTEN_PORT <- CDP_PORT         <- 9222  (CDP endpoint)
 #     Setting NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT / CDP_LISTEN_PORT in .env wins.
-#   * the loopback-only internals bind on the host's loopback too:
-#     SELKIES_INTERNAL_PORT (8081), CDP_INTERNAL_PORT (9221) and
-#     CDP_GATEWAY_INTERNAL_PORT (9220). Move them in
-#     .env if your own apps use those ports — a bind failure stops the
-#     container.
+#   * only those listen ports take host ports: the services behind nginx
+#     are on unix sockets inside the container and the browsers have no
+#     DevTools port, so nothing of it sits on the host's loopback.
 #   * nginx listens on ALL host interfaces unless NGINX_LISTEN_ADDR is set;
 #     the CDP endpoint has no authentication, so on a machine reachable from
 #     an untrusted network set NGINX_LISTEN_ADDR=127.0.0.1 in .env.

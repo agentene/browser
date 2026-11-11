@@ -20,14 +20,14 @@ runtime smoke tests.
 | `Dockerfile` | Single-stage ubuntu:26.04 image: Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
 | `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages labwc (or Xvfb → picom) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
 | `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `settings` (the CDP console's persisted settings, `/browser/settings/settings.json` — no env knobs; applied at start), `auth` (the built-in login + CDP API key service, `ENABLE_AUTH`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `audio`, `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
-| `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, the new-windows-to-the-front switch, chromium prefs seeding, the orderly Browser.close the supervisor's stop hook runs) — formerly heredocs in the entrypoint |
+| `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, the new-windows-to-the-front switch, chromium prefs seeding) — formerly heredocs in the entrypoint |
 | `.shellcheckrc` | Lets shellcheck follow the module `source` statements |
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | The commonly changed runtime knobs, documented (the full reference is the READMEs' Configuration section + `entrypoint/lib/config.sh`) |
-| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies and CDP are both on), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X window in front, for the console's front marker) |
-| `auth-server/` | Built-in login + CDP API key (`ENABLE_AUTH=true`, default): `server.mjs` (dependency-free Node service on loopback that nginx asks about every web UI / console request — `check/web`, a session cookie — and every CDP request — `check/cdp`, the API key once one is set — via `auth_request`; also serves the setup/login form nginx shows in place on 401, the account page and the auth API under `<subfolder>/__auth/` and `/__auth/`), `src/` (`store.mjs`: `/browser/settings/auth.json`, scrypt/SHA-256 hashes, sessions; `secrets.mjs`; `limiter.mjs`), `page.html` (setup/login/account page), `ui.js` (the console's *Access* rows + dialogs, loaded by `dashboard.html` and `panel.js`), `keepalive.js` (renews the session cookie via `api/renew` while a page is open, idle tabs included; nginx injects it into the Selkies page, `dashboard.html` loads it), `test/` (`node --test`, not shipped) |
-| `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Release tags are `v<VERSION>` (code) and `v<VERSION>-<chrome-version>` (Chrome bump) — see [Releases](#releases) |
+| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies and CDP are both on), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X browser windows, topmost first, with their titles — the console's front marker and current tab) |
+| `auth-server/` | Built-in login + CDP API key (`ENABLE_AUTH=true`, default): `server.mjs` (dependency-free Node service on a unix socket that nginx asks about every web UI / console request — `check/web`, a session cookie — and every CDP request — `check/cdp`, the API key once one is set — via `auth_request`; also serves the setup/login form nginx shows in place on 401, the account page and the auth API under `<subfolder>/__auth/` and `/__auth/`), `src/` (`store.mjs`: `/browser/settings/auth.json`, scrypt/SHA-256 hashes, sessions; `secrets.mjs`; `limiter.mjs`), `page.html` (setup/login/account page), `ui.js` (the console's *Access* rows + dialogs, loaded by `dashboard.html` and `panel.js`), `keepalive.js` (renews the session cookie via `api/renew` while a page is open, idle tabs included; nginx injects it into the Selkies page, `dashboard.html` loads it), `test/` (`node --test`, not shipped) |
+| `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Git release tags are `v<VERSION>` (code releases; a Chrome bump publishes only the `<VERSION>-<chrome-version>` image tag) — see [Releases](#releases) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland, X11) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
 | `.github/workflows/chrome-update.yaml` | Daily cron: re-pin to the latest Stable Chrome for Testing → bump PR → auto-merge → release (ci.yaml's `cleanup-update-branch` then deletes `chore/chrome-update`) |
@@ -52,7 +52,7 @@ for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do 
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
 npm test --prefix auth-server                                  # auth server unit tests (no deps)
-node --check entrypoint/helpers/chromium-close.mjs
+node --check entrypoint/helpers/password-hash.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .
 ```
@@ -152,16 +152,23 @@ node update-chrome-node.mjs --node 22        # force the Node major
   under `/tmp` (logs, `/tmp/labwc-display`, …) are part of the contract
   with CI and users — keep them stable.
 * **Host networking must keep working.** With `compose.host.yaml` the
-  container shares the host's network namespace: every port (including the
-  loopback internals) is a host port, there is no docker DNS, and X abstract
-  sockets are shared — hence Xvfb's `-nolisten local` and the free-display
-  probe. Never hardcode a port, `127.0.0.11`, or `:0`.
-* **Loopback-only internals; nginx is the only public front door.** Selkies
-  (`127.0.0.1:${SELKIES_INTERNAL_PORT}`) and Chromium DevTools
-  (`127.0.0.1:${CDP_INTERNAL_PORT}`) bind loopback only (`SELKIES_ADDR` in
-  `config.sh` is an undocumented escape hatch — keep its default). Every public
-  listener is an nginx proxy and must stay WebSocket-capable (CDP and
-  Selkies signaling both need the Upgrade/Connection headers).
+  container shares the host's network namespace: every port is a host
+  port, there is no docker DNS, and X abstract sockets are shared — hence
+  Xvfb's `-nolisten local` and the free-display probe. Never hardcode a
+  port, `127.0.0.11`, or `:0` (and never an abstract unix socket).
+* **No internal TCP ports; nginx is the only public front door.** A
+  loopback port is reachable from inside the browser: a page opened at its
+  address talks to what listens there past nginx's login and the gateway's
+  checks. So nothing behind nginx listens on one: Selkies, the CDP gateway
+  and the auth service sit on unix sockets in `SOCKET_DIR` (`/tmp/agentene`,
+  `config.sh`; filesystem sockets, never abstract ones — host networking
+  shares those), and the browsers speak CDP on `--remote-debugging-pipe`
+  to the gateway only — no DevTools port, ever (a new internal service
+  gets a socket there too). The same goes for any other CDP channel the
+  gateway cannot see (`Target.exposeDevToolsProtocol` is refused, DevTools
+  windows are `CHROMIUM_ALLOW_DEVTOOLS`). Every public listener is an
+  nginx proxy and must stay WebSocket-capable (CDP and Selkies signaling
+  both need the Upgrade/Connection headers).
 * **Entrypoint shell style:** `set -uo pipefail` deliberately WITHOUT `-e`
   (it covers the sourced modules too);
   fatal conditions use `die`, warnings use `log`. Preserve that pattern —
@@ -177,22 +184,40 @@ node update-chrome-node.mjs --node 22        # force the Node major
   locations are exempt (`auth_request off`). The CDP API stays open while no
   API key is set, so CDP clients never need changes by default; the session
   cookie never opens the CDP API. Its state is console-managed in
-  `/browser/settings/auth.json` — no env knobs besides the on/off switch.
-  Internal tools must talk to loopback internals, never to the public CDP
-  port (it may need a key).
+  `/browser/settings/auth.json` — no env knobs besides the on/off switch
+  and `AUTH_SETUP_CODE` (the setup form's code, random and logged when
+  empty). With the login skipped, changing the key or the login needs the
+  current key. The gateway and the auth service refuse request targets that
+  nginx and the WHATWG URL parser would read differently (backslashes,
+  whitespace, a leading `//` — a host to the parser, merged slashes to
+  nginx): nginx picks the auth check by its reading, the services route
+  by theirs.
+  Internal tools talk to the services on their sockets (`curl
+  --unix-socket`), never to the public CDP port (it may need a key).
 * **The CDP gateway always owns the CDP port** (not a knob — there is
-  no direct nginx → chromium path). nginx proxies the whole CDP listener
-  to the gateway without `sub_filter`; the gateway itself rewrites the
-  Host header to the loopback upstream (DevTools' DNS-rebinding
-  protection) and the ws:// URLs in JSON bodies back to the dialed host —
-  changing either breaks `connectOverCDP` from outside. Clients must
-  never need changes: default-context traffic passes through verbatim, and
+  no nginx → chromium path, the browsers have no port). nginx proxies the
+  whole CDP listener to the gateway without `sub_filter`, passing the Host
+  the client dialed: the gateway builds `/json/*` from CDP over the pipes
+  (`targets.mjs`; `/json/protocol` is captured from the binary at image
+  build) with ws:// URLs on that host — changing it breaks
+  `connectOverCDP` from outside. Each client connection is a session on
+  the browser's pipe that behaves like a WebSocket of its own (`pipe.mjs`:
+  ids mapped, its own session implied, other connections' sessions out of
+  reach, its `disposeOnDetach` contexts disposed with it); a pipe-driven
+  chromium reports `navigator.webdriver=true` unless
+  `--disable-blink-features=AutomationControlled` (`launch.mjs` merges it
+  into the flags). Clients must never need changes: default-context
+  traffic passes through as it came (every client frame is checked and
+  re-serialized, replies stay unparsed), and
   only an isolated `Target.createBrowserContext` gets its own browser (a
   separate chromium on a profile clone, killed with its context). Context
   browsers get the main browser's flags via `chromium_mode_flags` +
   `CHROMIUM_COMMON_FLAGS`/`CHROMIUM_TAIL_FLAGS` — new chromium flags belong
   in one of those so context browsers inherit them. The gateway is in
-  `pids`; context chromiums are its children and are cleaned up by it.
+  `pids`; the main chromium (started at once with `CHROMIUM_AUTOSTART=true`,
+  on demand with `false`) and the context chromiums are its children and are
+  cleaned up by it — the browser exiting never stops the container, the
+  next client starts it again.
 * **Two display backends (`DISPLAY_BACKEND=wayland|x11`, default wayland).**
   `wayland` replaces Xvfb/picom with labwc on the wlroots *headless*
   backend, which Selkies captures as an external compositor
@@ -232,36 +257,42 @@ Version scheme — two parts, joined by `-` on Chrome releases:
   image-affecting change should be released.
 * **Chrome version** — the 4-part `ARG CHROME_VERSION` pin (only
   `update-chrome-node.mjs` touches it). A Chrome bump does NOT change
-  `VERSION`; it only adds a suffixed release.
+  `VERSION`; it only adds a suffixed image release.
 
-Two kinds of git release tag:
+Two kinds of release:
 
 * **Code release** `v<VERSION>` (e.g. `v0.1.0`) — a merge to main that
-  changes `VERSION` (the `dev` → `main` merge). Wins if the same merge also
-  moves the Chrome pin.
-* **Chrome release** `v<VERSION>-<chrome-version>` (e.g.
-  `v0.1.0-150.0.7871.100`) — a merge to main that changes only the
-  `ARG CHROME_VERSION` pin (the daily bump).
+  changes `VERSION` (the `dev` → `main` merge). The only kind with a git
+  tag. Wins if the same merge also moves the Chrome pin.
+* **Chrome release** (e.g. image tag `0.1.0-150.0.7871.100`) — a merge to
+  main that changes only the `ARG CHROME_VERSION` pin (the daily bump).
+  No git tag: `VERSION` stays and the `<VERSION>-<chrome-version>` image
+  tag records the Chrome rebuild.
 
 Both publish the same Docker image tags: `<VERSION>-<chrome-version>` (the
 Chrome pinned at that commit), the floating `<VERSION>` and `latest` — no
 `sha-<short>` (only a tagless manual dispatch on main publishes that).
 
-A tag is immutable: each is released once (an existing tag is skipped with a
-warning) — to re-release a code change, bump `VERSION`.
+A git tag is immutable: each `v<VERSION>` is released once (an existing tag
+is skipped with a warning) — to re-release a code change, bump `VERSION`.
+A Chrome bump needs no released-once marker: the automatic bump only merges
+when the pin moves, and re-publishing an identical
+`<VERSION>-<chrome-version>` image is harmless.
 
 Releases are cut from `main` only: develop on `dev` / feature branches, bump
 `VERSION` there, and the merge to `main` is the release (a merge that
 changes neither `VERSION` nor the Chrome pin releases nothing). Routine
 releases are fully automated — do not hand-tag. In the main-push CI run, the
-`release-tag` job pushes the tag (with `GITHUB_TOKEN`, so it triggers no
-second run) and the `publish` job builds the image right after it (GHCR
+`release-tag` job pushes the code-release tag (with `GITHUB_TOKEN`, so it
+triggers no second run) or just marks a tagless Chrome release, and the
+`publish` job builds the image right after it (GHCR
 always; Docker Hub when the `DOCKERHUB_*` secrets exist). `publish` refuses a
-tag that is neither `v<VERSION>` nor `v<VERSION>-<CHROME_VERSION>` of its own
-commit, or whose commit is not on `main`, so a manual tag must follow the
+git tag that is neither `v<VERSION>` nor `v<VERSION>-<CHROME_VERSION>` of its
+own commit, or whose commit is not on `main`, so a manual tag must follow the
 same scheme. The daily
 `chrome-update.yaml` cron opens the bump PR and auto-merges it once CI is
-green; the `cleanup-update-branch` job in `ci.yaml` then deletes the merged
+green (the merge publishes the image without a git tag); the
+`cleanup-update-branch` job in `ci.yaml` then deletes the merged
 `chore/chrome-update` branch.
 
 ## Commit style

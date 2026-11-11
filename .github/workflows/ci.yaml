@@ -6,23 +6,25 @@
 #                 CDP gateway, built-in login + CDP API key, Wayland desktop)
 #   release-tag : on merges to main (the only place a release is cut — dev
 #                 and feature branches never release) — a VERSION change (code
-#                 release, the dev -> main merge) tags v<VERSION> (e.g.
-#                 v0.1.0); a CHROME_VERSION pin change alone (the daily Chrome
-#                 bump) tags v<VERSION>-<chrome-version> (e.g.
-#                 v0.1.0-150.0.7871.100)
+#                 release, the dev -> main merge) pushes git tag v<VERSION>
+#                 (e.g. v0.1.0); a CHROME_VERSION pin change alone (the daily
+#                 Chrome bump) releases WITHOUT a git tag — output kind=chrome
+#                 tells publish to tag the image <VERSION>-<chrome-version>
+#                 (e.g. 0.1.0-150.0.7871.100) directly
 #   cleanup-update-branch : on the merge of chrome-update.yaml's bump PR —
 #                 deletes its head branch chore/chrome-update
 #   publish     : builds + pushes the image to GHCR (always) and Docker Hub
 #                 (when DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are set; same
 #                 <owner>/<repo> path as GHCR). Runs in the same main-push run
-#                 right after release-tag created a tag; also on a hand-pushed
-#                 `v*` tag and on a manual dispatch of main. A tag must be
+#                 right after release-tag cut a release (git-tagged code
+#                 release or tagless Chrome bump); also on a hand-pushed `v*`
+#                 tag and on a manual dispatch of main. A git tag must be
 #                 v<VERSION> or v<VERSION>-<chrome-version> of its commit, and
 #                 that commit must be on main.
 #
 # Together with chrome-update.yaml (daily Chrome for Testing watch) this
 # closes the loop: upstream release -> re-pin PR -> CI here -> auto-merge ->
-# tag + publish (+ delete the bump branch). See README "Automatic upstream updates".
+# publish (+ delete the bump branch). See README "Automatic upstream updates".
 #
 # Required secrets for Docker Hub publishing (GHCR needs none, it uses the
 # built-in GITHUB_TOKEN): DOCKERHUB_USERNAME, DOCKERHUB_TOKEN.
@@ -69,7 +71,7 @@ jobs:
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
             docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 
-      - name: VERSION file (X.Y.Z — release tags are v<VERSION> / v<VERSION>-<chrome-version>)
+      - name: VERSION file (X.Y.Z — code release tags are v<VERSION>)
         run: |
           grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION \
             || { echo "::error file=VERSION::VERSION must hold one X.Y.Z line, got: $(cat VERSION)"; exit 1; }
@@ -79,7 +81,7 @@ jobs:
           node --check update-chrome-node.mjs
           for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
           for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
-          node --check entrypoint/helpers/chromium-close.mjs
+          node --check entrypoint/helpers/password-hash.mjs
           python3 -m py_compile entrypoint/helpers/*.py
 
       - name: CDP gateway unit tests
@@ -163,7 +165,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name web-smoke -p 8080:80 \
-            -e ENABLE_CDP=false localhost/ci:${{ env.IMAGE_NAME }}
+            -e ENABLE_CDP=false -e AUTH_SETUP_CODE=ci-setup-code localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker logs web-smoke || true; docker rm -f web-smoke >/dev/null' EXIT
           # fresh container: the built-in login's setup form, in place (401)
           for i in $(seq 1 60); do
@@ -171,8 +173,8 @@ jobs:
             sleep 1
           done
           curl -s http://127.0.0.1:8080/ | grep -c 'data-mode="setup"' >/dev/null
-          # skipped: the Selkies page itself
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"skip":true}' http://127.0.0.1:8080/__auth/api/setup >/dev/null
+          # skipped (with the setup code): the Selkies page itself
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:8080/__auth/api/setup >/dev/null
           curl -sf http://127.0.0.1:8080/ | grep -ci '<html' >/dev/null \
             && echo "web UI smoke test OK"
 
@@ -180,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name gateway-smoke -p 9223:9222 \
-            -e ENABLE_SELKIES=false \
+            -e ENABLE_SELKIES=false -e AUTH_SETUP_CODE=ci-setup-code \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec gateway-smoke cat /tmp/cdp-gateway.log || true; docker logs gateway-smoke || true; docker rm -f gateway-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
@@ -190,7 +192,7 @@ jobs:
           curl -sf http://127.0.0.1:9223/json/version \
             | jq -e '.webSocketDebuggerUrl | startswith("ws://127.0.0.1:9223/")' >/dev/null
           # the console (live state below) waits for the login setup: skip it
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"skip":true}' http://127.0.0.1:9223/__auth/api/setup >/dev/null
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:9223/__auth/api/setup >/dev/null
           # web pages cannot use the CDP API (CDP_ALLOW_ORIGINS empty): a
           # page's WebSocket / fetch carries an Origin, a cross-site <img>
           # a Sec-Fetch-Site; CDP clients and the address bar send neither
@@ -223,6 +225,50 @@ jobs:
           await send('Target.closeTarget', { targetId });
           ws.close();
           EOF
+          # local files a CDP client names stay in CDP_FILE_DIRS (default
+          # /browser/downloads): an upload from elsewhere is refused, a
+          # download directory elsewhere is redirected there, and a file in
+          # there can be uploaded
+          docker exec -i gateway-smoke node --input-type=module - <<'EOF'
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          let id = 0; const pending = new Map(); const events = [];
+          ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id) pending.get(m.id)?.(m); else events.push(m); };
+          const send = (method, params = {}, sessionId) => new Promise((r) => { pending.set(++id, r); ws.send(JSON.stringify({ id, method, params, sessionId })); });
+          const { targetId } = (await send('Target.createTarget', { url: 'about:blank' })).result;
+          const { sessionId } = (await send('Target.attachToTarget', { targetId, flatten: true })).result;
+          const evaluate = async (expression) => (await send('Runtime.evaluate', { expression, awaitPromise: true }, sessionId)).result?.result?.value;
+          await evaluate("document.body.innerHTML = '<input type=file id=f>'");
+          const { root } = (await send('DOM.getDocument', {}, sessionId)).result;
+          const { nodeId } = (await send('DOM.querySelector', { nodeId: root.nodeId, selector: '#f' }, sessionId)).result;
+          const refused = await send('DOM.setFileInputFiles', { files: ['/browser/settings/../../etc/passwd'], nodeId }, sessionId);
+          if (!/outside CDP_FILE_DIRS/.test(refused.error?.message)) throw new Error(`upload not refused: ${JSON.stringify(refused)}`);
+          await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: '/browser/settings', eventsEnabled: true });
+          await evaluate("const a = document.createElement('a'); a.href = 'data:text/plain,smoke'; a.download = 'smoke.txt'; document.body.append(a); a.click()");
+          let done;
+          for (let i = 0; i < 50 && !done; i++) {
+            await new Promise((r) => setTimeout(r, 200));
+            done = events.find((m) => m.method === 'Browser.downloadProgress' && m.params.state === 'completed');
+          }
+          if (!done?.params.filePath?.startsWith('/browser/downloads/')) throw new Error(`download not redirected: ${JSON.stringify(done)}`);
+          await send('Browser.setDownloadBehavior', { behavior: 'default' });
+          const ok = await send('DOM.setFileInputFiles', { files: [done.params.filePath], nodeId }, sessionId);
+          if (ok.error) throw new Error(`upload from CDP_FILE_DIRS failed: ${JSON.stringify(ok)}`);
+          if (await evaluate("document.getElementById('f').files[0].text()") !== 'smoke') throw new Error('uploaded file not read');
+          await send('Target.closeTarget', { targetId });
+          ws.close();
+          console.log('CDP_FILE_DIRS smoke test OK');
+          EOF
+          ! docker exec gateway-smoke test -e /browser/settings/smoke.txt
+          # nothing behind nginx on a TCP port a page could open: the only
+          # listener is nginx's CDP port (9222 = 0x2406), the browser has no
+          # DevTools port, the gateway and the auth service unix sockets
+          listening="$(docker exec gateway-smoke sh -c "awk 'NR > 1 && \$4 == \"0A\" { split(\$2, a, \":\"); print a[2] }' /proc/net/tcp /proc/net/tcp6 | sort -u")"
+          [ "${listening}" = "2406" ] || { echo "unexpected TCP listeners (hex): ${listening}"; exit 1; }
+          docker exec gateway-smoke test -S /tmp/agentene/cdp-gateway.sock
+          docker exec gateway-smoke test -S /tmp/agentene/auth.sock
+          docker exec gateway-smoke grep -q -- --remote-debugging-pipe "/proc/$(docker exec gateway-smoke pgrep -o -x chrome)/cmdline"
           # an isolated context must get its own chromium and be
           # destroyed again on dispose; driven with raw CDP from the image's node
           docker exec -i gateway-smoke node --input-type=module - <<'EOF'
@@ -261,6 +307,30 @@ jobs:
           ws.close();
           console.log('CDP gateway smoke test OK');
           EOF
+          # a client's Browser.close (Puppeteer's browser.close()) ends only its
+          # own connection — on a browser and on a page WebSocket — while the
+          # shared browser (and with it the container) stays up
+          # (CDP_ALLOW_BROWSER_CLOSE=false)
+          docker exec -i gateway-smoke node --input-type=module - <<'EOF'
+          const closeOn = async (url) => {
+            const ws = new WebSocket(url);
+            await new Promise((r) => { ws.onopen = r; });
+            const reply = new Promise((r) => { ws.onmessage = (e) => r(JSON.parse(e.data)); });
+            const closed = new Promise((r) => { ws.onclose = r; });
+            ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+            if (JSON.stringify((await reply).result) !== '{}') throw new Error('Browser.close not answered');
+            await closed;
+          };
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          await closeOn(v.webSocketDebuggerUrl);
+          const page = (await (await fetch('http://127.0.0.1:9222/json/list')).json()).find((t) => t.type === 'page');
+          await closeOn(page.webSocketDebuggerUrl);
+          await new Promise((r) => setTimeout(r, 2000));
+          const after = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          if (after.webSocketDebuggerUrl !== v.webSocketDebuggerUrl) throw new Error('the main browser restarted');
+          console.log('Browser.close smoke test OK');
+          EOF
+          [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' gateway-smoke)" = "true 0" ]
 
       - name: Smoke test — CDP console sidebar on the web UI
         run: |
@@ -292,13 +362,19 @@ jobs:
           # the CDP port's console is unchanged (and cannot forge the marker)
           curl -sf http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
           curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
+          # the web port reaches the console only: no CDP API through it, with
+          # or without the password, however the path is spelled
+          code() { curl -s -o /dev/null -w '%{http_code}' --path-as-is "$@"; }
+          [ "$(code 'http://127.0.0.1:8082/cdp-console/..\json/version')" = 400 ]
+          [ "$(code -u ubuntu:pw 'http://127.0.0.1:8082/cdp-console/..\json/version')" = 400 ]
+          [ "$(code -u ubuntu:pw 'http://127.0.0.1:8082/cdp-console/json/version')" = 404 ]
           echo "CDP console sidebar smoke test OK"
 
       - name: Smoke test — built-in login and CDP API key
         run: |
           set -euo pipefail
           docker run -d --name auth-smoke -p 9228:9222 -p 8084:80 \
-            localhost/ci:${{ env.IMAGE_NAME }}
+            -e AUTH_SETUP_CODE=ci-setup-code localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec auth-smoke cat /tmp/auth-server.log /tmp/nginx/error.log || true; docker logs auth-smoke || true; docker rm -f auth-smoke >/dev/null' EXIT
           W=http://127.0.0.1:8084 C=http://127.0.0.1:9228 J=$(mktemp)
           code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
@@ -313,10 +389,13 @@ jobs:
           curl -s $W/ | grep -c 'data-mode="setup"' >/dev/null
           curl -s $C/console/ | grep -c 'data-mode="setup"' >/dev/null
           [ "$(code $C/json/version)" = 200 ]
-          # setup: cross-origin refused, then the admin login (session cookie)
-          [ "$(code -X POST -H 'Origin: http://evil.example' -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $W/__auth/api/setup)" = 403 ]
-          json -c "$J" -X POST -d '{"username":"admin","password":"password1"}' $W/__auth/api/setup | jq -e '.ok' >/dev/null
-          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"skip":true}' $W/__auth/api/setup)" = 409 ]
+          # setup: cross-origin refused, the setup code required, then the
+          # admin login (session cookie)
+          [ "$(code -X POST -H 'Origin: http://evil.example' -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","username":"admin","password":"password1"}' $W/__auth/api/setup)" = 403 ]
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $W/__auth/api/setup)" = 403 ]
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"code":"wrong-code","skip":true}' $C/__auth/api/setup)" = 403 ]
+          json -c "$J" -X POST -d '{"code":"ci-setup-code","username":"admin","password":"password1"}' $W/__auth/api/setup | jq -e '.ok' >/dev/null
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' $W/__auth/api/setup)" = 409 ]
           # without a session: the login form; with it: Selkies + sidebar, console, WebSockets
           curl -s $W/ | grep -c 'data-mode="login"' >/dev/null
           curl -sf -b "$J" $W/ | grep -c 'cdp-console/panel.js' >/dev/null
@@ -331,13 +410,23 @@ jobs:
           # login API
           [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-pass"}' $W/__auth/api/login)" = 401 ]
           [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $C/__auth/api/login)" = 200 ]
-          # API key: only with a session; then the CDP API needs it, in either header
-          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey)" = 401 ]
-          json -b "$J" -X PUT -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey | jq -e '.ok' >/dev/null
+          # API key: only with a session and the current password (a session
+          # alone — a stolen cookie — cannot lock the owner out); then the CDP
+          # API needs it, in either header
+          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123","currentPassword":"password1"}' $W/__auth/api/apikey)" = 401 ]
+          [ "$(code -b "$J" -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey)" = 403 ]
+          [ "$(code -b "$J" -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123","currentPassword":"wrong-pass"}' $W/__auth/api/apikey)" = 403 ]
+          json -b "$J" -X PUT -d '{"apiKey":"ci-key-0123","currentPassword":"password1"}' $W/__auth/api/apikey | jq -e '.ok' >/dev/null
           [ "$(code $C/json/version)" = 401 ] && [ "$(code -b "$J" $C/json/version)" = 401 ]
           [ "$(code -H 'Authorization: Bearer ci-key-0123' $C/json/version)" = 200 ]
           [ "$(code -H 'X-API-Key: ci-key-0123' $C/json/list)" = 200 ]
           [ "$(ws $C/devtools/browser/x)" = 401 ]
+          # the console's session never opens the CDP API, however the path is
+          # spelled (nginx and the gateway must read it alike)
+          [ "$(code --path-as-is -b "$J" "$C/console/..\json/version")" = 400 ]
+          [ "$(code --path-as-is -b "$J" "$C/console\..\json/version")" = 401 ] # not under /console/: the API key
+          [ "$(ws --path-as-is -b "$J" "$C/console/..\devtools/browser/x")" = 400 ]
+          [ "$(code --path-as-is -b "$J" "$C/console/../json/version")" = 401 ]
           # ws() does the upgrade over http:// (the runner's curl 8.5 has no ws:// scheme)
           [ "$(ws -H 'X-API-Key: ci-key-0123' "$(curl -s -H 'X-API-Key: ci-key-0123' $C/json/version | jq -r .webSocketDebuggerUrl | sed 's#^ws://#http://#')")" = 101 ]
           # persisted (hashed) across a restart
@@ -354,6 +443,13 @@ jobs:
           [ "$(code -b "$J" $W/)" = 200 ] && [ "$(code -b "$J2" $W/)" = 401 ]
           json -b "$J" -X PUT -d '{"currentPassword":"password2","username":"","password":""}' $W/__auth/api/credentials | jq -e '.ok' >/dev/null
           [ "$(code $W/)" = 200 ] && [ "$(code $C/console/)" = 200 ] && [ "$(code $C/json/version)" = 401 ]
+          # login off: the API key is what proves ownership — changing it or
+          # setting a login needs the current one
+          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":""}' $W/__auth/api/apikey)" = 403 ]
+          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"username":"mallory","password":"password3"}' $C/__auth/api/credentials)" = 403 ]
+          [ "$(code $C/json/version)" = 401 ]
+          json -X PUT -d '{"apiKey":"ci-key-4567","currentApiKey":"ci-key-0123"}' $W/__auth/api/apikey | jq -e '.ok' >/dev/null
+          [ "$(code -H 'X-API-Key: ci-key-4567' $C/json/version)" = 200 ]
           # deleting the file starts over
           docker exec auth-smoke rm /browser/settings/auth.json
           sleep 2
@@ -362,14 +458,72 @@ jobs:
           # ENABLE_AUTH=false: no auth service, nothing gated
           docker rm -f auth-smoke >/dev/null
           docker run -d --name auth-smoke -p 9228:9222 -p 8084:80 -e ENABLE_AUTH=false \
-            localhost/ci:${{ env.IMAGE_NAME }}
+            -e ALLOWED_HOSTS=browser.example,.lan.example localhost/ci:${{ env.IMAGE_NAME }}
           for i in $(seq 1 60); do
             curl -sf $C/json/version >/dev/null && curl -sf $W/ >/dev/null && break
             sleep 1
           done
           [ "$(code $C/console/)" = 200 ] && [ "$(code $W/)" = 200 ]
+          # ALLOWED_HOSTS: IP addresses, localhost and the listed names only
+          # (DNS rebinding: a site's own name pointed at the container)
+          [ "$(code -H 'Host: evil.example' $W/)" = 421 ]
+          [ "$(code -H 'Host: evil.example:9228' $C/console/)" = 421 ]
+          [ "$(code -H 'Host: evil.example:9228' $C/json/version)" = 421 ]
+          [ "$(code -H 'Host: browser.example' $W/)" = 200 ]
+          [ "$(code -H 'Host: Box.LAN.example:9228' $C/json/version)" = 200 ]
+          [ "$(code -H 'Host: localhost:9228' $C/json/version)" = 200 ]
+          [ "$(code -H 'Host: [::1]:8084' $W/)" = 200 ]
           docker exec auth-smoke sh -c '! pgrep -f "[a]uth-server/server.mjs"'
           echo "built-in login smoke test OK"
+
+      - name: Smoke test — RUN_USER container survives docker restart
+        run: |
+          set -euo pipefail
+          # /tmp survives a restart; files the last start handed to the run
+          # user must not block this one (fs.protected_regular); Selkies on,
+          # so the desktop settings (/tmp/desktop-raise-new-windows) apply
+          docker run -d --name restart-smoke -p 9230:9222 \
+            -e ENABLE_AUTH=false -e RUN_USER=browser \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker logs restart-smoke || true; docker rm -f restart-smoke >/dev/null' EXIT
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9230/json/version >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9230/json/version | jq -e '.Browser' >/dev/null
+          docker restart restart-smoke >/dev/null
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:9230/json/version >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9230/json/version | jq -e '.Browser' >/dev/null
+          [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' restart-smoke)" = "true 0" ]
+          if docker logs restart-smoke 2>&1 | grep -F '[entrypoint] ERROR'; then exit 1; fi
+          echo "RUN_USER restart smoke test OK"
+
+      - name: Smoke test — RUN_USER default (browser) and RUN_USER=0 (root)
+        run: |
+          set -euo pipefail
+          docker run -d --name user-default -p 9231:9222 \
+            -e ENABLE_SELKIES=false -e ENABLE_AUTH=false \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          docker run -d --name user-root -p 9232:9222 \
+            -e ENABLE_SELKIES=false -e ENABLE_AUTH=false -e RUN_USER=0 \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'for c in user-default user-root; do docker logs $c || true; docker rm -f $c >/dev/null; done' EXIT
+          for port in 9231 9232; do
+            for i in $(seq 1 60); do
+              curl -sf http://127.0.0.1:$port/json/version >/dev/null && break
+              sleep 1
+            done
+            curl -sf http://127.0.0.1:$port/json/version | jq -e '.Browser' >/dev/null
+          done
+          # the main browser's owner: unset RUN_USER = browser, 0 = root
+          owner() { docker exec "$1" sh -c 'ps -o user= -p "$(pgrep -o -f -- "--user-data-dir=/browser/user-data")"'; }
+          [ "$(owner user-default)" = browser ]
+          [ "$(owner user-root)" = root ]
+          docker logs user-root 2>&1 | grep -qF 'RUN_USER=0: everything runs as root'
+          echo "RUN_USER default/root smoke test OK"
 
       - name: Smoke test — chromium sandbox (RUN_USER + user namespaces)
         run: |
@@ -411,8 +565,11 @@ jobs:
       - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
         run: |
           set -euo pipefail
+          # CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close stands in for
+          # the browser closing itself (its last window)
           docker run -d --name ondemand-smoke -p 9226:9222 \
-            -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 \
+            -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 -e AUTH_SETUP_CODE=ci-setup-code \
+            -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec ondemand-smoke cat /tmp/cdp-gateway.log || true; docker logs ondemand-smoke || true; docker rm -f ondemand-smoke >/dev/null' EXIT
           # the main browser's state, from the console's live state snapshot
@@ -426,7 +583,7 @@ jobs:
             sleep 1
           done
           # the console (API, live state) waits for the login setup: skip it
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"skip":true}' http://127.0.0.1:9226/__auth/api/setup >/dev/null
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:9226/__auth/api/setup >/dev/null
           # no chromium until something asks for it; listings do not
           [ "$(state)" = stopped ]
           [ "$(curl -sf http://127.0.0.1:9226/json/list)" = "[]" ]
@@ -435,7 +592,7 @@ jobs:
           # leaves the container running
           curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:9226/console/api/main/start | jq -e '.state == "running"' >/dev/null
           docker exec -i ondemand-smoke node --input-type=module - <<'EOF'
-          const v = await (await fetch('http://127.0.0.1:9221/json/version')).json();
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
           const ws = new WebSocket(v.webSocketDebuggerUrl);
           await new Promise((r) => { ws.onopen = r; });
           ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
@@ -503,6 +660,40 @@ jobs:
           docker exec ondemand-smoke grep -q 'idle for 1 min' /tmp/cdp-gateway.log
           echo "on-demand main browser smoke test OK"
 
+      - name: Smoke test — main browser closed with CHROMIUM_AUTOSTART=true
+        run: |
+          set -euo pipefail
+          docker run -d --name autostart-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
+            -e CDP_ALLOW_BROWSER_CLOSE=true \
+            localhost/ci:${{ env.IMAGE_NAME }}
+          trap 'docker exec autostart-smoke cat /tmp/cdp-gateway.log || true; docker logs autostart-smoke || true; docker rm -f autostart-smoke >/dev/null' EXIT
+          nchrome() { docker exec autostart-smoke sh -c 'pgrep -c -x chrome || true'; }
+          up() { [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' autostart-smoke)" = "true 0" ]; }
+          # started with the container, by the gateway (before any client asks)
+          for i in $(seq 1 60); do
+            [ "$(nchrome)" != 0 ] && break
+            sleep 1
+          done
+          [ "$(nchrome)" != 0 ]
+          # the browser closing itself (a client's Browser.close, allowed through
+          # with CDP_ALLOW_BROWSER_CLOSE=true) leaves the container (and the
+          # gateway) running
+          docker exec -i autostart-smoke node --input-type=module - <<'EOF'
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          const ws = new WebSocket(v.webSocketDebuggerUrl);
+          await new Promise((r) => { ws.onopen = r; });
+          ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+          EOF
+          for i in $(seq 1 20); do [ "$(nchrome)" = 0 ] && break; sleep 0.5; done
+          [ "$(nchrome)" = 0 ]
+          sleep 2
+          up
+          # the next CDP client starts it again
+          curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser and .webSocketDebuggerUrl' >/dev/null
+          [ "$(nchrome)" != 0 ]
+          up
+          echo "autostart main browser smoke test OK"
+
       - name: Smoke test — Wayland desktop (the default DISPLAY_BACKEND)
         run: |
           set -euo pipefail
@@ -544,33 +735,37 @@ jobs:
   release-tag:
     # Two kinds of release, told apart by what a merge to main changed:
     #   * code release   — VERSION changed (typically a dev -> main merge):
-    #                      tag v<VERSION>, e.g. v0.2.0. Wins when the same
-    #                      merge also moved the Chrome pin.
+    #                      pushes git tag v<VERSION>, e.g. v0.2.0. Wins when
+    #                      the same merge also moved the Chrome pin.
     #   * Chrome release — only the ARG CHROME_VERSION pin changed (the daily
-    #                      chrome-update.yaml bump): tag
-    #                      v<VERSION>-<chrome-version>, e.g.
-    #                      v0.2.0-151.0.7922.50 — VERSION stays, the suffix
-    #                      records the Chrome rebuild.
-    # The tag is pushed with the built-in GITHUB_TOKEN, whose events trigger
-    # no workflow run — publish picks the tag up from this job's output in the
-    # same run instead (no PAT needed, no double build). Runs after verify so
-    # a broken image is never tagged.
+    #                      chrome-update.yaml bump): NO git tag — a Chrome
+    #                      bump re-pins a dependency, it is not a code
+    #                      release. The job only reports kind=chrome, and
+    #                      publish tags the image <VERSION>-<chrome-version>,
+    #                      e.g. 0.2.0-151.0.7922.50, in the same run —
+    #                      VERSION stays, the suffix records the Chrome
+    #                      rebuild.
+    # A code-release tag is pushed with the built-in GITHUB_TOKEN, whose
+    # events trigger no workflow run — publish picks the release up from
+    # this job's outputs in the same run instead (no PAT needed, no double
+    # build). Runs after verify so a broken image is never released.
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       # job-level permissions replace the workflow-level ones; this job only
-      # pushes a git tag, it does not touch packages.
+      # pushes a git tag (code releases), it does not touch packages.
       contents: write
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      kind: ${{ steps.tag.outputs.kind }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 2 # HEAD~1 needed to diff the incoming change
 
-      - name: Tag the release (v<VERSION> or v<VERSION>-<chrome-version>)
+      - name: Cut the release (code releases tag v<VERSION>, Chrome bumps are image-only)
         id: tag
         run: |
           set -euo pipefail
@@ -586,20 +781,25 @@ jobs:
           [[ "$CHROME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { echo "ERROR: cannot read CHROME_VERSION: '${CHROME}'"; exit 1; }
           if ! git diff --quiet "$BEFORE" HEAD -- VERSION; then
+            # code release — the only kind that gets a git tag
             TAG="v${VERSION}"
             MSG="Release ${VERSION} (Chrome for Testing ${CHROME})"
             HINT="bump VERSION to release this change"
           elif git diff "$BEFORE" HEAD -- Dockerfile \
                  | grep -qE '^[-+]ARG CHROME_VERSION='; then
-            TAG="v${VERSION}-${CHROME}"
-            MSG="Release ${VERSION} rebuilt on Chrome for Testing ${CHROME}"
-            HINT="this VERSION + Chrome pair is already released"
+            # Chrome bump — no git tag: publish tags the image
+            # <VERSION>-<chrome> straight from this job's kind output. No
+            # released-once marker needed: the automatic bump only merges
+            # when the pin moves, and re-publishing an identical
+            # <VERSION>-<chrome> image is harmless.
+            echo "kind=chrome" >> "$GITHUB_OUTPUT"
+            echo "::notice::Chrome bump — publishing image ${VERSION}-${CHROME} without a git tag (the publish job builds it next)"
+            exit 0
           else
             echo "::notice::VERSION and CHROME_VERSION pin unchanged — nothing released (bump VERSION to release a code change)"
             exit 0
           fi
-          # A tag is immutable: each v<VERSION> and each
-          # v<VERSION>-<chrome-version> is released once.
+          # A git tag is immutable: each v<VERSION> is released once.
           if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null; then
             echo "::warning::${TAG} already exists — ${HINT}"
             exit 0
@@ -608,6 +808,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "$MSG"
           git push origin "$TAG"
+          echo "kind=code" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "pushed ${TAG} — the publish job builds it next"
 
@@ -667,14 +868,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [verify, release-tag]
     # Publish only what main released:
-    #   * a main push where release-tag just created a tag (the normal path),
+    #   * a main push where release-tag just cut a release — a code release
+    #     (git tag pushed) or a tagless Chrome bump (kind=chrome),
     #   * a hand-pushed `v*` tag (checked below to sit on main),
     #   * a manual dispatch of main (no tag -> sha-<short> only).
     # !cancelled() lets it run while release-tag is skipped (tag runs).
     if: >
       !cancelled() && needs.verify.result == 'success' && (
         (github.event_name == 'push' && github.ref == 'refs/heads/main'
-          && needs.release-tag.outputs.tag != '') ||
+          && (needs.release-tag.outputs.tag != '' || needs.release-tag.outputs.kind == 'chrome')) ||
         startsWith(github.ref, 'refs/tags/v') ||
         (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     timeout-minutes: 60
@@ -683,7 +885,8 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      # The release tag: from release-tag (main push) or the pushed tag itself.
+      # The git release tag: from release-tag (code release on main) or the
+      # pushed tag itself. A Chrome bump releases without one.
       RELEASE_TAG: ${{ needs.release-tag.outputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
     steps:
       - uses: actions/checkout@v5
@@ -692,8 +895,12 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      - name: Check the release tag against VERSION + the Chrome pin
+      - name: Check the release against VERSION + the Chrome pin
         id: release
+        env:
+          # release-tag's verdict for a main push: 'code', 'chrome' or ''
+          # (empty on tag pushes and manual dispatches).
+          KIND: ${{ needs.release-tag.outputs.kind }}
         run: |
           set -euo pipefail
           VERSION="$(tr -d '[:space:]' < VERSION)"
@@ -706,22 +913,26 @@ jobs:
             echo "::error::${GITHUB_SHA} is not on main — only commits merged to main are released"
             exit 1
           fi
-          if [ -z "${RELEASE_TAG}" ]; then
+          if [ -n "${RELEASE_TAG}" ]; then
+            # A git tag (code release from release-tag, or hand-pushed):
+            # must be v<VERSION> or v<VERSION>-<chrome> of this commit.
+            case "${RELEASE_TAG}" in
+              "v${VERSION}") KIND=code ;;
+              "v${VERSION}-${CHROME}") KIND=chrome ;;
+              *)
+                echo "::error::tag ${RELEASE_TAG} does not match this commit (expected v${VERSION} or v${VERSION}-${CHROME}); release tags are v<X.Y.Z> or v<X.Y.Z>-<chrome-version>"
+                exit 1 ;;
+            esac
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "releasing git tag ${RELEASE_TAG} (${KIND} release)"
+          elif [ "${KIND}" = "chrome" ]; then
+            # The daily Chrome bump merged to main: no git tag — the image
+            # tags below are the release.
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "releasing Chrome bump ${VERSION}-${CHROME} (image tags only, no git tag)"
+          else
             echo "no release tag — publishing sha-<short> only"
-            exit 0
           fi
-          # Both kinds publish the same image tags (see Docker meta below):
-          # v<VERSION>          code release   (dev -> main merge)
-          # v<VERSION>-<chrome> Chrome release (daily Chrome bump)
-          case "${RELEASE_TAG}" in
-            "v${VERSION}") KIND=code ;;
-            "v${VERSION}-${CHROME}") KIND=chrome ;;
-            *)
-              echo "::error::tag ${RELEASE_TAG} does not match this commit (expected v${VERSION} or v${VERSION}-${CHROME}); release tags are v<X.Y.Z> or v<X.Y.Z>-<chrome-version>"
-              exit 1 ;;
-          esac
-          echo "tag=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-          echo "releasing ${RELEASE_TAG} (${KIND} release)"
 
       - name: Compute image list (GHCR always, Docker Hub when configured)
         id: images
@@ -761,14 +972,17 @@ jobs:
           #                               pinned at that commit)
           #   <VERSION>                   e.g. 0.2.0
           #   latest
-          # and no sha-<short> (priority=1000: <VERSION>-<chrome-version> becomes
-          # the OCI version label). Only a tagless manual run on main publishes
-          # sha-<short>, and nothing else.
+          # A code release also carries the git tag v<VERSION>; a Chrome
+          # release (the daily bump) has no git tag — these image tags are
+          # its only artifact. No sha-<short> (priority=1000:
+          # <VERSION>-<chrome-version> becomes the OCI version label). Only a
+          # tagless manual run on main publishes sha-<short>, and nothing
+          # else.
           tags: |
-            type=raw,value=${{ steps.release.outputs.build }},enable=${{ steps.release.outputs.tag != '' }},priority=1000
-            type=raw,value=${{ steps.release.outputs.version }},enable=${{ steps.release.outputs.tag != '' }}
-            type=raw,value=latest,enable=${{ steps.release.outputs.tag != '' }}
-            type=sha,enable=${{ steps.release.outputs.tag == '' }}
+            type=raw,value=${{ steps.release.outputs.build }},enable=${{ steps.release.outputs.release == 'true' }},priority=1000
+            type=raw,value=${{ steps.release.outputs.version }},enable=${{ steps.release.outputs.release == 'true' }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.release == 'true' }}
+            type=sha,enable=${{ steps.release.outputs.release != 'true' }}
 
       - name: Build and push
         uses: docker/build-push-action@v7

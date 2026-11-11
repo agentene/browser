@@ -92,7 +92,9 @@
   <section id="setup" hidden>
     <p class="lead" id="setup-lead"></p>
     <form id="setup-form" autocomplete="on">
-      <label><span data-t="username"></span><input name="username" autocomplete="username" required maxlength="64" autofocus></label>
+      <label><span data-t="setupCode"></span><input name="code" id="setup-code" autocomplete="off" spellcheck="false" required maxlength="128" autofocus></label>
+      <p class="hint" data-t="setupCodeHint"></p>
+      <label><span data-t="username"></span><input name="username" autocomplete="username" required maxlength="64"></label>
       <label><span data-t="password"></span><input name="password" type="password" autocomplete="new-password" required minlength="8"></label>
       <label><span data-t="confirm"></span><input name="confirm" type="password" autocomplete="new-password" required minlength="8"></label>
       <div class="error"></div>
@@ -138,6 +140,9 @@
       brokenTitle: 'Login locked', brokenSub: 'Configuration error',
       brokenLead: 'The login configuration cannot be read, so the web UI and the CDP endpoint stay locked. Fix the file, or delete it to set the login up again:',
       accountTitle: 'Account', accountSub: 'Login and CDP API key',
+      setupCode: 'Setup code',
+      setupCodeHint: 'Printed in the container log at startup (docker logs <container>, or docker compose logs): it shows that you run this container. Needed for either choice below.',
+      setupCodeMissing: 'Enter the setup code first.',
       username: 'User name', password: 'Password', confirm: 'Repeat the password',
       create: 'Create login', or: 'or', skip: 'Continue without a login',
       skipHint: 'Without a login, anyone who can reach this page can use the desktop and the console. You can set a login up later in the console settings.',
@@ -153,6 +158,9 @@
       brokenTitle: '登录已锁定', brokenSub: '配置错误',
       brokenLead: '无法读取登录配置，Web 界面和 CDP 接口保持锁定。请修复该文件，或删除它以重新设置登录：',
       accountTitle: '账号', accountSub: '登录与 CDP API Key',
+      setupCode: '设置码',
+      setupCodeHint: '容器启动时打印在容器日志中（docker logs <容器名> 或 docker compose logs），用来证明你是这个容器的运行者。下面两种选择都需要它。',
+      setupCodeMissing: '请先输入设置码。',
       username: '用户名', password: '密码', confirm: '再次输入密码',
       create: '创建账号', or: '或', skip: '跳过，不启用登录',
       skipHint: '不启用登录时，任何能访问此页面的人都可以使用桌面和控制台。之后可以在控制台的设置中再设置登录。',
@@ -178,6 +186,7 @@
     ['the API key needs at least 8 characters', 'API Key 至少需要 8 个字符'],
     ['the API key may only contain', 'API Key 只能包含可见 ASCII 字符（不含空格）'],
     ['already set up', '已经设置过了，请刷新页面'],
+    ['the setup code is wrong', '设置码错误（见容器日志）'],
     ['sign in first', '请先登录'],
   ];
   const localize = (msg) => (lang === 'zh' ? ZH_ERRORS.find(([en]) => String(msg).startsWith(en))?.[1] : null) || msg;
@@ -234,13 +243,19 @@
       $('#setup-form .error').textContent = t('mismatch');
       return null;
     }
-    return { username: f.get('username'), password: f.get('password') };
+    return { code: f.get('code'), username: f.get('username'), password: f.get('password') };
   });
   wire($('#login-form'), 'login', (f) => ({ username: f.get('username'), password: f.get('password') }));
   $('#skip').addEventListener('click', async () => {
+    const code = $('#setup-code').value.trim();
+    if (!code) {
+      $('#setup-form .error').textContent = t('setupCodeMissing');
+      $('#setup-code').focus();
+      return;
+    }
     if (!confirm(t('skipConfirm'))) return;
     try {
-      await post('setup', { skip: true });
+      await post('setup', { code, skip: true });
       location.reload();
     } catch (err) {
       $('#setup-form .error').textContent = err.message;

@@ -1,44 +1,42 @@
-// CHROMIUM_IDLE_TIMEOUT: close an on-demand main browser nobody has used for
+// CHROMIUM_IDLE_TIMEOUT: close the main browser nobody has used for
 // IDLE_TIMEOUT_MS. In use: a CDP client connected (browser or page
 // WebSocket), an isolated context alive or starting, a Selkies viewer
 // connected.
 
 import { readFileSync } from 'node:fs';
-import { IDLE_TIMEOUT_MS, VIEWER_PORT } from './config.mjs';
+import { IDLE_TIMEOUT_MS, VIEWER_SOCKET } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { openMuxes } from './mux.mjs';
 import { openRelays } from './relay.mjs';
 import { log } from './util.mjs';
 
-// Established TCP connections to a local port (both directions of a loopback
-// connection appear; any > 0 is what counts). nginx keeps no idle upstream
-// connections, so outside a request only a viewer's stream WebSocket is open.
-export function connectionsTo(port, tables = ['/proc/net/tcp', '/proc/net/tcp6']) {
-  const hex = `:${port.toString(16).toUpperCase().padStart(4, '0')}`;
+// Connected streams on a unix socket: the connections its server accepted
+// are listed under its path too, in state 03 (connected); the listening
+// socket itself is 01. nginx keeps no idle upstream connections, so outside
+// a request only a viewer's stream WebSocket is open.
+export function connectionsTo(socketPath, table = '/proc/net/unix') {
+  let text = '';
+  try {
+    text = readFileSync(table, 'utf8');
+  } catch {
+    return 0;
+  }
   let n = 0;
-  for (const file of tables) {
-    let text = '';
-    try {
-      text = readFileSync(file, 'utf8');
-    } catch {
-      continue;
-    }
-    for (const line of text.split('\n').slice(1)) {
-      const [, local, , state] = line.trim().split(/\s+/);
-      if (state === '01' && local?.endsWith(hex)) n++;
-    }
+  for (const line of text.split('\n').slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields[5] === '03' && fields[7] === socketPath) n++;
   }
   return n;
 }
 
 function busy() {
   return openMuxes() > 0 || openRelays() > 0 || contexts.busy
-    || (VIEWER_PORT > 0 && connectionsTo(VIEWER_PORT) > 0);
+    || (VIEWER_SOCKET !== '' && connectionsTo(VIEWER_SOCKET) > 0);
 }
 
 export function watchIdle() {
-  if (!mainBrowser.onDemand || !IDLE_TIMEOUT_MS) return;
+  if (!IDLE_TIMEOUT_MS) return;
   setInterval(() => {
     if (!mainBrowser.running) return;
     if (busy()) {

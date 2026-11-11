@@ -5,40 +5,50 @@
 # Chromium — and the nginx workers as an unprivileged user. PID 1 and the
 # nginx MASTER stay root: nginx binds the (by default privileged) listen
 # ports and reads the TLS key, and the supervisor must keep chown-ing the
-# browser profile. Empty (default) = everything runs as root, exactly the
-# historical behavior: DROP stays an empty array and every "${DROP[@]}"
-# prefix is a no-op.
+# browser profile. Unset or empty (default) = browser, the unprivileged user
+# the image ships (uid 1001). Root mode is opt-in: RUN_USER=0 (or 0:<gid>,
+# or root) runs everything as root, the pre-0.2 behavior: DROP stays an
+# empty array and every "${DROP[@]}" prefix is a no-op.
 #
 # Sets: DROP (command prefix), RUN_UID, RUN_GID, RUN_NAME, RUN_GROUPS (all
-# empty in root mode), RUN_NGINX_USER (nginx `user` directive value, empty =
-# default).
+# empty in root mode — RUN_UID is THE root-mode test for other modules),
+# RUN_NGINX_USER (nginx `user` directive value, empty = default).
 
 privileges_setup() {
-    RUN_USER="${RUN_USER:-}"
+    RUN_USER="${RUN_USER:-browser}"
     DROP=()
     RUN_UID="" RUN_GID="" RUN_NAME="" RUN_GROUPS=""
     RUN_NGINX_USER=""
-    [ -n "${RUN_USER}" ] || return 0
 
     privileges_resolve_user
+    if [ "${RUN_UID}" = "0" ]; then
+        RUN_UID="" RUN_GID="" RUN_NAME=""
+        log "RUN_USER=${RUN_USER}: everything runs as root (no privilege drop)"
+        return 0
+    fi
     privileges_prepare_home
     privileges_build_drop
     # shellcheck disable=SC2034 # read by nginx.sh
     RUN_NGINX_USER="${RUN_NAME}"
     privileges_own_profile
     privileges_clear_root_leftovers
+    privileges_clear_run_user_leftovers
 
     log "RUN_USER: desktop stack + nginx workers run as ${RUN_NAME} (uid=${RUN_UID} gid=${RUN_GID}${RUN_GROUPS:+ groups=${RUN_GROUPS}}); PID 1 + nginx master stay root"
 }
 
-# RUN_USER -> RUN_UID/RUN_GID/RUN_NAME.
+# RUN_USER -> RUN_UID/RUN_GID/RUN_NAME. uid 0 (0, 0:<gid>, root, any name
+# with uid 0) returns RUN_UID=0 and nothing else: the caller's root mode.
 privileges_resolve_user() {
     if [[ "${RUN_USER}" =~ ^[0-9]+(:[0-9]+)?$ ]]; then
         RUN_UID="${RUN_USER%%:*}"
         RUN_GID="${RUN_USER#*:}"
         [ "${RUN_GID}" != "${RUN_USER}" ] || RUN_GID="${RUN_UID}"
-        [ "${RUN_UID}" != "0" ] \
-            || die "RUN_USER=0 would drop privileges to root; pick a real unprivileged uid"
+        # all zeros (0, 00, ...) is root
+        if [[ "${RUN_UID}" =~ ^0+$ ]]; then
+            RUN_UID=0
+            return 0
+        fi
         # nginx's `user` directive takes a NAME and the daemons want a HOME:
         # synthesize passwd/group entries for bare numeric ids (idempotent —
         # an entry created on an earlier `docker restart` is simply reused).
@@ -117,4 +127,15 @@ privileges_clear_root_leftovers() {
     rm -rf "${PULSE_RUNTIME_PATH}"
     rm -f /tmp/.X11-unix/X*
     mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+}
+
+# The reverse: files directly in /tmp that the previous start handed to the
+# run user (give_to_run_user) and this start rewrites as root. /tmp survives
+# `docker restart` (and so `restart: always` after a service exited), and
+# with fs.protected_regular (systemd's default) the kernel refuses even root
+# an O_CREAT open of a file in a sticky world-writable directory owned by
+# someone else — the rewrite would fail with EACCES and abort every start.
+# Remove them; their writers recreate them as root and hand them over again.
+privileges_clear_run_user_leftovers() {
+    rm -f /tmp/desktop-raise-new-windows /tmp/chromium.log
 }

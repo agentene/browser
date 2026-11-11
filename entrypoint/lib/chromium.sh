@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# chromium.sh — the Chrome for Testing browser with a loopback CDP endpoint.
+# chromium.sh — the Chrome for Testing browser, driven by the CDP gateway.
 #
 # The flags are assembled in three parts — CHROMIUM_COMMON_FLAGS, the
 # headless/headed mode part (chromium_mode_flags) and CHROMIUM_TAIL_FLAGS —
@@ -8,14 +8,17 @@
 # Everything the entrypoint adds goes BEFORE CHROMIUM_EXTRA_ARGS, so user
 # flags win (chromium honors the last occurrence of a repeated switch).
 #
-# With CHROMIUM_AUTOSTART=false the main browser is not started here: its
-# command line goes to CHROMIUM_MAIN_FLAGS_FILE and the CDP gateway starts it
-# on demand, as its own child (so closing it does not stop the container).
+# The main browser is not started here: its command line goes to
+# CHROMIUM_MAIN_FLAGS_FILE and the CDP gateway starts it as its own child —
+# right away with CHROMIUM_AUTOSTART=true, on demand with false. The gateway
+# is the supervised service, so the browser closing or crashing never stops
+# the container; the next CDP client or the console starts it again. The
+# browsers open no DevTools port: the gateway adds --remote-debugging-pipe
+# and speaks CDP with each on its pipe (cdp-gateway/src/pipe.mjs).
 #
 # Sets for cdp-gateway.sh: CHROME_BIN, CHROMIUM_COMMON_FLAGS,
-# CHROMIUM_TAIL_FLAGS, CHROMIUM_ENV, CHROMIUM_LOCALE_POSIX, CHROMIUM_PID
-# (empty when on demand), CHROMIUM_MAIN_FLAGS_FILE. Also CHROMIUM_SANDBOXED
-# (true|false, for the log).
+# CHROMIUM_TAIL_FLAGS, CHROMIUM_ENV, CHROMIUM_LOCALE_POSIX,
+# CHROMIUM_MAIN_FLAGS_FILE. Also CHROMIUM_SANDBOXED (true|false, for the log).
 
 # Chrome for Testing's managed policy directory (compiled into the binary);
 # the browsers started by the gateway read it as well.
@@ -75,8 +78,8 @@ chromium_resolve_sandbox() {
     # shellcheck disable=SC2153 # CHROMIUM_SANDBOX is set by config.sh
     if [ "${CHROMIUM_SANDBOX}" = "off" ]; then
         log "chromium: sandbox off (CHROMIUM_SANDBOX=off)"
-    elif [ -z "${RUN_USER}" ]; then
-        log "chromium: no sandbox — the browsers run as root (set RUN_USER, e.g. browser, to sandbox them)"
+    elif [ -z "${RUN_UID}" ]; then
+        log "chromium: no sandbox — the browsers run as root (RUN_USER=${RUN_USER}; drop it, or set an unprivileged user, to sandbox them)"
     elif "${DROP[@]}" unshare --user --map-root-user true 2>/dev/null; then
         CHROMIUM_SANDBOXED=true
         log "chromium: sandboxed (user namespaces, as ${RUN_NAME})"
@@ -85,23 +88,62 @@ chromium_resolve_sandbox() {
     fi
 }
 
-# --- managed policy (CHROMIUM_ALLOW_FILE_URLS) ---------------------------------
-# A CDP client drives the browser, and the browser reads files as its user:
-# file:///browser/settings/auth.json (the login's session secret),
-# /proc/<pid>/environ (passwords handed in by environment), the profile ...
-# Blocked by policy unless allowed — it also covers the context browsers,
-# whatever their flags. Written at every start, so the knob can change.
+# --- managed policy (CHROMIUM_ALLOW_FILE_URLS, CHROMIUM_ALLOW_DEVTOOLS,
+# CDP_FILE_DIRS) --------------------------------------------------------------
+# Read by every browser, the context browsers too, whatever their flags.
+# Written at every start, so the knobs can change.
+#   URLBlocklist file://*  a page or CDP client opening file:// URLs could
+#                          read whatever the browser's user can
+#   URLBlocklist devtools://*, chrome://inspect
+#                          (CHROMIUM_ALLOW_DEVTOOLS=false) a DevTools window
+#                          speaks CDP to its page on a channel of its own,
+#                          past the gateway's checks; a CDP client can open
+#                          one (a key press, chrome://inspect). Blocked, the
+#                          window opens on an error page without that
+#                          channel. (DeveloperToolsAvailability would block
+#                          the CDP endpoint as well.)
+#   DownloadDirectory      the browsers' own download directory, the first
+#                          CDP_FILE_DIRS entry: fixed, so a CDP client cannot
+#                          point it elsewhere (through chrome://settings,
+#                          say). Download directories a CDP client names
+#                          itself are the gateway's business (file-access.mjs)
+# What reaches local files through CDP commands without a URL (a file
+# input's DOM.setFileInputFiles, ...) is checked by the gateway, not here.
 chromium_write_policy() {
-    local policy="${CHROMIUM_POLICY_DIR}/agentene.json"
+    local policy="${CHROMIUM_POLICY_DIR}/agentene.json" entries=() blocked=()
     if [ "${CHROMIUM_ALLOW_FILE_URLS}" = "true" ]; then
-        rm -f "${policy}"
         log "chromium: file:// URLs allowed (CHROMIUM_ALLOW_FILE_URLS=true)"
+    else
+        blocked+=('"file://*"')
+    fi
+    if [ "${CHROMIUM_ALLOW_DEVTOOLS}" = "false" ]; then
+        log "chromium: DevTools windows blocked (CHROMIUM_ALLOW_DEVTOOLS=false)"
+        blocked+=('"devtools://*"' '"chrome://inspect"')
+    fi
+    if [ "${#blocked[@]}" -gt 0 ]; then
+        local list
+        list="$(printf '%s, ' "${blocked[@]}")"
+        entries+=("\"URLBlocklist\": [${list%, }]")
+    fi
+    if [ "${CDP_FILE_DIRS}" = "*" ]; then
+        log "chromium: CDP clients may name local files anywhere (CDP_FILE_DIRS=*)"
+    else
+        local download_dir="${CDP_FILE_DIRS%%:*}"
+        { mkdir -p "${download_dir}" && give_to_run_user "${download_dir}"; } \
+            || die "cannot create the download directory ${download_dir} (the first CDP_FILE_DIRS entry)"
+        # config.sh allows no character that would need escaping in JSON
+        entries+=("\"DownloadDirectory\": \"${download_dir}\"")
+    fi
+    if [ "${#entries[@]}" -eq 0 ]; then
+        rm -f "${policy}"
         return 0
     fi
+    local body
+    body="$(printf '  %s,\n' "${entries[@]}")"
     { mkdir -p "${CHROMIUM_POLICY_DIR}" \
-        && printf '{\n  "URLBlocklist": ["file://*"]\n}\n' >"${policy}" \
+        && printf '{\n%s\n}\n' "${body%,}" >"${policy}" \
         && chmod 644 "${policy}"; } \
-        || die "cannot write the chromium policy ${policy} (read-only root filesystem?); set CHROMIUM_ALLOW_FILE_URLS=true to run without it"
+        || die "cannot write the chromium policy ${policy} (read-only root filesystem?); set CHROMIUM_ALLOW_FILE_URLS=true and CDP_FILE_DIRS=* to run without it"
 }
 
 # desktop_ready: true when the display a headed browser needs exists.
@@ -229,7 +271,6 @@ chromium_build_flags() {
     fi
     CHROMIUM_FLAGS=("${CHROMIUM_COMMON_FLAGS[@]}"
         --user-data-dir="${CHROMIUM_USER_DATA_DIR}"
-        --remote-debugging-port="${CDP_INTERNAL_PORT}"
         "${MODE_FLAGS[@]}" "${main_window_flags[@]}" "${CHROMIUM_TAIL_FLAGS[@]}")
 }
 
@@ -321,36 +362,18 @@ chromium_prepare_profile() {
         "${CHROMIUM_USER_DATA_DIR}/Default/Preferences" "${CHROMIUM_LANG}"
 }
 
-# STOP_HOOKS entry (supervisor.sh): close the main browser through CDP before
-# the services get their signals, so the cookies and the session it holds in
-# memory reach the profile (see the helper for why a signal is not enough).
-# Covers an on-demand browser too: the supervisor would SIGKILL the gateway
-# before it finished closing it. Bounded well inside docker stop's 10s.
-chromium_close() {
-    timeout 8 node "${ENTRYPOINT_HELPERS}/chromium-close.mjs" "${CDP_INTERNAL_PORT}" 6000 \
-        || log "WARNING: chromium did not close in time; stopping it with a signal (recent cookies may be lost)"
-}
-
+# Hands the main browser's command line to the CDP gateway, which launches it
+# (cdp-gateway.sh).
 chromium_launch() {
-    CHROMIUM_PID=""
     CHROMIUM_MAIN_FLAGS_FILE=/tmp/cdp-gateway-main-flags
-    STOP_HOOKS+=(chromium_close)
+    # NUL-separated, read by the gateway; the log file is pre-created for
+    # the (possibly dropped) gateway, which appends a run per start
+    printf '%s\0' "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
+    : >/tmp/chromium.log
+    give_to_run_user /tmp/chromium.log
     if [ "${CHROMIUM_AUTOSTART}" = "false" ]; then
-        # NUL-separated, read by the gateway; the log file is pre-created for
-        # the (possibly dropped) gateway, which appends a run per start
-        printf '%s\0' "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
-        : >/tmp/chromium.log
-        give_to_run_user /tmp/chromium.log
         log "chromium: on demand (CHROMIUM_AUTOSTART=false) — the CDP gateway starts it on the first CDP client or from the console"
-        return 0
+    else
+        log "chromium: started by the CDP gateway (headless=${CHROMIUM_HEADLESS}), CDP on its pipe to the gateway"
     fi
-    log "starting chromium (headless=${CHROMIUM_HEADLESS}) with CDP on 127.0.0.1:${CDP_INTERNAL_PORT}"
-    start_service /tmp/chromium.log \
-        env "${CHROMIUM_ENV[@]}" "${DROP[@]}" "${CHROME_BIN}" "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}"
-    # shellcheck disable=SC2034 # read by cdp-gateway.sh
-    CHROMIUM_PID="${SERVICE_PID}"
-
-    # Wait for the loopback DevTools endpoint before forwarding.
-    wait_until 100 0.2 curl -fsS "http://127.0.0.1:${CDP_INTERNAL_PORT}/json/version" >/dev/null 2>&1 \
-        || log "WARNING: chromium DevTools endpoint not up yet; nginx forwards anyway (see /tmp/chromium.log)"
 }

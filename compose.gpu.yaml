@@ -9,8 +9,8 @@
 #
 # Host requirements: a /dev/dri render node (Intel/AMD with the i915/amdgpu
 # kernel driver). Nothing else — no device group mapping is needed: the
-# processes run as root by default, and with RUN_USER the entrypoint adds
-# the device nodes' gids to the dropped user's groups itself.
+# entrypoint adds the device nodes' gids to the RUN_USER's groups itself
+# (and with RUN_USER=0 everything runs as root anyway).
 #
 # Verify:
 #   docker compose exec browser glxinfo -B | grep -i renderer

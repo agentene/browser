@@ -35,6 +35,9 @@
       loginLead: 'The administrator login of the remote desktop and the CDP console. Saving signs every other session out.',
       loginLeadOff: 'The web UI has no login. Set one up to protect the remote desktop and the CDP console.',
       currentPassword: 'Current password',
+      currentPasswordKeyHint: 'Changing the API key needs your current password.',
+      currentApiKey: 'Current CDP API key',
+      currentApiKeyHint: 'Without a login, the API key is what shows that the browser is yours: changing the key or the login needs it.',
       username: 'User name',
       newPassword: 'New password',
       confirm: 'Repeat the new password',
@@ -70,6 +73,9 @@
       loginLead: '远程桌面和 CDP 控制台的管理员账号。保存后，其他所有会话都需要重新登录。',
       loginLeadOff: 'Web 界面当前未启用登录。设置账号以保护远程桌面和 CDP 控制台。',
       currentPassword: '当前密码',
+      currentPasswordKeyHint: '修改 API Key 需要输入当前密码。',
+      currentApiKey: '当前 CDP API Key',
+      currentApiKeyHint: '未启用登录时，API Key 是证明浏览器归属的凭据：修改 API Key 或登录都需要它。',
       username: '用户名',
       newPassword: '新密码',
       confirm: '再次输入新密码',
@@ -111,6 +117,7 @@
     ['the API key needs at least 8 characters', 'API Key 至少需要 8 个字符'],
     ['the API key may only contain', 'API Key 只能包含可见 ASCII 字符（不含空格）'],
     ['already set up', '已经设置过了，请刷新页面'],
+    ['the current API key is wrong', '当前 API Key 错误'],
     ['sign in first', '请先登录'],
   ];
   const localize = (msg) => (lang === 'zh' ? ZH_ERRORS.find(([en]) => String(msg).startsWith(en))?.[1] : null) || msg;
@@ -246,12 +253,28 @@
     return el('label', {}, el('span', {}, label), el('input', attrs));
   }
 
+  // With the login off and an API key set, a change needs the current key
+  // (the auth service's api/credentials and api/apikey); with the login on,
+  // the current password.
+  const needsCurrentKey = () => !state?.login && !!state?.apiKey;
+
+  function currentKeyFields() {
+    if (!needsCurrentKey()) return [];
+    return [
+      field(t('currentApiKey'), { name: 'currentApiKey', class: 'aa-key', autocomplete: 'off', spellcheck: 'false', required: true }),
+      el('p', {}, t('currentApiKeyHint')),
+    ];
+  }
+
+  const currentKey = (form) => String(new FormData(form).get('currentApiKey') || '').trim();
+
   function openLogin() {
     const loginOn = !!state?.login;
     openDialog(() => [
       el('h3', {}, t('loginTitle')),
       el('p', {}, loginOn ? t('loginLead') : t('loginLeadOff')),
       loginOn ? field(t('currentPassword'), { name: 'current', type: 'password', autocomplete: 'current-password', required: true }) : '',
+      ...currentKeyFields(),
       field(t('username'), { name: 'username', autocomplete: 'username', maxlength: '64', value: state?.username || '' }),
       field(t('newPassword'), { name: 'password', type: 'password', autocomplete: 'new-password' }),
       field(t('confirm'), { name: 'confirm', type: 'password', autocomplete: 'new-password' }),
@@ -264,7 +287,7 @@
       const off = !username && !password;
       if (off && !loginOn) return true; // nothing to turn off
       if (off && !confirm(t('turnOffConfirm'))) return false;
-      await call('PUT', 'credentials', { currentPassword: String(f.get('current') || ''), username, password });
+      await call('PUT', 'credentials', { currentPassword: String(f.get('current') || ''), currentApiKey: currentKey(form), username, password });
       return true;
     });
   }
@@ -298,17 +321,22 @@
       return [
         el('h3', {}, t('apiKeyTitle')),
         el('p', {}, isSet ? t('apiKeyLeadOn') : t('apiKeyLeadOff')),
+        ...(state?.login ? [
+          field(t('currentPassword'), { name: 'current', type: 'password', autocomplete: 'current-password', required: true }),
+          el('p', {}, t('currentPasswordKeyHint')),
+        ] : []),
+        ...currentKeyFields(),
         el('div', { class: 'aa-keyrow' }, input,
           el('button', { type: 'button', onclick: () => { input.value = randomKey(); input.select(); } }, t('generate')),
           copy),
         el('p', {}, t('apiKeyUsage')),
         el('p', {}, t('apiKeyEmptyHint')),
       ];
-    }, async () => {
+    }, async (form) => {
       const apiKey = input.value.trim();
       if (!apiKey && !isSet) return true;
       if (!apiKey && !confirm(t('removeConfirm'))) return false;
-      await call('PUT', 'apikey', { apiKey });
+      await call('PUT', 'apikey', { apiKey, currentPassword: String(new FormData(form).get('current') || ''), currentApiKey: currentKey(form) });
       return true;
     });
   }

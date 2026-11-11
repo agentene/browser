@@ -15,3 +15,7 @@ ignored:
   # pip install of the Selkies release wheels: pip installs local wheel
   # files whose versions are pinned by build args (in the file names).
   - DL3013
+  # "commands that make no sense in a container" (kill, ps, ...): the chrome
+  # layer runs a headless chrome once to capture its /json/protocol (the
+  # browsers have no DevTools endpoint at runtime) and kills it again.
+  - DL3001

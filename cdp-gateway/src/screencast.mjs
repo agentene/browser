@@ -10,7 +10,7 @@ export class Screencast {
   // interval(): how often a frame may go out at most (re-read on reschedule);
   // onFrame(jpeg): hands one out, false when it was not sent (unchanged);
   // onEnd(): the tab or its connection is gone.
-  constructor(port, targetId, { interval, onFrame, onEnd }) {
+  constructor(pipe, targetId, { interval, onFrame, onEnd }) {
     this.id = targetId;
     this.interval = interval;
     this.onFrame = onFrame;
@@ -21,12 +21,12 @@ export class Screencast {
     this.sentAt = 0;
     this.timer = null;
     this.every = interval();
-    this.start(port);
+    this.start(pipe);
   }
 
-  async start(port) {
+  async start(pipe) {
     try {
-      const cdp = await CdpClient.connect(`ws://127.0.0.1:${port}/devtools/page/${this.id}`);
+      const cdp = await CdpClient.connect(pipe, { targetId: this.id });
       if (this.closed) return cdp.close();
       this.cdp = cdp;
       cdp.ws.once('close', () => this.onEnd()); // the next tick retries

@@ -9,11 +9,16 @@
 #      picom           compositing manager for that display (keeps popup
 #                       menu shadows visible)
 #   2. PulseAudio      audio server (Selkies captures it via pcmflux)
-#   3. Selkies         HTML5 remote desktop on 127.0.0.1:${SELKIES_INTERNAL_PORT:-8081}
-#   4. Chromium        Chrome for Testing with a CDP endpoint on loopback
+#   3. Selkies         HTML5 remote desktop on the unix socket
+#                       /tmp/agentene/selkies.sock
+#   4. Chromium        Chrome for Testing, launched by the CDP gateway as its
+#                       own child (at start, or on demand with
+#                       CHROMIUM_AUTOSTART=false); it speaks CDP on a pipe to
+#                       the gateway only, no DevTools port
 #      CDP gateway     the gateway in front of it (always on with the CDP
-#                       endpoint); with CHROMIUM_AUTOSTART=false the gateway starts the
-#                       main browser on demand instead, as its own child
+#                       endpoint, on /tmp/agentene/cdp-gateway.sock); the
+#                       supervised service — the browser may exit and be
+#                       started again without the container
 #      auth service    the built-in login + CDP API key nginx checks every
 #                       request with (ENABLE_AUTH=true)
 #   5. nginx           the public front door (web UI over HTTP/HTTPS, the CDP
@@ -94,6 +99,7 @@ main() {
     config_load
     nginx_prepare
     privileges_setup
+    sockets_init
     settings_init
     supervisor_init
     gpu_detect

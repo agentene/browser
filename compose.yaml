@@ -30,7 +30,7 @@
 # For NETWORK_* (bridge mode only) see the networks: block at the bottom.
 #
 # The entrypoint starts everything in one container:
-#   Xvfb (or labwc) -> PulseAudio -> Selkies (loopback) -> Chrome
+#   Xvfb (or labwc) -> PulseAudio -> Selkies (unix socket) -> Chrome
 #   (+ CDP gateway) -> nginx front door
 #   nginx serves: NGINX_LISTEN_HTTP_PORT (web UI, HTTP)
 #                 + NGINX_LISTEN_HTTPS_PORT (web UI, HTTPS, ENABLE_HTTPS=true)
@@ -96,6 +96,10 @@ services:
       # settings/auth.json under BROWSER_DATA_HOST_DIR (delete it to start
       # over). false = no login, no API key (both open, as before).
       ENABLE_AUTH: "${ENABLE_AUTH:-true}"
+      # The code the setup form asks for, so that reaching the page first is
+      # not enough to claim the browser. Empty = a random one on every start,
+      # printed in the container log (docker compose logs browser).
+      AUTH_SETUP_CODE: "${AUTH_SETUP_CODE:-}"
 
       # --- nginx front door ---
       # Ports nginx LISTENS ON inside the container (not the published host
@@ -108,6 +112,11 @@ services:
       # exposure): 127.0.0.1 keeps the CDP endpoint (open until a CDP API key
       # is set) and the web UI host-local.
       NGINX_LISTEN_ADDR: "${NGINX_LISTEN_ADDR:-}"
+      # Host names the web UI and the CDP port answer to (comma-separated; a
+      # leading dot = subdomains too), besides IP addresses and localhost;
+      # others get 421. Guards an open web UI / console (login skipped or
+      # ENABLE_AUTH=false) against DNS rebinding. Empty = any host name.
+      ALLOWED_HOSTS: "${ALLOWED_HOSTS:-}"
       # true = nginx also serves HTTPS on NGINX_LISTEN_HTTPS_PORT (published to the
       # host only via the compose.https.yaml overlay, which also mounts ./tls).
       # Certificates: an existing valid pair in ./tls is reused as-is;
@@ -156,10 +165,12 @@ services:
       CHROMIUM_LANG: "${CHROMIUM_LANG:-en-US}"
       # Page opened at startup, e.g. "https://example.com"
       CHROMIUM_START_URL: "${CHROMIUM_START_URL:-about:blank}"
-      # false = no main browser at container start: the CDP gateway starts it on the first CDP client or from the CDP
-      # console ("Start browser"), and closing it keeps the container running
+      # The CDP gateway owns the main browser: true = started with the
+      # container; false = only on the first CDP client or from the CDP
+      # console ("Start browser"). Either way closing it (or a crash) keeps
+      # the container running, and the next client starts it again
       CHROMIUM_AUTOSTART: "${CHROMIUM_AUTOSTART:-true}"
-      # With CHROMIUM_AUTOSTART=false: minutes the main browser may sit idle
+      # Minutes the main browser may sit idle
       # (no CDP client, no isolated context, nobody watching the stream)
       # before the gateway closes it again; 0 = never
       CHROMIUM_IDLE_TIMEOUT: "${CHROMIUM_IDLE_TIMEOUT:-0}"
@@ -171,7 +182,7 @@ services:
       # SwiftShader software; off = force software; strict = never
       # SwiftShader (WebGL then requires the GPU).
       CHROMIUM_GPU: "${CHROMIUM_GPU:-auto}"
-      # Chromium's own sandbox: auto = on when RUN_USER is set and the
+      # Chromium's own sandbox: auto = on when RUN_USER is not 0 and the
       # container may create user namespaces (docker's default seccomp
       # profile forbids it: add security_opt, see the README), --no-sandbox
       # otherwise; off = always --no-sandbox
@@ -179,6 +190,17 @@ services:
       # true = the browsers may open file:// URLs; blocked by default so a
       # CDP client cannot read the container's files through the browser
       CHROMIUM_ALLOW_FILE_URLS: "${CHROMIUM_ALLOW_FILE_URLS:-false}"
+      # false = the browsers open no DevTools window: one speaks CDP to its
+      # page past the CDP gateway's checks (CDP_FILE_DIRS), and a CDP client
+      # can open one. The CDP endpoint itself is not affected
+      CHROMIUM_ALLOW_DEVTOOLS: "${CHROMIUM_ALLOW_DEVTOOLS:-true}"
+      # Directories CDP clients may name local files in (colon-separated):
+      # file uploads (setInputFiles with a container path) read only from
+      # them, and a download directory outside them is redirected into the
+      # first, which is also the browsers' own download directory (on the
+      # /browser mount by default). * = anywhere the browser's user can
+      # reach, the login's /browser/settings/auth.json included
+      CDP_FILE_DIRS: "${CDP_FILE_DIRS:-/browser/downloads}"
 
       # --- CDP gateway ---
       # Every isolated CDP context (browser.newContext(), playwright-cli
@@ -192,6 +214,11 @@ services:
       # with an Origin header (a page's WebSocket or fetch) is refused.
       # CDP clients such as Playwright send none.
       CDP_ALLOW_ORIGINS: "${CDP_ALLOW_ORIGINS:-}"
+      # Whether a CDP client's Browser.close (Puppeteer's browser.close())
+      # closes the shared browser (the container keeps running; the next
+      # client starts it again). false: only that client's connection (and its
+      # isolated context) is closed; Browser.crash* are refused.
+      CDP_ALLOW_BROWSER_CLOSE: "${CDP_ALLOW_BROWSER_CLOSE:-false}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: wayland = labwc, a headless
@@ -205,31 +232,31 @@ services:
 
       # --- Privilege drop ---
       # Run the desktop stack (Xvfb/labwc, picom, PulseAudio, selkies, chromium,
-      # the CDP gateway) and the nginx WORKERS as this user instead of root. Empty (default)
-      # = everything runs as root (the historical behavior). Accepts an
-      # existing username (e.g. browser, which the image ships) or uid[:gid]
-      # — missing passwd/group entries for a numeric id are synthesized at
-      # startup, and the browser profile mount is chowned to the user on
-      # every start. PID 1 and the nginx master always stay root: nginx
-      # binds the (by default privileged) listen ports and reads the TLS key.
-      RUN_USER: "${RUN_USER:-}"
+      # the CDP gateway, the auth service) and the nginx WORKERS as this user.
+      # Unset or empty (default) = browser, the unprivileged user the image
+      # ships (uid 1001). Accepts an existing username or uid[:gid] — missing
+      # passwd/group entries for a numeric id are synthesized at startup,
+      # and the browser profile mount is chowned to the user on every start.
+      # 0 = everything runs as root (no privilege drop). PID 1 and the nginx
+      # master always stay root: nginx binds the (by default privileged)
+      # listen ports and reads the TLS key.
+      RUN_USER: "${RUN_USER:-browser}"
 
     healthcheck:
       # The web UI on container port NGINX_LISTEN_HTTP_PORT counts as healthy
       # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
       # or 401 when a login is on (502 = Selkies not up). With
       # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
-      # probed instead — /json/list with CHROMIUM_AUTOSTART=false, which
-      # (unlike /json/version) does not start the main browser; 401 there
-      # means a CDP API key is set (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
+      # probed instead — /json/list, which (unlike /json/version) does not
+      # start a stopped main browser; 401 there means a CDP API key is set
+      # (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
       # exits and docker restarts the container). $$ = evaluated in the
       # container at check time, not by compose.
       test:
         - CMD-SHELL
         - >-
           if [ "$${ENABLE_SELKIES:-true}" = false ]; then
-          if [ "$${CHROMIUM_AUTOSTART:-true}" = false ]; then probe=json/list; else probe=json/version; fi;
-          case "$$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/$$probe")" in
+          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/json/list)" in
           2??|401) true ;; *) false ;; esac;
           else
           case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}/)" in

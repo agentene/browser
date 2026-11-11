@@ -1,6 +1,6 @@
 // cdp-gateway/panel.js — right-hand sidebar on the Selkies page: the CDP
 // console (main browser + isolated contexts, their tabs, "Show",
-// delete; start/stop of an on-demand main browser) next to the live desktop.
+// delete; start/stop of the main browser) next to the live desktop.
 //
 // nginx injects it into the Selkies entry page (sub_filter before </head>,
 // entrypoint/lib/nginx.sh) and proxies cdp-console/ — relative to the page,
@@ -501,7 +501,7 @@
     });
   }
 
-  // An on-demand main browser (CHROMIUM_AUTOSTART=false) that is not running:
+  // A main browser that is not running (not started yet, closed, crashed):
   // a Start button instead of the tabs.
   function stoppedMainCard(context) {
     const starting = context.state === 'starting';
@@ -536,7 +536,7 @@
     const head = el('div', { class: 'card-head' },
       el('span', { class: 'name', title: isMain ? t('mainBrowser') : name }, isMain ? t('mainBrowser') : name), v.chip,
       actions);
-    if (isMain && context.onDemand) {
+    if (isMain) {
       actions.append(el('button', { class: 'danger', title: t('stopTitle'),
         onclick: () => confirm(t('stopConfirm'))
           && call('POST', `${base}/stop`).catch(showError) }, t('stop')));
