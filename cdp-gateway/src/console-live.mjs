@@ -195,11 +195,15 @@ export async function subscribe(ws) {
     tickTimer = null;
     unwatchFront();
     for (const view of views.values()) stopCast(view);
-    // the current-tab probes' sessions too (targets.mjs)
-    for (const name of browserNames()) {
-      const pipe = pipeOf(name);
-      if (pipe) releaseProbes(pipe);
-    }
+    // the current-tab probes' sessions too (targets.mjs) — once a tick
+    // under way is done, or it would probe the tabs again after this
+    tickRunning.then(() => {
+      if (subscribers.size) return;
+      for (const name of browserNames()) {
+        const pipe = pipeOf(name);
+        if (pipe) releaseProbes(pipe);
+      }
+    });
   });
   await runTick(); // views may be stale while nobody watched
   if (ws.readyState !== WebSocket.OPEN) return;

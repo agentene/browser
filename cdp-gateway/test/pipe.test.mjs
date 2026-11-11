@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { pipeArgs } from '../src/launch.mjs';
 import { CLOSED, CdpPipe, OPEN } from '../src/pipe.mjs';
-import { listEntry, pickCurrent, versionEntry } from '../src/targets.mjs';
+import { browserTabs, listEntry, pickCurrent, releaseProbes, versionEntry } from '../src/targets.mjs';
 
 // The fake chromium: what it got (parsed), and an answer per command.
 //   answers: method -> params => result, in place of the default answer
@@ -254,6 +254,77 @@ test('a context created for a connection that closed before the reply is dispose
   assert.deepEqual(got.filter((m) => m.method === 'Target.disposeBrowserContext').map((m) => m.params), [
     { browserContextId: 'CTX1' },
   ]);
+  pipe.close();
+});
+
+test('console probes: one session and one query per tab while a tab keeps quiet; all released', async () => {
+  let quiet = true;
+  const pages = [{ targetId: 'T1', type: 'page', title: 'a', url: 'about:a' }, { targetId: 'T2', type: 'page', title: 'b', url: 'about:b' }];
+  const { pipe, got, held, answer } = fakeBrowser({
+    answers: {
+      'Target.getTargets': () => ({ targetInfos: pages }),
+      'Runtime.evaluate': () => ({ result: { type: 'number', value: 2 } }),
+    },
+    // T2's session is S2: a dialog is open there
+    // and T3's attach is slow
+    hold: (m) => (m.method === 'Runtime.evaluate' && m.sessionId === 'S2' && quiet)
+      || (m.method === 'Target.attachToTarget' && m.params.targetId === 'T3'),
+  });
+  const memo = {};
+  for (let i = 0; i < 3; i++) {
+    const { tabs, current } = await browserTabs(pipe, memo);
+    assert.deepEqual(tabs.map((t) => t.id), ['T1', 'T2']);
+    assert.equal(current, 'T1');
+  }
+  const count = (method, sessionId) => got.filter((m) => m.method === method && (!sessionId || m.sessionId === sessionId)).length;
+  assert.equal(count('Target.attachToTarget'), 2);
+  assert.equal(count('Runtime.evaluate', 'S2'), 1);
+  // the dialog closes: T2 answers (in front now) and is asked again
+  quiet = false;
+  for (const msg of held.splice(0)) answer(msg);
+  await tick();
+  await browserTabs(pipe, memo);
+  assert.equal(count('Runtime.evaluate', 'S2'), 2);
+  assert.equal(count('Target.attachToTarget'), 2);
+  // the console closes: both probe sessions detached, a probe still
+  // attaching is detached once attached
+  pages.push({ targetId: 'T3', type: 'page', title: 'c', url: 'about:c' });
+  await browserTabs(pipe, memo);
+  releaseProbes(pipe);
+  await tick();
+  assert.deepEqual(got.filter((m) => m.method === 'Target.detachFromTarget').map((m) => m.params.sessionId), ['S1', 'S2']);
+  for (const msg of held.splice(0)) answer(msg);
+  await tick();
+  await tick();
+  assert.deepEqual(got.filter((m) => m.method === 'Target.detachFromTarget').map((m) => m.params.sessionId), ['S1', 'S2', 'S3']);
+  pipe.close();
+});
+
+test('console probes: a tick under way when the console closes attaches nothing new', async () => {
+  let slow = false;
+  const { pipe, got, held, answer } = fakeBrowser({
+    answers: { 'Target.getTargets': () => ({ targetInfos: [{ targetId: 'T1', type: 'page', title: '', url: '' }, { targetId: 'T2', type: 'page', title: '', url: '' }] }) },
+    hold: (m) => m.method === 'Target.getTargets' && slow,
+  });
+  const memo = {};
+  await browserTabs(pipe, memo);
+  assert.equal(pipe.listenerCount('detached'), 1);
+  slow = true;
+  const tick = browserTabs(pipe, memo); // the tab list still on its way
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseProbes(pipe);
+  assert.equal(pipe.listenerCount('detached'), 0);
+  for (const msg of held.splice(0)) answer(msg);
+  const { current } = await tick;
+  assert.equal(current, 'T1'); // the memo's
+  await new Promise((resolve) => setImmediate(resolve));
+  const attached = got.filter((m) => m.method === 'Target.attachToTarget').length;
+  const detached = got.filter((m) => m.method === 'Target.detachFromTarget').length;
+  assert.deepEqual([attached, detached], [2, 2]);
+  // the next console starts over
+  slow = false;
+  await browserTabs(pipe, memo);
+  assert.equal(got.filter((m) => m.method === 'Target.attachToTarget').length, 4);
   pipe.close();
 });
 

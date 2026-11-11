@@ -2,8 +2,9 @@
 // HTTP endpoints (/json/*) answered — the browsers have none — and the tabs
 // the console shows.
 
-// How long a probe of a tab's visibility may take: a tab with a dialog open
-// or paused in a debugger does not answer at all.
+// How long the console waits for a tab to say whether it is in front: a tab
+// with a dialog open or paused in a debugger does not answer until it is
+// back. Only the wait is cut short — the probe itself goes on (Probes).
 const PROBE_TIMEOUT_MS = 1000;
 
 // Every target the way chromium's /json/list had it: pages, iframes,
@@ -66,49 +67,84 @@ export function pickCurrent(memo, levels) {
   return memo.current ?? null;
 }
 
-// The gateway's probe sessions, per pipe: targetId -> Promise of a sessionId.
-const probes = new WeakMap();
+// The gateway's probes of a pipe's tabs while a console watches: one
+// session per tab, kept while the tab is there (a session given up on would
+// stay attached, out of reach), and one query at a time however long the
+// tab keeps quiet (asked again only once the query answered or its call
+// timed out). Released as a whole when no console watches any more; a tick
+// still under way then holds a released set, which attaches nothing new.
+class Probes {
+  #pipe;
+  #byTarget = new Map(); // targetId -> { session: Promise of a sessionId, inflight: Promise of a level | null }
+  #released = false;
 
-function probeSessions(pipe) {
-  let sessions = probes.get(pipe);
-  if (!sessions) {
-    probes.set(pipe, sessions = new Map());
-    pipe.on('detached', (sessionId) => {
-      for (const [targetId, session] of sessions) {
-        session.then((s) => { if (s === sessionId) sessions.delete(targetId); }, () => {});
+  constructor(pipe) {
+    this.#pipe = pipe;
+    this.onDetached = (sessionId) => { // the tab closed
+      for (const [targetId, probe] of this.#byTarget) {
+        probe.session.then((s) => { if (s === sessionId) this.#drop(targetId, probe); }, () => {});
       }
-    });
+    };
+    pipe.on('detached', this.onDetached);
   }
-  return sessions;
+
+  // 2 = visible and focused, 1 = visible, 0 = hidden, null = no answer in
+  // time (PROBE_TIMEOUT_MS)
+  level(targetId) {
+    if (this.#released) return Promise.resolve(null);
+    const probe = this.#probe(targetId);
+    probe.inflight ??= probe.session
+      .then((sessionId) => this.#pipe.call('Runtime.evaluate', {
+        expression: "document.visibilityState === 'visible' ? (document.hasFocus() ? 2 : 1) : 0",
+        returnByValue: true,
+        silent: true,
+      }, { sessionId }))
+      .then(({ result }) => (typeof result?.value === 'number' ? result.value : null), () => null)
+      .finally(() => { probe.inflight = null; });
+    return within(probe.inflight, PROBE_TIMEOUT_MS, null);
+  }
+
+  // Detaches every probe session, those still being attached once they are.
+  release() {
+    this.#released = true;
+    this.#pipe.off('detached', this.onDetached);
+    for (const { session } of this.#byTarget.values()) {
+      session.then((sessionId) => this.#pipe.call('Target.detachFromTarget', { sessionId })).catch(() => {});
+    }
+    this.#byTarget.clear();
+  }
+
+  #probe(targetId) {
+    let probe = this.#byTarget.get(targetId);
+    if (!probe) {
+      const session = this.#pipe.call('Target.attachToTarget', { targetId, flatten: true }).then((r) => r.sessionId);
+      probe = { session, inflight: null };
+      this.#byTarget.set(targetId, probe);
+      session.catch(() => this.#drop(targetId, probe)); // the tab is gone (or the browser)
+    }
+    return probe;
+  }
+
+  #drop(targetId, probe) {
+    if (this.#byTarget.get(targetId) === probe) this.#byTarget.delete(targetId);
+  }
 }
 
-async function tabLevel(pipe, targetId) {
-  const sessions = probeSessions(pipe);
-  let session = sessions.get(targetId);
-  if (!session) {
-    session = pipe.call('Target.attachToTarget', { targetId, flatten: true }, { timeout: PROBE_TIMEOUT_MS })
-      .then((r) => r.sessionId);
-    sessions.set(targetId, session);
-  }
-  try {
-    const sessionId = await session;
-    const { result } = await pipe.call('Runtime.evaluate', {
-      expression: "document.visibilityState === 'visible' ? (document.hasFocus() ? 2 : 1) : 0",
-      returnByValue: true,
-      silent: true,
-    }, { sessionId, timeout: PROBE_TIMEOUT_MS });
-    return typeof result?.value === 'number' ? result.value : null;
-  } catch {
-    sessions.delete(targetId); // attached anew next time
-    return null;
-  }
+const probes = new WeakMap(); // pipe -> its Probes while a console watches
+
+function within(promise, ms, fallback) {
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(resolve, ms, fallback); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 }
 
 // A browser's tabs and the one in front (pickCurrent). Throws when the
 // browser does not answer.
 export async function browserTabs(pipe, memo) {
+  let tabProbes = probes.get(pipe);
+  if (!tabProbes) probes.set(pipe, tabProbes = new Probes(pipe));
   const pages = await pageInfos(pipe);
-  const levels = await Promise.all(pages.map(async (t) => [t.targetId, await tabLevel(pipe, t.targetId)]));
+  const levels = await Promise.all(pages.map(async (t) => [t.targetId, await tabProbes.level(t.targetId)]));
   return {
     tabs: pages.map((t) => ({ id: t.targetId, title: t.title, url: t.url })),
     current: pickCurrent(memo, levels),
@@ -117,10 +153,6 @@ export async function browserTabs(pipe, memo) {
 
 // Detaches the probe sessions of a pipe (no console is watching any more).
 export function releaseProbes(pipe) {
-  const sessions = probes.get(pipe);
-  if (!sessions) return;
-  for (const session of sessions.values()) {
-    session.then((sessionId) => pipe.call('Target.detachFromTarget', { sessionId }), () => {}).catch(() => {});
-  }
-  sessions.clear();
+  probes.get(pipe)?.release();
+  probes.delete(pipe);
 }
