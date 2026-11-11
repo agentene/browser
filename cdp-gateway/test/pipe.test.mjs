@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { pipeArgs } from '../src/launch.mjs';
 import { CLOSED, CdpPipe, OPEN } from '../src/pipe.mjs';
-import { browserTabs, listEntry, pickCurrent, releaseProbes, versionEntry } from '../src/targets.mjs';
+import { browserTabs, listEntry, pickCurrent, releaseProbes, titleRanks, versionEntry } from '../src/targets.mjs';
 
 // The fake chromium: what it got (parsed), and an answer per command.
 //   answers: method -> params => result, in place of the default answer
@@ -371,6 +371,41 @@ test('listEntry / versionEntry: chromium\'s /json shapes on the public host', ()
     'WebKit-Version': '537.36 (@r)',
     webSocketDebuggerUrl: 'ws://h:9222/devtools/browser/B1',
   });
+});
+
+test('titleRanks: the tab each window title shows, the window in front ranking highest', () => {
+  const pages = [
+    { targetId: 'A', title: 'Alpha' },
+    { targetId: 'AB', title: 'Alpha - Beta' },
+    { targetId: 'C', title: 'Gamma' },
+    { targetId: 'E', title: '' },
+  ];
+  const product = 'Google Chrome for Testing';
+  assert.deepEqual([...titleRanks(pages, [`Gamma - ${product}`, `Alpha - Beta - ${product}`])], [['C', 2], ['AB', 1]]);
+  assert.deepEqual([...titleRanks(pages, [`Alpha - ${product}`])], [['A', 1]]);
+  assert.deepEqual([...titleRanks(pages, ['Gamma'])], [['C', 1]]); // no product suffix
+  assert.deepEqual([...titleRanks(pages, [`Untitled - ${product}`])], []);
+  assert.deepEqual([...titleRanks(pages, [])], []);
+});
+
+test('the window title decides when every tab says it is in front (Playwright focus emulation)', async () => {
+  const pages = [{ targetId: 'T1', type: 'page', title: 'one', url: '' }, { targetId: 'T2', type: 'page', title: 'two', url: '' }];
+  const { pipe } = fakeBrowser({
+    answers: {
+      'Target.getTargets': () => ({ targetInfos: pages }),
+      'Runtime.evaluate': () => ({ result: { type: 'number', value: 2 } }),
+    },
+  });
+  const memo = {};
+  const product = 'Google Chrome for Testing';
+  assert.equal((await browserTabs(pipe, memo, [`two - ${product}`])).current, 'T2');
+  assert.equal((await browserTabs(pipe, memo, [`one - ${product}`])).current, 'T1');
+  assert.equal((await browserTabs(pipe, memo, [`two - ${product}`, `one - ${product}`])).current, 'T2');
+  // a title no tab has (yet): the tabs' own answers, the memo between equals
+  assert.equal((await browserTabs(pipe, memo, [`loading - ${product}`])).current, 'T2');
+  assert.equal((await browserTabs(pipe, memo)).current, 'T2');
+  releaseProbes(pipe);
+  pipe.close();
 });
 
 test('pickCurrent: the focused tab; of several, the one that just became so', () => {

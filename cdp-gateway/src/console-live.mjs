@@ -18,7 +18,7 @@ import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
 import { MAX_CONTEXTS } from './config.mjs';
 import { contexts } from './contexts.mjs';
-import { frontBrowser, unwatchFront, watchFront } from './desktop.mjs';
+import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { Screencast } from './screencast.mjs';
 import { settingsView } from './settings.mjs';
@@ -91,7 +91,7 @@ async function tick() {
     ops.push({ t: 'settings', settings });
   }
   const names = browserNames();
-  const front = await frontBrowser(names);
+  const { front, titles } = await desktopWindows(names);
   anyFront = !!front;
   for (const [name, view] of views) {
     if (names.includes(name)) continue;
@@ -107,7 +107,7 @@ async function tick() {
     if (!memos.has(name)) memos.set(name, {});
     if (name === 'main' && !mainBrowser.running) return NO_TABS;
     // null: starting up or shutting down — keep what the consoles have
-    return pipe ? browserTabs(pipe, memos.get(name)).catch(() => null) : null;
+    return pipe ? browserTabs(pipe, memos.get(name), titles.get(name)).catch(() => null) : null;
   }));
   for (const [i, name] of names.entries()) {
     const listing = listings[i];

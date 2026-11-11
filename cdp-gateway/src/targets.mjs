@@ -47,10 +47,11 @@ export function versionEntry(version, host, browserId) {
 
 export const NO_TABS = { tabs: [], current: null };
 
-// The tab in front. Chromium's /json/list put the most recently activated
-// tab first; Target.getTargets has no such order, so each tab says itself:
-// 2 = visible and focused (the tab in front of the focused window), 1 =
-// visible (in front of its window), 0 = hidden, null = no answer.
+// The tab in front by what the tabs say of themselves. Chromium's /json/list
+// put the most recently activated tab first; Target.getTargets has no such
+// order, so each tab says itself (Probes): 2 = visible and focused (the tab
+// in front of the focused window), 1 = visible (in front of its window), 0 =
+// hidden, null = no answer.
 //   memo: what the last call saw, per browser ({ candidates, current }):
 //         headless, every window's tab in front is "focused", so of several
 //         the one that just became so is the current one.
@@ -138,17 +139,51 @@ function within(promise, ms, fallback) {
   return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 }
 
-// A browser's tabs and the one in front (pickCurrent). Throws when the
-// browser does not answer.
-export async function browserTabs(pipe, memo) {
+// Whether a window shows a tab: chromium titles a window
+// "<title of its tab in front> - <product>".
+function shows(windowTitle, tabTitle) {
+  return windowTitle === tabTitle || windowTitle.startsWith(`${tabTitle} - `);
+}
+
+// The tabs the window titles show, the tab of the window in front ranking
+// highest (a tab no window shows has no entry). Of the tabs one title fits,
+// the longest title is the one ("A" and "A - B" both fit "A - B - Chrome").
+//   windowTitles: the browser's window titles, the one in front first
+//                 (desktop.mjs' desktopWindows)
+export function titleRanks(pages, windowTitles) {
+  const ranks = new Map();
+  windowTitles.forEach((windowTitle, i) => {
+    const fits = pages.filter((t) => t.title && shows(windowTitle, t.title));
+    const longest = Math.max(0, ...fits.map((t) => t.title.length));
+    for (const t of fits) {
+      if (t.title.length === longest && !ranks.has(t.targetId)) ranks.set(t.targetId, windowTitles.length - i);
+    }
+  });
+  return ranks;
+}
+
+// A browser's tabs and the one in front. The window titles say it first: a
+// tab cannot blur them, while what it says of itself a CDP client can —
+// Playwright's focus emulation leaves every tab it drives visible and
+// focused. What the tabs say (pickCurrent) decides between tabs of one
+// title, and alone when no title fits (a page still loading) or there are
+// no windows (headless); it keeps its memo either way, so that a title
+// fitting no tab for a moment does not move the current tab. Throws when
+// the browser does not answer.
+export async function browserTabs(pipe, memo, windowTitles = []) {
   let tabProbes = probes.get(pipe);
   if (!tabProbes) probes.set(pipe, tabProbes = new Probes(pipe));
   const pages = await pageInfos(pipe);
   const levels = await Promise.all(pages.map(async (t) => [t.targetId, await tabProbes.level(t.targetId)]));
-  return {
-    tabs: pages.map((t) => ({ id: t.targetId, title: t.title, url: t.url })),
-    current: pickCurrent(memo, levels),
-  };
+  let current = pickCurrent(memo, levels);
+  const ranks = titleRanks(pages, windowTitles);
+  const top = Math.max(0, ...ranks.values());
+  const shown = levels.filter(([id]) => ranks.get(id) === top);
+  if (shown.length && !shown.some(([id]) => id === current)) {
+    const best = Math.max(...shown.map(([, level]) => level ?? 0));
+    current = memo.current = shown.find(([, level]) => (level ?? 0) === best)[0];
+  }
+  return { tabs: pages.map((t) => ({ id: t.targetId, title: t.title, url: t.url })), current };
 }
 
 // Detaches the probe sessions of a pipe (no console is watching any more).

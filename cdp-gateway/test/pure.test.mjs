@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { browserExitAction } from '../src/browser-exit.mjs';
 import { appId, intEnv } from '../src/config.mjs';
 import { broadcast, MAX_BUFFERED } from '../src/console-live.mjs';
-import { listedAppIds } from '../src/desktop.mjs';
+import { listedToplevels } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
 import { consoleDenied, consoleOriginDenied, hashPassword, verifyPassword } from '../src/console-auth.mjs';
 import { requestPath, viaWeb } from '../src/respond.mjs';
@@ -245,10 +245,13 @@ test('originTabs: one tab per http(s) origin', () => {
   ]), [['https://a.example', 'A'], ['http://b.example:8080', 'C']]);
 });
 
-test('listedAppIds: app_ids of wlrctl toplevel list', () => {
-  assert.deepEqual(listedAppIds('cdp-context-1: ctx - Google Chrome for Testing\ncdp-main: a: b\n'),
-    new Set(['cdp-context-1', 'cdp-main']));
-  assert.deepEqual(listedAppIds(''), new Set());
+test('listedToplevels: app_ids and titles of wlrctl toplevel list', () => {
+  assert.deepEqual(listedToplevels('cdp-context-1: ctx - Google Chrome for Testing\ncdp-main: a: b\ncdp-main: \n'), [
+    ['cdp-context-1', 'ctx - Google Chrome for Testing'],
+    ['cdp-main', 'a: b'],
+    ['cdp-main', ''],
+  ]);
+  assert.deepEqual(listedToplevels(''), []);
 });
 
 test('broadcast: a console that does not keep up is dropped, not buffered for', () => {
