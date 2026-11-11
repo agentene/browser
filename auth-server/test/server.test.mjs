@@ -64,6 +64,7 @@ function rawStatus(target) {
 
 test('request targets that nginx would read differently are refused', async () => {
   assert.equal(await rawStatus('/x/..\\check/cdp'), 400);
+  assert.equal(await rawStatus('//x/check/cdp'), 400); // a host to the WHATWG parser
   assert.equal(await rawStatus('/api/state'), 200);
 });
 

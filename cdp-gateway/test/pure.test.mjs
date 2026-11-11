@@ -118,7 +118,10 @@ test('requestPath: only targets nginx and the WHATWG parser read alike', () => {
   assert.equal(at('/console/../json/version'), '/json/version'); // nginx resolves it alike
   assert.equal(at('/console/%2e%2e/json/version'), '/json/version'); // and this
   assert.equal(at('/x%5Cy'), '/x%5Cy'); // an escaped backslash stays one
-  for (const url of ['/console/..\\json/version', '/console\\..\\devtools/browser/x', '/a\tb', '/a b', '/a\nb', '/a\x7f', 'http://x/json/version', '*', '']) {
+  assert.equal(at('/console//json/version'), '/console//json/version'); // inner // is a path to both
+  // a leading // is a host to the WHATWG parser: //console/json/version
+  // would be the console to nginx but /json/version here
+  for (const url of ['//console/json/version', '///console/devtools/browser/x', '//x/json/version', '/console/..\\json/version', '/console\\..\\devtools/browser/x', '/a\tb', '/a b', '/a\nb', '/a\x7f', 'http://x/json/version', '*', '']) {
     assert.equal(at(url), null, JSON.stringify(url));
   }
 });

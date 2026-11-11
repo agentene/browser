@@ -12,12 +12,14 @@ export function publicHost(req) {
 // the raw request target and passes that target on unchanged; the WHATWG URL
 // parser reads more into it — a backslash is a slash, tabs and newlines are
 // dropped — so /console/..\json/version is /console/… to nginx (the console
-// login) but /json/version here (the CDP API, which needs the API key). Only
-// targets both read alike get through: origin-form, no backslash, no
-// whitespace or control characters.
+// login) but /json/version here (the CDP API, which needs the API key). And
+// a target that starts with // is a host to it: //console/json/version is
+// /console/json/version to nginx (merge_slashes) but host "console", path
+// /json/version here. Only targets both read alike get through:
+// origin-form, not //, no backslash, no whitespace or control characters.
 export function requestPath(req) {
   const target = req.url || '';
-  if (!target.startsWith('/') || /[\\\x00-\x20\x7f]/.test(target)) return null;
+  if (!target.startsWith('/') || target.startsWith('//') || /[\\\x00-\x20\x7f]/.test(target)) return null;
   return new URL(target, 'http://gateway').pathname;
 }
 

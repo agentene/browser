@@ -183,7 +183,8 @@ node update-chrome-node.mjs --node 22        # force the Node major
   empty). With the login skipped, changing the key or the login needs the
   current key. The gateway and the auth service refuse request targets that
   nginx and the WHATWG URL parser would read differently (backslashes,
-  whitespace): nginx picks the auth check by its reading, the services route
+  whitespace, a leading `//` — a host to the parser, merged slashes to
+  nginx): nginx picks the auth check by its reading, the services route
   by theirs.
   Internal tools must talk to loopback internals, never to the public CDP
   port (it may need a key).

@@ -244,8 +244,10 @@ async function api(req, res, name) {
 async function route(req, res) {
   store.refresh();
   // like the CDP gateway (respond.mjs: requestPath): only request targets
-  // nginx and the WHATWG URL parser read alike (no backslash, no whitespace)
-  if (!(req.url || '').startsWith('/') || /[\\\x00-\x20\x7f]/.test(req.url)) return send(res, 400, { error: 'malformed request path' });
+  // nginx and the WHATWG URL parser read alike (not //, which the parser
+  // reads as a host; no backslash, no whitespace)
+  const target = req.url || '';
+  if (!target.startsWith('/') || target.startsWith('//') || /[\\\x00-\x20\x7f]/.test(target)) return send(res, 400, { error: 'malformed request path' });
   const p = new URL(req.url, 'http://auth').pathname;
 
   if (p === '/check/web') {
