@@ -76,8 +76,7 @@ export class Mux {
     // until their reply: anything sent to the context chromium (which can
     // die before answering) and context disposals sent to the main chromium.
     this.pending = new Map(); // upstream command id -> { origin, msg: the client's command }
-    this.sessionOwner = new Map(); // context sessionId -> 'context' (any other session is main's)
-    this.sessionTarget = new Map(); // context sessionId -> targetId
+    this.sessionTarget = new Map(); // context chromium's sessionId -> targetId (any other session is main's)
     this.sessionParent = new Map(); // context sessionId -> the client session it was attached on
     this.contextTargets = new Set();
     // A client's browser-target session (Target.attachToBrowserTarget, e.g.
@@ -286,7 +285,7 @@ export class Mux {
     // everything on it waits, so its commands keep their order
     const browserSession = this.browserSessions.get(sessionId);
     if (browserSession && !browserSession.id) browserSession.waiting.push(msg);
-    else if (this.sessionOwner.get(sessionId) === 'context') {
+    else if (this.sessionTarget.has(sessionId)) {
       this.toContext(params.browserContextId === this.alias ? strippedAlias(msg) : msg);
     } else if (this.context && params.browserContextId === this.alias) {
       this.viaContextBrowserSession(msg, true);
@@ -297,7 +296,7 @@ export class Mux {
   // Browser-level params naming a target or session of the context chromium.
   addressesContext(params) {
     return Boolean(this.context) && (this.contextTargets.has(params.targetId)
-      || this.sessionOwner.get(params.sessionId) === 'context');
+      || this.sessionTarget.has(params.sessionId));
   }
 
   // Browser-level params addressed to the context chromium any way a client
@@ -555,12 +554,10 @@ export class Mux {
     if (msg.result?.targetId) this.contextTargets.add(msg.result.targetId);
     switch (msg.method) {
       case 'Target.attachedToTarget':
-        this.sessionOwner.set(p.sessionId, 'context');
         this.sessionTarget.set(p.sessionId, p.targetInfo.targetId);
         if (msg.sessionId) this.sessionParent.set(p.sessionId, msg.sessionId);
         break;
       case 'Target.detachedFromTarget':
-        this.sessionOwner.delete(p.sessionId);
         this.sessionTarget.delete(p.sessionId);
         this.sessionParent.delete(p.sessionId);
         break;
@@ -591,7 +588,6 @@ export class Mux {
     if (this.context !== context) return;
     for (const [sessionId, targetId] of this.sessionTarget) {
       this.sendClient({ method: 'Target.detachedFromTarget', sessionId: this.sessionParent.get(sessionId), params: { sessionId, targetId } });
-      this.sessionOwner.delete(sessionId);
     }
     for (const targetId of this.contextTargets) {
       this.sendClient({ method: 'Target.targetDestroyed', params: { targetId } });

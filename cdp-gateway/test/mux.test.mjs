@@ -99,7 +99,7 @@ test('sessions attached on main stay on main', async () => {
     assert.equal((await client.command({ id: 2, method: 'Target.attachToTarget', params: { targetId: 'T1', flatten: true } })).result.sessionId, 'S1');
     await attached;
     // only context sessions are tracked; anything else is main's
-    assert.equal(mux.sessionOwner.size, 0);
+    assert.equal(mux.sessionTarget.size, 0);
     const ev = await client.command({ id: 3, sessionId: 'S1', method: 'Runtime.evaluate', params: { expression: '1' } });
     assert.deepEqual(ev, { id: 3, sessionId: 'S1', result: { echo: 'Runtime.evaluate' } });
   } finally {
