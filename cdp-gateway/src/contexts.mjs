@@ -185,6 +185,10 @@ class ContextRegistry {
     const context = new Context(this, ++this.#counter, clientAddr);
     try {
       await context.start();
+      // its chromium may exit while the storage sync runs: destroy() has run
+      // then (forget() found nothing to forget yet), so registering it now
+      // would leave a dead context holding a slot that nothing can free
+      if (context.destroyed) throw new Error('isolated CDP context exited during startup');
     } catch (err) {
       await context.destroy(`startup failed: ${err.message}`);
       throw err;
