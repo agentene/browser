@@ -1,13 +1,13 @@
 // webgl-renderer-probe.mjs — zero-dependency CDP probe: asks the RUNNING
 // browser what its WebGL renderer is, and dumps the "Graphics Feature
 // Status" block of chrome://gpu. Usage:
-//   node webgl-renderer-probe.mjs [host] [port]   (defaults 127.0.0.1 9221)
+//   node webgl-renderer-probe.mjs [host] [port]   (defaults 127.0.0.1 9222, the CDP endpoint)
 import net from "node:net";
 import http from "node:http";
 import crypto from "node:crypto";
 
 const HOST = process.argv[2] || "127.0.0.1";
-const PORT = parseInt(process.argv[3] || "9221", 10);
+const PORT = parseInt(process.argv[3] || "9222", 10);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 setTimeout(() => { console.error("probe: timeout"); process.exit(2); }, 25000);
 

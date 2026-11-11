@@ -1,6 +1,6 @@
 // auth-server/server.mjs — the built-in login of the web UI and the CDP
 // console, and the CDP endpoint's API key (ENABLE_AUTH=true, started by
-// entrypoint/lib/auth.sh on loopback, behind nginx).
+// entrypoint/lib/auth.sh on a unix socket, behind nginx).
 //
 // nginx asks it about every request (auth_request, entrypoint/lib/nginx.sh):
 //   GET /check/web   the web UI and the console: 204 with a valid session
@@ -45,7 +45,11 @@ import { apiKeyFrom, parseCookies, randomToken, safeEqual } from './src/secrets.
 import { AuthStore, InputError, SESSION_RENEW_AFTER_MS, SESSION_TTL_MS } from './src/store.mjs';
 
 const env = process.env;
-const PORT = Number(env.AUTH_INTERNAL_PORT || 9219);
+// A unix socket, not a loopback port: a page in the browser can open any
+// loopback port's origin and would talk to this service past nginx — the
+// one that names the client (X-Real-IP, for the rate limit) and decides
+// which check a request gets.
+const SOCKET = env.AUTH_SOCKET || '/tmp/agentene/auth.sock';
 const FILE = env.AUTH_FILE || '/browser/settings/auth.json';
 // whether this container has a CDP endpoint (the API key matters at all)
 const CDP = env.ENABLE_CDP !== 'false';
@@ -282,12 +286,15 @@ const server = http.createServer((req, res) => {
     if (!res.headersSent) send(res, err.status ?? 500, { error: err.message });
   });
 });
-server.listen(PORT, '127.0.0.1', () => {
+fs.rmSync(SOCKET, { force: true });
+server.listen(SOCKET, () => {
+  // nginx's workers connect to it: with RUN_USER=0 they are nobody, not root
+  fs.chmodSync(SOCKET, 0o666);
   let what = 'not set up yet: the web pages show the setup form';
   if (store.broken) what = `LOCKED: ${store.broken}`;
   else if (!store.setUp && !SETUP_CODE_GIVEN) what += ` (setup code: ${SETUP_CODE})`;
   else if (store.loginOn) what = `login on (user "${store.username}")`;
   else if (store.setUp) what = 'login skipped: the web UI is open';
-  log(`listening on 127.0.0.1:${PORT}; ${FILE}: ${what}; CDP API key ${store.apiKeySet ? 'set' : 'not set (CDP open)'}`);
+  log(`listening on ${SOCKET}; ${FILE}: ${what}; CDP API key ${store.apiKeySet ? 'set' : 'not set (CDP open)'}`);
 });
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => server.close(() => process.exit(0)));

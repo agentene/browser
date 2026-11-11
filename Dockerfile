@@ -102,7 +102,21 @@ RUN apt-get update && \
     apt-get purge -y unzip && \
     rm -rf /var/lib/apt/lists/* && \
     # smoke-test: every shared library resolves and the version is the pinned one
-    /opt/chrome-for-testing/chrome --version | grep -F "${CHROME_VERSION}"
+    /opt/chrome-for-testing/chrome --version | grep -F "${CHROME_VERSION}" && \
+    # The protocol description chromium serves at /json/protocol, captured
+    # from this very binary: at runtime the browsers speak CDP on a pipe to
+    # the CDP gateway only (no DevTools port, no HTTP endpoint), and the
+    # gateway serves this copy (chrome-remote-interface and the like ask for it).
+    { /opt/chrome-for-testing/chrome --headless --no-sandbox --disable-gpu \
+        --user-data-dir=/tmp/cft-profile --remote-debugging-port=0 about:blank >/dev/null 2>&1 & } && \
+    for _ in $(seq 1 150); do [ -s /tmp/cft-profile/DevToolsActivePort ] && break; sleep 0.1; done && \
+    curl -fsS -o /opt/chrome-for-testing/devtools-protocol.json \
+        "http://127.0.0.1:$(head -n1 /tmp/cft-profile/DevToolsActivePort)/json/protocol" && \
+    grep -q '"domains"' /opt/chrome-for-testing/devtools-protocol.json && \
+    { kill "$!"; wait "$!" || true; } && \
+    # its child processes may still be writing into the profile for a moment
+    for _ in 1 2 3 4 5; do rm -rf /tmp/cft-profile && break; sleep 1; done && \
+    [ ! -e /tmp/cft-profile ]
 
 # === NGINX FRONT DOOR (CDP endpoint + web reverse proxy) ===
 # nginx fronts every public port (replaces the previous socat forwarder) on

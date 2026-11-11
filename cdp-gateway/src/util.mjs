@@ -1,27 +1,12 @@
 // Small helpers without gateway state.
 
 import { spawn } from 'node:child_process';
-import net from 'node:net';
 
 export function log(...args) {
   console.log(new Date().toISOString(), '[cdp-gateway]', ...args);
 }
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// A free loopback port for a context's DevTools. Not --remote-debugging-port=0:
-// chromium counts that as automation and reports navigator.webdriver=true,
-// which the main browser (fixed port) does not — sites' risk control notices.
-export function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
-  });
-}
 
 // Run a helper to completion; resolves with its exit code (an Error when it
 // could not be started at all, so callers only test for 0).

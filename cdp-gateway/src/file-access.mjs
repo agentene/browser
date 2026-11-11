@@ -35,17 +35,6 @@ const READS = {
 };
 const DOWNLOADS = new Set(['Browser.setDownloadBehavior', 'Page.setDownloadBehavior']);
 
-// Cheap pre-check on a raw client frame: whether it may name one of the
-// commands above. Method names are JSON strings, so they appear as written
-// unless escaped, and browser-exit.mjs's hasEscape makes the caller parse
-// every frame with an escape anyway. The substrings also match inside a
-// wrapped message (only its quotes are escaped).
-const MARKERS = ['setFileInputFiles', 'dispatchDragEvent', 'launchFilesInApp', 'loadUnpacked', 'DownloadBehavior'];
-
-export function mayTouchFiles(data, dirs = FILE_DIRS) {
-  return dirs !== null && MARKERS.some((marker) => data.includes(marker));
-}
-
 // The real location of an absolute path that may not exist (yet): its
 // nearest existing ancestor with symlinks resolved, plus the rest.
 export function realLocation(p) {

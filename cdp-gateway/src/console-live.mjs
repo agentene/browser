@@ -9,20 +9,20 @@
 //   {t:'tabs', name, set:[tab], del:[id]}  new or changed tabs, closed tabs
 //   {t:'current', name, id}                another tab is in front
 //   {t:'thumb', name, id, jpeg}            a new thumbnail of the current tab (base64)
-// Ticks read /json/list over loopback, only while a console is connected,
-// and never start a stopped main browser. Thumbnails come from a
-// screencast of each browser's current tab (screencast.mjs).
+// Ticks list each browser's tabs over its pipe (targets.mjs), only while a
+// console is connected, and never start a stopped main browser. Thumbnails
+// come from a screencast of each browser's current tab (screencast.mjs).
 
 import WebSocket from 'ws';
-import { browserNames, portOf } from './browsers.mjs';
+import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
 import { MAX_CONTEXTS } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { frontBrowser, unwatchFront, watchFront } from './desktop.mjs';
-import { NO_TABS, browserTabs } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { Screencast } from './screencast.mjs';
 import { settingsView } from './settings.mjs';
+import { NO_TABS, browserTabs, releaseProbes } from './targets.mjs';
 import { log } from './util.mjs';
 
 const TICK_MS = 1000;
@@ -34,6 +34,7 @@ const THUMB_BACK_MS = 20000;
 
 const subscribers = new Set();
 const views = new Map(); // name -> what subscribers were last told: { fields, tabs, current, thumb, cast }
+const memos = new Map(); // name -> the current-tab memo of targets.mjs' pickCurrent
 let tickTimer = null;
 let anyFront = false;
 let settingsSent = JSON.stringify(settingsView());
@@ -98,17 +99,21 @@ async function tick() {
     views.delete(name);
     ops.push({ t: 'gone', name });
   }
+  for (const name of memos.keys()) if (!names.includes(name)) memos.delete(name);
   // all browsers at once: one slow to answer holds up the tick only as long
-  // as the slowest (and at most devtools-http.mjs' timeout), not their sum
-  const listings = await Promise.all(names.map((name) => (
-    name === 'main' && !mainBrowser.running ? NO_TABS
-      // null: starting up or shutting down — keep what the consoles have
-      : browserTabs(portOf(name)).catch(() => null))));
+  // as the slowest (and at most a pipe call's timeout), not their sum
+  const listings = await Promise.all(names.map((name) => {
+    const pipe = pipeOf(name);
+    if (!memos.has(name)) memos.set(name, {});
+    if (name === 'main' && !mainBrowser.running) return NO_TABS;
+    // null: starting up or shutting down — keep what the consoles have
+    return pipe ? browserTabs(pipe, memos.get(name)).catch(() => null) : null;
+  }));
   for (const [i, name] of names.entries()) {
     const listing = listings[i];
     if (!listing) continue;
     if (name !== 'main' && !contexts.get(name)) continue; // destroyed meanwhile
-    const port = portOf(name);
+    const pipe = pipeOf(name);
     let view = views.get(name);
     if (!view) views.set(name, view = { fields: {}, tabs: new Map(), current: null, thumb: null, cast: null });
     const changed = {};
@@ -138,7 +143,7 @@ async function tick() {
       view.current = listing.current;
       ops.push({ t: 'current', name, id: view.current });
     }
-    syncCast(name, view, port);
+    syncCast(name, view, pipe);
     view.cast?.reschedule(); // it may have come to the front, or gone behind
   }
   broadcast(ops);
@@ -156,12 +161,12 @@ function snapshot() {
 }
 
 // Screencast the browser's current tab while a console is connected.
-function syncCast(name, view, port) {
-  const want = subscribers.size ? view.current : null;
+function syncCast(name, view, pipe) {
+  const want = subscribers.size && pipe ? view.current : null;
   if ((view.cast?.id ?? null) === want) return;
   stopCast(view);
   if (!want) return;
-  const cast = new Screencast(port, want, {
+  const cast = new Screencast(pipe, want, {
     interval: () => (view.fields.front || !anyFront ? THUMB_FRONT_MS : THUMB_BACK_MS),
     onFrame: (jpeg) => {
       if (view.thumb?.id === want && view.thumb.jpeg === jpeg) return false;
@@ -190,6 +195,11 @@ export async function subscribe(ws) {
     tickTimer = null;
     unwatchFront();
     for (const view of views.values()) stopCast(view);
+    // the current-tab probes' sessions too (targets.mjs)
+    for (const name of browserNames()) {
+      const pipe = pipeOf(name);
+      if (pipe) releaseProbes(pipe);
+    }
   });
   await runTick(); // views may be stale while nobody watched
   if (ws.readyState !== WebSocket.OPEN) return;

@@ -14,16 +14,15 @@
 // Target.disposeBrowserContext(alias) or the client
 // disconnecting destroys the context.
 //
-// Default-context traffic is not even parsed: a client message that names no
-// Target.* method (nor a command client-frame.mjs checks: Browser.close, local
-// file paths) goes to the main chromium as it came, and so does an upstream
-// message the gateway has no business with (needsParse). A parsed message
-// goes upstream re-serialized (client-frame.mjs).
+// Its upstreams are connections on the browsers' DevTools pipes (pipe.mjs):
+// a browser-target session each, which behaves like a WebSocket of its own.
+// Every client command is checked (client-frame.mjs) and goes upstream as
+// the command the check read; an upstream message the gateway has no
+// business with goes to the client as it came, unparsed (needsParse).
 
 import WebSocket from 'ws';
-import { openWs } from './cdp-client.mjs';
-import { guardFrame, needsGuard } from './client-frame.mjs';
-import { INTERNAL_ID_BASE, WS_OPTIONS } from './config.mjs';
+import { guardFrame } from './client-frame.mjs';
+import { INTERNAL_ID_BASE } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { forward } from './flow.mjs';
 import { log } from './util.mjs';
@@ -69,7 +68,8 @@ export function openMuxes() {
 }
 
 export class Mux {
-  constructor(client, clientAddr, mainUrl) {
+  // main: an open connection on the main browser's pipe (pipe.connect())
+  constructor(client, clientAddr, main) {
     this.client = client;
     this.clientAddr = clientAddr;
     this.context = null;
@@ -97,23 +97,12 @@ export class Mux {
     this.discover = null; // last Target.setDiscoverTargets params
     this.nextInternalId = INTERNAL_ID_BASE;
     this.internal = new Map();
-    this.queue = [];
     this.closed = false;
     muxes.add(this);
 
-    // nothing is read from the client until the upstream is open, so what
-    // it sends meanwhile waits in the socket (TCP pushes back), not here
-    client.pause?.();
-    this.main = new WebSocket(mainUrl, WS_OPTIONS);
-    this.main.on('open', () => {
-      const queued = this.queue;
-      this.queue = null; // before sending: toMain queues while it is set
-      for (const m of queued) this.toMain(m);
-      client.resume?.();
-    });
-    this.main.on('message', (data) => this.fromUpstream('main', data));
-    this.main.on('close', () => this.close('main browser connection closed'));
-    this.main.on('error', (err) => log(`mux ${clientAddr}: main upstream error: ${err.message}`));
+    this.main = main;
+    main.on('message', (data) => this.fromUpstream('main', data));
+    main.on('close', () => this.close('main browser connection closed'));
 
     client.on('message', (data) => this.fromClient(data));
     client.on('close', () => this.close('client disconnected'));
@@ -121,21 +110,15 @@ export class Mux {
   }
 
   // --- sending ---------------------------------------------------------------
-  // Every frame goes out as text (a Buffer would go as binary, which
-  // chromium ignores), flow-controlled against the client (flow.mjs).
-  toMain(data) {
-    if (this.queue) this.queue.push(data);
-    else if (this.main.readyState === WebSocket.OPEN) forward(this.main, data, { binary: false }, [this.client]);
-  }
-
+  // Commands go upstream as objects (the pipe serializes them), frames to
+  // the client as text (a Buffer would go as binary), flow-controlled
+  // against the other side (flow.mjs).
   sendMain(msg) {
-    this.toMain(JSON.stringify(msg));
+    if (this.main.readyState === WebSocket.OPEN) forward(this.main, msg, {}, [this.client]);
   }
 
   sendContext(msg) {
-    if (this.contextWs?.readyState === WebSocket.OPEN) {
-      forward(this.contextWs, JSON.stringify(msg), { binary: false }, [this.client]);
-    }
+    if (this.contextWs?.readyState === WebSocket.OPEN) forward(this.contextWs, msg, {}, [this.client]);
   }
 
   // A client command for the context chromium. Without one nothing would
@@ -196,14 +179,6 @@ export class Mux {
 
   // --- client -> upstreams ---------------------------------------------------
   fromClient(data) {
-    // nothing to route or rewrite without a context, unless it is one of the
-    // Target.* commands the gateway handles (their method name is a JSON
-    // string, so it appears as "Target. — or escaped, browser-exit.mjs) or
-    // one it checks (client-frame.mjs)
-    if (!this.context && !this.attaching && !data.includes('"Target.') && !needsGuard(data)) {
-      this.toMain(data);
-      return;
-    }
     const checked = guardFrame(data);
     if (checked.note) log(`mux ${this.clientAddr}: ${checked.note}`);
     if (checked.notes) for (const note of checked.notes) log(`mux ${this.clientAddr}: ${note}`);
@@ -459,11 +434,11 @@ export class Mux {
         await context.destroy('client went away during startup');
         return;
       }
-      const ws = await openWs(context.browserWsUrl());
+      const ws = await context.pipe.connect();
       if (this.closed || context.destroyed) {
         // the client left (or the chromium died) while the connection opened:
         // nothing else would ever destroy the context
-        ws.terminate();
+        ws.close();
         if (!this.closed) throw new Error('isolated CDP context exited during startup');
         await context.destroy('client went away during startup');
         return;
@@ -478,7 +453,6 @@ export class Mux {
       ws.on('close', () => {
         if (this.context === context) context.destroy('context connection closed');
       });
-      ws.on('error', (err) => log(`mux ${this.clientAddr}: ${context.name} upstream error: ${err.message}`));
       // mirror the client's target-tracking setup onto the new browser so
       // its pages reach the client the same way the main browser's do
       if (this.discover) await this.internalSend('context', 'Target.setDiscoverTargets', this.discover);
@@ -639,7 +613,7 @@ export class Mux {
     this.closed = true;
     muxes.delete(this);
     this.context?.destroy(reason);
-    if (this.main.readyState === WebSocket.OPEN || this.main.readyState === WebSocket.CONNECTING) this.main.terminate();
+    this.main.close();
     if (this.client.readyState === WebSocket.OPEN) this.client.close();
   }
 }

@@ -10,7 +10,10 @@
 # Needs chromium.sh to have run first (flags, env). The gateway also owns the
 # main browser: it starts it from CHROMIUM_MAIN_FLAGS_FILE — right away with
 # CHROMIUM_AUTOSTART=true, on demand with false — and outlives it, so the
-# browser closing or crashing does not stop the container.
+# browser closing or crashing does not stop the container. It is the only
+# way to the browsers: they speak CDP on a pipe to it (no DevTools port),
+# and it listens on CDP_GATEWAY_SOCKET (no TCP port), which nginx proxies
+# the CDP port to.
 
 cdp_gateway_start() {
     # Isolated contexts live until their client leaves, so nothing survives a
@@ -51,24 +54,23 @@ cdp_gateway_start() {
 
     # Selkies viewers keep the idle timer from closing the main browser
     # (someone may be using it by hand); no stream, nobody to watch.
-    local viewer_port=""
-    [ "${ENABLE_SELKIES}" = "true" ] && viewer_port="${SELKIES_INTERNAL_PORT}"
+    local viewer_socket=""
+    [ "${ENABLE_SELKIES}" = "true" ] && viewer_socket="${SELKIES_SOCKET}"
 
     # The console's "new windows to the front" (settings.sh): the helper that
     # applies it, when the browsers have a desktop to open windows on.
     local raise_switch=""
     [ "${CDP_CONTEXTS_HEADLESS}" = "0" ] && raise_switch="${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh"
 
-    log "starting CDP gateway on 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT} (main browser autostart=${CHROMIUM_AUTOSTART} idle-timeout=${CHROMIUM_IDLE_TIMEOUT}m, max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR}, web page origins allowed: ${CDP_ALLOW_ORIGINS:-none}, client Browser.close reaches the browser: ${CDP_ALLOW_BROWSER_CLOSE}, local files clients may name: ${CDP_FILE_DIRS})"
+    log "starting CDP gateway on ${CDP_GATEWAY_SOCKET} (main browser autostart=${CHROMIUM_AUTOSTART} idle-timeout=${CHROMIUM_IDLE_TIMEOUT}m, max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR}, web page origins allowed: ${CDP_ALLOW_ORIGINS:-none}, client Browser.close reaches the browser: ${CDP_ALLOW_BROWSER_CLOSE}, local files clients may name: ${CDP_FILE_DIRS})"
     start_service /tmp/cdp-gateway.log \
         env CHROME_BIN="${CHROME_BIN}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
-        CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT}" CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" \
-        CDP_GATEWAY_INTERNAL_PORT="${CDP_GATEWAY_INTERNAL_PORT}" \
+        CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" CDP_GATEWAY_SOCKET="${CDP_GATEWAY_SOCKET}" \
         CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX}" CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
         CDP_GATEWAY_FLAGS_FILE="${flags_file}" CDP_CONSOLE_WEB_PASSWORD_HASH="${console_password_hash}" \
         CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \
-        CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT}" CDP_GATEWAY_VIEWER_PORT="${viewer_port}" \
+        CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT}" CDP_GATEWAY_VIEWER_SOCKET="${viewer_socket}" \
         CDP_GATEWAY_MAIN_FLAGS_FILE="${CHROMIUM_MAIN_FLAGS_FILE}" \
         CDP_GATEWAY_RAISE_SWITCH="${raise_switch}" CDP_GATEWAY_SETTINGS_FILE="${SETTINGS_FILE}" \
         CDP_ALLOW_ORIGINS="${CDP_ALLOW_ORIGINS}" CDP_ALLOW_BROWSER_CLOSE="${CDP_ALLOW_BROWSER_CLOSE}" \
@@ -76,10 +78,25 @@ cdp_gateway_start() {
         "${CHROMIUM_ENV[@]}" \
         "${DROP[@]}" node /usr/local/lib/cdp-gateway/gateway.mjs
 
+    STOP_HOOKS+=(cdp_gateway_close_browser)
+
     # CHROMIUM_AUTOSTART=true: wait for the main browser the gateway launches
-    # before nginx opens the front door.
+    # before nginx opens the front door (its /json/version answers once the
+    # browser does).
     if [ "${CHROMIUM_AUTOSTART}" != "false" ]; then
-        wait_until 100 0.2 curl -fsS "http://127.0.0.1:${CDP_INTERNAL_PORT}/json/version" >/dev/null 2>&1 \
-            || log "WARNING: chromium DevTools endpoint not up yet; nginx forwards anyway (see /tmp/chromium.log, /tmp/cdp-gateway.log)"
+        wait_until 100 0.2 curl -fsS --unix-socket "${CDP_GATEWAY_SOCKET}" http://gateway/json/version >/dev/null 2>&1 \
+            || log "WARNING: the main browser is not up yet; nginx forwards anyway (see /tmp/chromium.log, /tmp/cdp-gateway.log)"
     fi
+}
+
+# STOP_HOOKS entry (supervisor.sh): close the main browser the orderly way
+# before the services get their signals, so the cookies and the session it
+# holds in memory reach the profile (main-browser.mjs: a SIGTERM drops them).
+# The gateway would close it on its own SIGTERM as well, but the supervisor
+# may SIGKILL it before it finished; the console's Stop returns once the
+# browser has exited. Bounded well inside docker stop's 10s.
+cdp_gateway_close_browser() {
+    timeout 8 curl -fsS -o /dev/null -X POST -H 'X-CDP-Console: 1' \
+        --unix-socket "${CDP_GATEWAY_SOCKET}" http://gateway/console/api/main/stop \
+        || log "WARNING: the main browser did not close in time; stopping it with a signal (recent cookies may be lost)"
 }

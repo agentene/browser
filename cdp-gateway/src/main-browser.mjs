@@ -7,23 +7,26 @@
 // routes-json.mjs / upgrade.mjs) or the console. When it exits — window
 // closed, Stop, a crash, a client's Browser.close — the gateway just marks it
 // stopped: the gateway, not the browser, is what the container supervises.
+// The gateway speaks CDP with it over its pipe (pipe.mjs), the only way in.
 
-import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { CdpClient } from './cdp-client.mjs';
 import { notifyChange } from './changes.mjs';
-import {
-  CHROME_BIN, MAIN_FLAGS_FILE, MAIN_LOG, MAIN_PORT, MAIN_PROFILE, readFlags,
-} from './config.mjs';
-import { devtoolsUp, fetchJson } from './devtools-http.mjs';
-import { killGroup, log, sleep } from './util.mjs';
+import { MAIN_FLAGS_FILE, MAIN_LOG, MAIN_PROFILE, readFlags } from './config.mjs';
+import { browserReady, launchChromium } from './launch.mjs';
+import { killGroup, log } from './util.mjs';
+
+const STARTUP_TIMEOUT_MS = 15_000;
 
 class MainBrowser {
   constructor() {
     this.state = 'stopped'; // | 'starting' | 'running'
     this.proc = null;
+    this.pipe = null; // its DevTools pipe while it runs
+    this.version = null; // its Browser.getVersion
+    this.browserId = ''; // the id in its /devtools/browser/<id> URL, new per launch
     this.starting = null; // the launch in progress, shared by concurrent callers
     this.stopping = null; // the shutdown in progress, likewise
     this.lastActive = Date.now(); // last time idle.mjs saw it in use
@@ -37,10 +40,15 @@ class MainBrowser {
     return this.proc?.pid;
   }
 
-  // Resolves once the main browser's DevTools endpoint answers.
+  // Resolves once the main browser answers on its pipe. One that is being
+  // stopped (still 'running' until it has exited) is waited for and started
+  // anew, instead of handing a client a browser on its way out.
   ensure() {
-    if (this.running) return Promise.resolve();
-    this.starting ??= this.launch().finally(() => { this.starting = null; });
+    if (this.running && !this.stopping) return Promise.resolve();
+    this.starting ??= (async () => {
+      if (this.stopping) await this.stopping;
+      if (!this.running) await this.launch();
+    })().finally(() => { this.starting = null; });
     return this.starting;
   }
 
@@ -50,10 +58,6 @@ class MainBrowser {
     const t0 = Date.now();
     let proc;
     try {
-      // something else on the fixed DevTools port would be mistaken for it
-      if (await devtoolsUp(MAIN_PORT)) {
-        throw new Error(`port ${MAIN_PORT} (CDP_INTERNAL_PORT) is already in use`);
-      }
       // a crashed run leaves its lock files behind, which chromium refuses
       // to start on (chromium.sh clears them at container start likewise)
       for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
@@ -68,11 +72,10 @@ class MainBrowser {
         logFile.once('error', reject);
       });
       logFile.write(`--- ${new Date().toISOString()} main browser started by the CDP gateway ---\n`);
-      proc = spawn(CHROME_BIN, readFlags(MAIN_FLAGS_FILE), {
-        detached: true, // own process group: stop() takes renderers down too
-        stdio: ['ignore', logFile, logFile],
-      });
+      let pipe;
+      ({ proc, pipe } = launchChromium(readFlags(MAIN_FLAGS_FILE), logFile, 'main browser'));
       this.proc = proc;
+      this.pipe = pipe;
       // a failed spawn is an 'error' event and no 'exit' (unhandled, it would
       // take the gateway down): the launch below then fails
       proc.on('error', (err) => {
@@ -88,22 +91,17 @@ class MainBrowser {
         logFile.end();
         if (this.proc === proc) {
           this.proc = null;
+          this.pipe = null;
           this.state = 'stopped';
           notifyChange();
         }
       });
-      for (let i = 0; i < 150; i++) {
-        if (this.proc !== proc) throw new Error(`main chromium exited during startup, see ${MAIN_LOG}`);
-        if (await devtoolsUp(MAIN_PORT)) {
-          this.state = 'running';
-          this.lastActive = Date.now();
-          notifyChange();
-          log(`main browser up on 127.0.0.1:${MAIN_PORT} (pid ${proc.pid}, ${Date.now() - t0}ms)`);
-          return;
-        }
-        await sleep(100);
-      }
-      throw new Error(`main chromium did not open its DevTools port ${MAIN_PORT} within 15s, see ${MAIN_LOG}`);
+      this.version = await browserReady(proc, pipe, STARTUP_TIMEOUT_MS, MAIN_LOG);
+      this.browserId = randomUUID();
+      this.state = 'running';
+      this.lastActive = Date.now();
+      notifyChange();
+      log(`main browser up (pid ${proc.pid}, ${Date.now() - t0}ms)`);
     } catch (err) {
       log(`main browser start failed: ${err.message}`);
       if (proc) await this.stop();
@@ -134,13 +132,12 @@ class MainBrowser {
       try { process.kill(proc.pid, 'SIGTERM'); } catch { /* already gone */ }
     };
     const timers = [setTimeout(term, 5000), setTimeout(() => killGroup(proc.pid, 'SIGKILL'), 15000)];
-    if (this.running) {
-      fetchJson(MAIN_PORT, '/json/version')
-        .then((v) => CdpClient.connect(v.webSocketDebuggerUrl))
-        .then((cdp) => cdp.send('Browser.close').catch(() => { /* the connection dies with it */ }))
-        .catch(term);
+    const { pipe } = this;
+    if (this.running && pipe) {
+      // no reply comes when it works: the pipe closes with the browser
+      pipe.call('Browser.close').catch(() => { if (!pipe.closed) term(); });
     } else {
-      term(); // still starting: no DevTools to ask yet
+      term(); // still starting: nothing to ask yet
     }
     await exited;
     timers.forEach(clearTimeout);

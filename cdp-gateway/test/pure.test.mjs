@@ -6,13 +6,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { browserExitAction, hasEscape, mayEndBrowser } from '../src/browser-exit.mjs';
+import { browserExitAction } from '../src/browser-exit.mjs';
 import { appId, intEnv } from '../src/config.mjs';
 import { broadcast, MAX_BUFFERED } from '../src/console-live.mjs';
 import { listedAppIds } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
 import { consoleDenied, consoleOriginDenied, hashPassword, verifyPassword } from '../src/console-auth.mjs';
-import { rewriteHost } from '../src/devtools-http.mjs';
 import { requestPath, viaWeb } from '../src/respond.mjs';
 import { connectionsTo } from '../src/idle.mjs';
 import { adjustPrefs, cloned } from '../src/profile.mjs';
@@ -31,29 +30,6 @@ test('intEnv: default, integer, rejects junk', () => {
 test('appId matches the entrypoint convention', () => {
   assert.equal(appId('main'), 'cdp-main');
   assert.equal(appId('context-3'), 'cdp-context-3');
-});
-
-test('rewriteHost swaps the loopback host:port in the address fields only', () => {
-  const v = {
-    webSocketDebuggerUrl: 'ws://127.0.0.1:9221/devtools/browser/x',
-    other: 'ws://127.0.0.1:9221/z',
-  };
-  assert.deepEqual(rewriteHost(v, 9221, 'example.com:9222'), {
-    webSocketDebuggerUrl: 'ws://example.com:9222/devtools/browser/x',
-    other: 'ws://127.0.0.1:9221/z',
-  });
-  const list = [{
-    devtoolsFrontendUrl: '/devtools/inspector.html?ws=127.0.0.1:9221/devtools/page/y',
-    webSocketDebuggerUrl: 'ws://127.0.0.1:9333/devtools/page/z',
-    title: 'http://127.0.0.1:9221/',
-    url: 'http://127.0.0.1:9221/json',
-  }];
-  assert.deepEqual(rewriteHost(list, 9221, 'example.com:9222'), [{
-    devtoolsFrontendUrl: '/devtools/inspector.html?ws=example.com:9222/devtools/page/y',
-    webSocketDebuggerUrl: 'ws://127.0.0.1:9333/devtools/page/z',
-    title: 'http://127.0.0.1:9221/',
-    url: 'http://127.0.0.1:9221/json',
-  }]);
 });
 
 const basic = (user, pw) => `Basic ${Buffer.from(`${user}:${pw}`).toString('base64')}`;
@@ -227,49 +203,45 @@ test('cookieKey: name, domain, path and partition make a cookie', () => {
   assert.notEqual(cookieKey(c), cookieKey({ ...c, partitionKey: { topLevelSite: 'https://b' } }));
 });
 
-test('connectionsTo counts established connections on the local port', () => {
+test('connectionsTo counts the connected streams on a unix socket', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cdp-gateway-test-'));
-  const table = path.join(dir, 'tcp');
-  // port 8082 = 0x1F92; state 01 = ESTABLISHED, 0A = LISTEN
+  const table = path.join(dir, 'unix');
+  // st 01 = listening (or unconnected), 03 = connected; accepted connections
+  // carry the server's path, its clients none
   fs.writeFileSync(table, [
-    '  sl  local_address rem_address   st tx_queue rx_queue',
-    '   0: 0100007F:1F92 00000000:0000 0A 00000000:00000000',
-    '   1: 0100007F:1F92 0100007F:D431 01 00000000:00000000',
-    '   2: 0100007F:D431 0100007F:1F92 01 00000000:00000000',
-    '   3: 0100007F:1F93 0100007F:D432 01 00000000:00000000',
+    'Num       RefCount Protocol Flags    Type St Inode Path',
+    '0000000000000000: 00000002 00000000 00010000 0001 01 101 /tmp/agentene/selkies.sock',
+    '0000000000000000: 00000003 00000000 00000000 0001 03 102 /tmp/agentene/selkies.sock',
+    '0000000000000000: 00000003 00000000 00000000 0001 03 103',
+    '0000000000000000: 00000003 00000000 00000000 0001 03 104 /tmp/agentene/selkies.sock',
+    '0000000000000000: 00000003 00000000 00000000 0001 03 105 /tmp/agentene/cdp-gateway.sock',
   ].join('\n'));
   try {
-    assert.equal(connectionsTo(8082, [table, path.join(dir, 'missing')]), 1);
-    assert.equal(connectionsTo(8083, [table]), 1);
-    assert.equal(connectionsTo(9999, [table]), 0);
+    assert.equal(connectionsTo('/tmp/agentene/selkies.sock', table), 2);
+    assert.equal(connectionsTo('/tmp/agentene/cdp-gateway.sock', table), 1);
+    assert.equal(connectionsTo('/tmp/agentene/none.sock', table), 0);
+    assert.equal(connectionsTo('/tmp/agentene/selkies.sock', path.join(dir, 'missing')), 0);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('browserExitAction / mayEndBrowser: Browser.close is answered, crashes refused, unless allowed', () => {
+test('browserExitAction: Browser.close is answered, crashes refused, unless allowed', () => {
   assert.equal(browserExitAction('Browser.close', false), 'close');
   assert.equal(browserExitAction('Browser.crash', false), 'refuse');
   assert.equal(browserExitAction('Browser.crashGpuProcess', false), 'refuse');
   assert.equal(browserExitAction('Browser.getVersion', false), null);
   assert.equal(browserExitAction('Browser.close', true), null);
-  assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Browser.close"}'), false), true);
-  assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Page.navigate"}'), false), false);
-  assert.equal(mayEndBrowser(Buffer.from('{"id":1,"method":"Browser.close"}'), true), false);
-  // a JSON escape may hide the name (chromium decodes it): parsed to be sure
-  assert.equal(mayEndBrowser(Buffer.from(String.raw`{"id":1,"method":"Browser.\u0063lose"}`), false), true);
-  assert.equal(mayEndBrowser(Buffer.from(String.raw`{"id":1,"method":"\u0042rowser.crash"}`), false), true);
-  assert.equal(hasEscape(Buffer.from('{"id":1,"method":"Page.navigate"}')), false);
 });
 
 test('originTabs: one tab per http(s) origin', () => {
   assert.deepEqual(originTabs([
-    { id: 'A', url: 'https://a.example/x' },
-    { id: 'B', url: 'https://a.example/y' },
-    { id: 'C', url: 'http://b.example:8080/' },
-    { id: 'D', url: 'about:blank' },
-    { id: 'E', url: 'chrome://newtab/' },
-    { id: 'F', url: 'not a url' },
+    { targetId: 'A', url: 'https://a.example/x' },
+    { targetId: 'B', url: 'https://a.example/y' },
+    { targetId: 'C', url: 'http://b.example:8080/' },
+    { targetId: 'D', url: 'about:blank' },
+    { targetId: 'E', url: 'chrome://newtab/' },
+    { targetId: 'F', url: 'not a url' },
   ]), [['https://a.example', 'A'], ['http://b.example:8080', 'C']]);
 });
 

@@ -1,10 +1,12 @@
-// /devtools/page relay against a fake chromium page endpoint (node --test).
+// /devtools/page relay against a fake chromium page endpoint (node --test),
+// reached the way the relay reaches a browser's pipe (fake-upstream.mjs).
 
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
 import { test } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
 import { openRelays, relay } from '../src/relay.mjs';
+import { wsConnection } from './fake-upstream.mjs';
 
 class FakeClient extends EventEmitter {
   readyState = WebSocket.OPEN;
@@ -26,7 +28,7 @@ class FakeClient extends EventEmitter {
   }
 }
 
-test('frames sent before the upstream is open keep their type, both ways', async () => {
+test('frames go both ways as text', async () => {
   const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   await once(server, 'listening');
   const got = [];
@@ -36,9 +38,8 @@ test('frames sent before the upstream is open keep their type, both ways', async
   }));
   const client = new FakeClient();
   const before = openRelays();
-  relay(client, `ws://127.0.0.1:${server.address().port}/devtools/page/X`);
+  relay(client, await wsConnection(`ws://127.0.0.1:${server.address().port}/devtools/page/X`));
   assert.equal(openRelays(), before + 1);
-  // ws hands text frames over as Buffers: before the fix these went out binary
   client.emit('message', Buffer.from('{"id":1,"method":"Runtime.enable"}'), false);
   await once(client, 'sent');
   client.emit('message', Buffer.from('{"id":2,"method":"Runtime.evaluate"}'), false);
@@ -50,13 +51,25 @@ test('frames sent before the upstream is open keep their type, both ways', async
   server.close();
 });
 
+test('a closing upstream (the page closed) closes the client', async () => {
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await once(server, 'listening');
+  server.on('connection', (ws) => setImmediate(() => ws.close()));
+  const client = new FakeClient();
+  const before = openRelays();
+  relay(client, await wsConnection(`ws://127.0.0.1:${server.address().port}/devtools/page/X`));
+  await once(client, 'close');
+  assert.equal(openRelays(), before);
+  server.close();
+});
+
 test('Browser.close on a page WebSocket closes that connection only, never reaching chromium', async () => {
   const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   await once(server, 'listening');
   const got = [];
   server.on('connection', (ws) => ws.on('message', (data) => got.push(data.toString())));
   const client = new FakeClient();
-  relay(client, `ws://127.0.0.1:${server.address().port}/devtools/page/X`);
+  relay(client, await wsConnection(`ws://127.0.0.1:${server.address().port}/devtools/page/X`));
   client.emit('message', Buffer.from('{"id":1,"method":"Browser.crash"}'), false);
   assert.match(client.sent[0][0], /"error".*Browser\.crash refused/);
   client.emit('message', Buffer.from('{"id":2,"method":"Browser.close"}'), false);
@@ -78,7 +91,7 @@ async function fakePage() {
     ws.send(JSON.stringify({ id, result: {} }));
   }));
   const client = new FakeClient();
-  relay(client, `ws://127.0.0.1:${server.address().port}/devtools/page/X`);
+  relay(client, await wsConnection(`ws://127.0.0.1:${server.address().port}/devtools/page/X`));
   const sendAndWait = async (frame) => {
     const n = client.sent.length;
     client.emit('message', Buffer.from(frame), false);
@@ -113,9 +126,9 @@ test('file paths outside CDP_FILE_DIRS are refused on a page WebSocket; checked 
     '{"id":3,"method":"DOM.setFileInputFiles","params":{"files":["/browser/downloads/a.txt"],"nodeId":5}}',
     '{"id":4,"method":"Page.setDownloadBehavior","params":{"behavior":"allow","downloadPath":"/browser/downloads"}}',
   ]);
-  // everything else still goes as it came
+  // everything else too goes as the command the check read
   await sendAndWait('{"id":5, "method":"Runtime.evaluate","params":{"expression":"1"}}');
-  assert.equal(got[2], '{"id":5, "method":"Runtime.evaluate","params":{"expression":"1"}}');
+  assert.equal(got[2], '{"id":5,"method":"Runtime.evaluate","params":{"expression":"1"}}');
   client.terminate();
   server.close();
 });

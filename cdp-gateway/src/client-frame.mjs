@@ -4,16 +4,16 @@
 // (file-access.mjs), and the commands that would open a CDP channel the
 // gateway never sees (UNCHECKED_CHANNELS).
 //
-// Most frames are not even parsed (needsGuard: none of the methods can be in
-// them). A frame that is parsed goes upstream re-serialized from the parsed
-// command, never as it came: the gateway's JSON.parse and chromium's own
-// parser differ in places (raw control characters in strings, duplicate
-// keys), and a frame both read differently could otherwise hide a command
-// from the check. A frame JSON.parse rejects is answered here with
-// chromium's own parse error, for the same reason.
+// Every client frame is parsed — the pipe the browsers speak CDP on (pipe.mjs)
+// needs each command's id and session anyway — and goes upstream as the
+// command the check read, re-serialized, never as it came: the gateway's
+// JSON.parse and chromium's own parser differ in places (raw control
+// characters in strings, duplicate keys), and a frame both read differently
+// could otherwise hide a command from the check. A frame JSON.parse rejects
+// is answered here with chromium's own parse error, for the same reason.
 
-import { REFUSED_MESSAGE, browserExitAction, hasEscape, mayEndBrowser } from './browser-exit.mjs';
-import { checkFiles, mayTouchFiles } from './file-access.mjs';
+import { REFUSED_MESSAGE, browserExitAction } from './browser-exit.mjs';
+import { checkFiles } from './file-access.mjs';
 
 const WRAPPER = 'Target.sendMessageToTarget';
 // how deep sendMessageToTarget wrappers are followed (each is a session
@@ -27,13 +27,6 @@ const MAX_DEPTH = 8;
 // the method names assembled at run time, so no frame the gateway reads
 // ever names them. Refused at any depth.
 const UNCHECKED_CHANNELS = new Set(['Target.exposeDevToolsProtocol']);
-const CHANNEL_MARKERS = ['exposeDevToolsProtocol'];
-
-// Whether a raw frame may hold a command the gateway checks.
-export function needsGuard(data) {
-  return hasEscape(data) || mayEndBrowser(data) || mayTouchFiles(data)
-    || CHANNEL_MARKERS.some((marker) => data.includes(marker));
-}
 
 // A raw frame as a command: { msg } or { answer } (chromium's own error for
 // a frame that is no JSON object; it has no id to answer under).
@@ -96,8 +89,8 @@ export function answerFor(msg, answer) {
 
 // The whole check of one client frame, as every caller applies it (mux.mjs,
 // relay.mjs — one decision, not one per connection kind):
-//   { msg, forward, notes }  send forward upstream: the command re-serialized
-//                            (msg: the parsed command, for mux's routing)
+//   { msg, notes }           send msg upstream (the parsed command, or a
+//                            rewritten copy); notes: what was rewritten
 //   { answer, close, note }  never forwarded. Answer the client instead —
 //                            answer is null when the command has no id to
 //                            answer under (a parse error). close: end the
@@ -108,7 +101,7 @@ export function guardFrame(data) {
   const parsed = parseCommand(data);
   if (parsed.answer) return { answer: parsed.answer, close: false };
   const guarded = guardCommand(parsed.msg);
-  if (guarded.msg) return { msg: guarded.msg, forward: JSON.stringify(guarded.msg), notes: guarded.notes };
+  if (guarded.msg) return { msg: guarded.msg, notes: guarded.notes };
   return {
     answer: parsed.msg.id === undefined ? null : answerFor(parsed.msg, guarded.answer),
     close: guarded.close,

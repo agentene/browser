@@ -1,9 +1,10 @@
-// The auth service over HTTP (node --test): server.mjs on a free loopback
-// port with a throw-away AUTH_FILE, the way nginx talks to it.
+// The auth service over HTTP (node --test): server.mjs on a unix socket of
+// its own with a throw-away AUTH_FILE, the way nginx talks to it.
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,26 +12,37 @@ import { after, before, test } from 'node:test';
 
 const SERVER = path.resolve(import.meta.dirname, '../server.mjs');
 const CODE = 'test-setup-code';
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-server-'));
+const SOCKET = path.join(dir, 'auth.sock');
+const base = 'http://auth';
 let proc;
-let base;
 
-function freePort() {
-  return new Promise((resolve) => {
-    const srv = net.createServer().listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
+// fetch's shape (status, headers.get, json) over the socket
+function fetch(url, { method = 'GET', headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ socketPath: SOCKET, path: new URL(url).pathname, method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString();
+        resolve({
+          status: res.statusCode,
+          headers: { get: (name) => [res.headers[name.toLowerCase()]].flat().join(', ') || null },
+          json: async () => JSON.parse(text),
+          text: async () => text,
+        });
+      });
     });
+    req.on('error', reject);
+    req.end(body);
   });
 }
 
 before(async () => {
-  const port = await freePort();
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'auth-server-')), 'auth.json');
   proc = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, AUTH_INTERNAL_PORT: String(port), AUTH_FILE: file, AUTH_SETUP_CODE: CODE },
+    env: { ...process.env, AUTH_SOCKET: SOCKET, AUTH_FILE: path.join(dir, 'auth.json'), AUTH_SETUP_CODE: CODE },
     stdio: 'ignore',
   });
-  base = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i++) {
     try {
       await fetch(`${base}/api/state`);
@@ -42,7 +54,10 @@ before(async () => {
   throw new Error('auth server did not start');
 });
 
-after(() => proc?.kill());
+after(() => {
+  proc?.kill();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 const call = (method, name, body) => fetch(`${base}/api/${name}`, {
   method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -51,8 +66,7 @@ const call = (method, name, body) => fetch(`${base}/api/${name}`, {
 // A raw request target, as a client could send it past nginx.
 function rawStatus(target) {
   return new Promise((resolve, reject) => {
-    const { port } = new URL(base);
-    const socket = net.connect(Number(port), '127.0.0.1', () => {
+    const socket = net.connect(SOCKET, () => {
       socket.write(`GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
     });
     let data = '';

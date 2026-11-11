@@ -21,7 +21,7 @@ export async function handleHttp(req, res) {
     } else if (err instanceof HttpError) {
       send(res, err.status, { error: err.message });
     } else {
-      // the details (loopback ports, chromium's answers) stay in the log
+      // the details (chromium's answers) stay in the log
       send(res, 502, { error: 'the browser did not answer' });
     }
   }

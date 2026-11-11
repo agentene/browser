@@ -2,9 +2,8 @@
 // profile clone may miss because chromium has not written it to disk yet.
 
 import { CdpClient } from './cdp-client.mjs';
-import { MAIN_PORT } from './config.mjs';
-import { fetchJson, pageTargets } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
+import { pageInfos } from './targets.mjs';
 import { log, sleep } from './util.mjs';
 
 // Storage.getCookies' cookie as Storage.setCookies' parameter.
@@ -30,44 +29,32 @@ export function cookieKey(c) {
 // (HttpOnly included) from the main browser to close that gap. Clients
 // reach contexts through the main browser, which starts a stopped one; if
 // it was stopped in between, its orderly exit left them all on disk.
-export async function copyCookies(contextWsUrl) {
-  if (!mainBrowser.running) return 0;
-  const version = await fetchJson(MAIN_PORT, '/json/version');
-  const main = await CdpClient.connect(version.webSocketDebuggerUrl);
-  let cookies;
-  try {
-    ({ cookies } = await main.send('Storage.getCookies'));
-  } finally {
-    main.close();
-  }
+export async function copyCookies(contextPipe) {
+  const main = mainBrowser.running && mainBrowser.pipe;
+  if (!main) return 0;
+  const { cookies } = await main.call('Storage.getCookies');
   const params = cookies.map(cookieParam);
-  const context = await CdpClient.connect(contextWsUrl);
-  let missing = [];
-  try {
-    const set = async (batch) => {
-      try {
-        await context.send('Storage.setCookies', { cookies: batch });
-      } catch {
-        // one malformed cookie fails the whole batch; retry one by one
-        for (const p of batch) {
-          try { await context.send('Storage.setCookies', { cookies: [p] }); } catch { /* counted below */ }
-        }
+  const set = async (batch) => {
+    try {
+      await contextPipe.call('Storage.setCookies', { cookies: batch });
+    } catch {
+      // one malformed cookie fails the whole batch; retry one by one
+      for (const p of batch) {
+        try { await contextPipe.call('Storage.setCookies', { cookies: [p] }); } catch { /* counted below */ }
       }
-    };
-    const absent = async (batch) => {
-      const have = new Set((await context.send('Storage.getCookies')).cookies.map(cookieKey));
-      return batch.filter((p) => !have.has(cookieKey(p)));
-    };
-    await set(params);
-    // read back: anything chromium dropped after accepting it (startup
-    // cleanup, store loading) gets one more try
-    missing = await absent(params);
-    if (missing.length) {
-      await set(missing);
-      missing = await absent(missing);
     }
-  } finally {
-    context.close();
+  };
+  const absent = async (batch) => {
+    const have = new Set((await contextPipe.call('Storage.getCookies')).cookies.map(cookieKey));
+    return batch.filter((p) => !have.has(cookieKey(p)));
+  };
+  await set(params);
+  // read back: anything chromium dropped after accepting it (startup
+  // cleanup, store loading) gets one more try
+  let missing = await absent(params);
+  if (missing.length) {
+    await set(missing);
+    missing = await absent(missing);
   }
   if (missing.length) {
     log(`cookie sync: ${missing.length}/${params.length} cookies missing in the context: ${missing.slice(0, 10).map((c) => `${c.name}@${c.domain}`).join(', ')}`);
@@ -85,7 +72,7 @@ export function originTabs(targets) {
     } catch {
       continue;
     }
-    if (/^https?:/.test(origin) && !tabs.has(origin)) tabs.set(origin, target.id);
+    if (/^https?:/.test(origin) && !tabs.has(origin)) tabs.set(origin, target.targetId);
   }
   return [...tabs];
 }
@@ -102,17 +89,20 @@ const SNAPSHOT_TIMEOUT_MS = 3000;
 // within SNAPSHOT_TIMEOUT_MS however many tabs are open.
 export async function snapshotLocalStorage() {
   const snapshot = new Map(); // origin -> [[key, value], ...]
-  await Promise.all(originTabs(await pageTargets(MAIN_PORT)).map(async ([origin, targetId]) => {
-    let cdp;
+  const main = mainBrowser.running && mainBrowser.pipe;
+  if (!main) return snapshot;
+  const timeout = SNAPSHOT_TIMEOUT_MS;
+  await Promise.all(originTabs(await pageInfos(main)).map(async ([origin, targetId]) => {
+    let sessionId;
     try {
-      cdp = await CdpClient.connect(`ws://127.0.0.1:${MAIN_PORT}/devtools/page/${targetId}`, SNAPSHOT_TIMEOUT_MS);
-      const { entries } = await cdp.send('DOMStorage.getDOMStorageItems',
-        { storageId: { storageKey: `${origin}/`, isLocalStorage: true } }, { timeout: SNAPSHOT_TIMEOUT_MS });
+      ({ sessionId } = await main.call('Target.attachToTarget', { targetId, flatten: true }, { timeout }));
+      const { entries } = await main.call('DOMStorage.getDOMStorageItems',
+        { storageId: { storageKey: `${origin}/`, isLocalStorage: true } }, { sessionId, timeout });
       snapshot.set(origin, entries);
     } catch (err) {
       log(`localStorage snapshot of ${origin} skipped: ${err.message}`);
     } finally {
-      cdp?.close();
+      if (sessionId) main.call('Target.detachFromTarget', { sessionId }).catch(() => {});
     }
   }));
   return snapshot;
@@ -121,9 +111,9 @@ export async function snapshotLocalStorage() {
 // Write the snapshot into the context through a temporary tab that "visits"
 // each origin: every request is answered with an empty page (Fetch) and
 // service workers are bypassed, so no site code runs.
-export async function restoreLocalStorage(contextWsUrl, snapshot) {
+export async function restoreLocalStorage(contextPipe, snapshot) {
   if (!snapshot.size) return 0;
-  const cdp = await CdpClient.connect(contextWsUrl);
+  const cdp = await CdpClient.connect(contextPipe);
   let restored = 0;
   let targetId; // the temporary tab; closed however the restoring went
   try {

@@ -7,6 +7,7 @@ import { once } from 'node:events';
 import { test } from 'node:test';
 import { WebSocketServer } from 'ws';
 import { restoreLocalStorage } from '../src/storage-sync.mjs';
+import { wsConnection } from './fake-upstream.mjs';
 
 // A fake context chromium: what it answers, and what reached it.
 async function fakeContext(answers = {}) {
@@ -35,7 +36,8 @@ async function fakeContext(answers = {}) {
   });
   return {
     got,
-    url: `ws://127.0.0.1:${server.address().port}/devtools/browser/fake`,
+    // the context browser's pipe, as restoreLocalStorage connects to it
+    pipe: { connect: () => wsConnection(`ws://127.0.0.1:${server.address().port}/devtools/browser/fake`) },
     close: () => server.close(),
   };
 }
@@ -48,7 +50,7 @@ test('a mid-restore failure still closes the temporary tab', async () => {
   });
   try {
     const snapshot = new Map([['https://a.example', [['k', 'v']]]]);
-    await assert.rejects(restoreLocalStorage(context.url, snapshot), /Page.enable: boom/);
+    await assert.rejects(restoreLocalStorage(context.pipe, snapshot), /Page.enable: boom/);
     const closed = context.got.filter((m) => m.method === 'Target.closeTarget');
     assert.equal(closed.length, 1, 'the tab is closed exactly once');
     assert.deepEqual(closed[0].params, { targetId: 'T1' });
@@ -68,7 +70,7 @@ test('a successful restore closes the tab after the last origin', async () => {
       ['https://a.example', [['k', 'v']]],
       ['http://b.example:8080', []],
     ]);
-    assert.equal(await restoreLocalStorage(context.url, snapshot), 2);
+    assert.equal(await restoreLocalStorage(context.pipe, snapshot), 2);
     const methods = context.got.map((m) => m.method);
     assert.equal(methods.lastIndexOf('Target.closeTarget'), methods.length - 1, 'closed after everything else');
     assert.equal(methods.filter((m) => m === 'DOMStorage.setDOMStorageItem').length, 1);
@@ -80,7 +82,7 @@ test('a successful restore closes the tab after the last origin', async () => {
 test('an empty snapshot touches nothing', async () => {
   const context = await fakeContext();
   try {
-    assert.equal(await restoreLocalStorage(context.url, new Map()), 0);
+    assert.equal(await restoreLocalStorage(context.pipe, new Map()), 0);
     assert.deepEqual(context.got, []);
   } finally {
     context.close();

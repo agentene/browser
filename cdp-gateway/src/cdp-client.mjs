@@ -1,22 +1,14 @@
-// A minimal CDP client for the gateway's own one-off commands.
+// A minimal CDP client for the gateway's own commands that need events of
+// their own (a page's screencast, the localStorage restore): a connection
+// of a browser's pipe (pipe.mjs), a browser-target one or a page's. One-off
+// commands go to the pipe directly (pipe.call).
 
-import WebSocket from 'ws';
-import { WS_OPEN_TIMEOUT_MS, WS_OPTIONS } from './config.mjs';
-
-// A WebSocket of the gateway's own to a chromium, once it is open; rejects
-// when it cannot be opened within `timeout` (a hung handshake included).
-export async function openWs(url, timeout = WS_OPEN_TIMEOUT_MS) {
-  const ws = new WebSocket(url, { ...WS_OPTIONS, handshakeTimeout: timeout });
-  await new Promise((resolve, reject) => {
-    ws.once('open', resolve);
-    ws.once('error', reject);
-  });
-  return ws;
-}
+import { OPEN } from './pipe.mjs';
 
 export class CdpClient {
-  static async connect(url, timeout) {
-    return new CdpClient(await openWs(url, timeout));
+  // options: pipe.connect's ({ targetId } for a page)
+  static async connect(pipe, options, timeout) {
+    return new CdpClient(await pipe.connect(options, timeout));
   }
 
   constructor(ws) {
@@ -41,9 +33,6 @@ export class CdpClient {
       if (msg.error) p.reject(new Error(`${p.method}: ${msg.error.message}`));
       else p.resolve(msg.result);
     });
-    // an error is followed by 'close', which rejects what is pending; without
-    // a listener it would be an uncaught exception
-    ws.on('error', () => {});
     ws.on('close', () => {
       for (const p of this.pending.values()) p.reject(new Error('CDP connection closed'));
       this.pending.clear();
@@ -56,7 +45,7 @@ export class CdpClient {
 
   send(method, params = {}, { sessionId, timeout = 15000 } = {}) {
     const id = this.nextId++;
-    if (this.ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error(`${method}: CDP connection closed`));
+    if (this.ws.readyState !== OPEN) return Promise.reject(new Error(`${method}: CDP connection closed`));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -67,7 +56,7 @@ export class CdpClient {
         resolve: (v) => { clearTimeout(timer); resolve(v); },
         reject: (e) => { clearTimeout(timer); reject(e); },
       });
-      this.ws.send(JSON.stringify({ id, method, params, sessionId }));
+      this.ws.send({ id, method, params, sessionId });
     });
   }
 

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# selkies.sh — the Selkies HTML5 remote desktop, on loopback behind nginx.
+# selkies.sh — the Selkies HTML5 remote desktop, on a unix socket behind nginx.
 #
 # Extra settings ride the native SELKIES_* env vars (CLI > env > default),
 # e.g. SELKIES_ENCODER (selkies' own default: h264enc).
@@ -11,13 +11,14 @@ selkies_start() {
     selkies_media_defaults
     [ -n "${SELKIES_EXTRA_ARGS:-}" ] && read -r -a extra_args <<< "${SELKIES_EXTRA_ARGS}"
 
-    log "starting selkies on ${SELKIES_ADDR}:${SELKIES_INTERNAL_PORT} (${DISPLAY_BACKEND}, path ${SELKIES_SUBFOLDER:-/}, fronted by nginx)"
+    log "starting selkies on ${SELKIES_SOCKET} (${DISPLAY_BACKEND}, path ${SELKIES_SUBFOLDER:-/}, fronted by nginx)"
     # TLS terminates at nginx, so selkies itself always serves plain HTTP on
-    # the loopback port nginx proxies to.
+    # the socket nginx proxies to. A unix socket, not a loopback port: a page
+    # in the browser could open a loopback port's origin and use the desktop
+    # past nginx's login (config.sh).
     start_service - \
         "${DROP[@]}" selkies \
-        --addr="${SELKIES_ADDR}" \
-        --port="${SELKIES_INTERNAL_PORT}" \
+        --unix-socket="${SELKIES_SOCKET}" \
         --subfolder="${SELKIES_SUBFOLDER}" \
         --enable-resize="${SELKIES_ENABLE_RESIZE:-true}" \
         "${SELKIES_BACKEND_ARGS[@]}" \
@@ -25,14 +26,19 @@ selkies_start() {
         "${extra_args[@]}"
 }
 
-# Hold nginx back until Selkies answers on its loopback port: it binds only
-# after attaching to the display (~0.5 s after its start on X11 and Wayland
-# alike, by which time chromium is up and nginx would already be serving),
-# so the first web UI requests got 502s and the "ready" line came early.
-# Any HTTP answer counts (a login-protected UI replies 401).
+# Hold nginx back until Selkies answers on its socket: it binds only after
+# attaching to the display (~0.5 s after its start on X11 and Wayland alike,
+# by which time chromium is up and nginx would already be serving), so the
+# first web UI requests got 502s and the "ready" line came early. Any HTTP
+# answer counts (a login-protected UI replies 401). The socket is then
+# opened to the nginx workers, who are nobody with RUN_USER=0 (Selkies:
+# root); otherwise they are Selkies' own user anyway.
 selkies_wait_ready() {
-    wait_until 150 0.2 curl -sS -o /dev/null "http://127.0.0.1:${SELKIES_INTERNAL_PORT}/" >/dev/null 2>&1 \
-        || log "WARNING: selkies is not answering on 127.0.0.1:${SELKIES_INTERNAL_PORT} after 30s; nginx serves 502 until it does"
+    if wait_until 150 0.2 curl -sS -o /dev/null --unix-socket "${SELKIES_SOCKET}" http://selkies/ >/dev/null 2>&1; then
+        chmod 0666 "${SELKIES_SOCKET}"
+    else
+        log "WARNING: selkies is not answering on ${SELKIES_SOCKET} after 30s; nginx serves 502 until it does"
+    fi
 }
 
 # Enable the login screen only when a password is around; Selkies refuses to

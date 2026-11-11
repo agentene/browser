@@ -3,10 +3,12 @@
 #
 # One nginx instance serves every public port, on these container ports
 # (NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT / CDP_LISTEN_PORT):
-#   ${NGINX_LISTEN_HTTP_PORT}  -> 127.0.0.1:${SELKIES_INTERNAL_PORT}  web UI, HTTP (always)
-#   ${NGINX_LISTEN_HTTPS_PORT} -> 127.0.0.1:${SELKIES_INTERNAL_PORT}  web UI, TLS (optional)
-#   ${CDP_LISTEN_PORT} -> 127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT}     CDP gateway
-#                         (which talks to chromium on ${CDP_INTERNAL_PORT})
+#   ${NGINX_LISTEN_HTTP_PORT}  -> ${SELKIES_SOCKET}      web UI, HTTP (always)
+#   ${NGINX_LISTEN_HTTPS_PORT} -> ${SELKIES_SOCKET}      web UI, TLS (optional)
+#   ${CDP_LISTEN_PORT} -> ${CDP_GATEWAY_SOCKET}  CDP gateway (which talks
+#                         to the browsers on their DevTools pipes)
+# The services behind it are on unix sockets (config.sh: no TCP port a page
+# in the browser could open the origin of).
 # With the CDP console panel (CDP_CONSOLE_PANEL_ACTIVE, config.sh) the web UI
 # also gets the sidebar script injected into its entry page and
 # <subfolder>/cdp-console/ proxied to the gateway's /console/; with the
@@ -27,8 +29,9 @@
 
 NGINX_CONF=/tmp/nginx/nginx.conf
 
-# Port plan + PORT_FORWARDS validation, run right after config_load: a port
-# clash or a malformed forward stops the container before any service starts.
+# Listener plan + PORT_FORWARDS validation, run right after config_load: a
+# port clash or a malformed forward stops the container before any service
+# starts.
 nginx_prepare() {
     nginx_plan_ports
     nginx_parse_port_forwards
@@ -55,14 +58,11 @@ nginx_start() {
     start_service - nginx -c "${NGINX_CONF}"
 }
 
-# The built-in listeners and the loopback upstreams behind them, into
-# LISTEN_PORTS / UPSTREAM_PORTS.
+# The built-in listeners, into LISTEN_PORTS.
 nginx_plan_ports() {
     LISTEN_PORTS=()
-    UPSTREAM_PORTS=()
     if [ "${ENABLE_SELKIES}" = "true" ]; then
         LISTEN_PORTS+=("${NGINX_LISTEN_HTTP_PORT}")
-        UPSTREAM_PORTS+=("${SELKIES_INTERNAL_PORT}")
         if [ "${ENABLE_HTTPS}" = "true" ]; then
             LISTEN_PORTS+=("${NGINX_LISTEN_HTTPS_PORT}")
         fi
@@ -71,10 +71,6 @@ nginx_plan_ports() {
     fi
     if [ "${ENABLE_CDP}" = "true" ]; then
         LISTEN_PORTS+=("${CDP_LISTEN_PORT}")
-        UPSTREAM_PORTS+=("${CDP_INTERNAL_PORT}" "${CDP_GATEWAY_INTERNAL_PORT}")
-    fi
-    if [ "${ENABLE_AUTH}" = "true" ]; then
-        UPSTREAM_PORTS+=("${AUTH_INTERNAL_PORT}")
     fi
     return 0
 }
@@ -136,15 +132,15 @@ $(nginx_forward_server "${fwd_listen}" "${fwd_target}" "${resolver}")"
     done
 }
 
-# A listener colliding with a loopback upstream would make nginx fail at bind
-# time with a cryptic error; fail fast with a clear one.
+# Two listeners on one port would make nginx fail at bind time with a
+# cryptic error; fail fast with a clear one.
 nginx_check_port_collisions() {
-    local all_ports=("${LISTEN_PORTS[@]}" "${UPSTREAM_PORTS[@]}" "${FORWARD_LISTEN_PORTS[@]}")
+    local all_ports=("${LISTEN_PORTS[@]}" "${FORWARD_LISTEN_PORTS[@]}")
     local i j
     for i in "${!all_ports[@]}"; do
         for j in "${!all_ports[@]}"; do
             if [ "${i}" -lt "${j}" ] && [ "${all_ports[$i]}" = "${all_ports[$j]}" ]; then
-                die "port ${all_ports[$i]} is used more than once (listen: ${LISTEN_PORTS[*]:-none}; upstream: ${UPSTREAM_PORTS[*]:-none}; forwards: ${FORWARD_LISTEN_PORTS[*]:-none})"
+                die "port ${all_ports[$i]} is used more than once (listen: ${LISTEN_PORTS[*]:-none}; forwards: ${FORWARD_LISTEN_PORTS[*]:-none})"
             fi
         done
     done
@@ -264,7 +260,7 @@ nginx_web_servers() {
     # outer reverse proxy, where nginx's own host:port would be wrong.
     local locations
     locations="        location / {
-            proxy_pass http://127.0.0.1:${SELKIES_INTERNAL_PORT};
+            proxy_pass http://unix:${SELKIES_SOCKET};
         }
 $(nginx_web_entry_locations)"
     [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] && locations="${locations}
@@ -353,7 +349,7 @@ $(nginx_fwd_headers)
             sub_filter_types text/html;
             sub_filter '</head>' '${scripts}</head>';
             add_header Cache-Control "no-cache" always;
-            proxy_pass http://127.0.0.1:${SELKIES_INTERNAL_PORT};
+            proxy_pass http://unix:${SELKIES_SOCKET};
         }
 EOF
     done
@@ -373,7 +369,7 @@ $(nginx_fwd_headers)
             proxy_set_header X-CDP-Console-Via web;
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection \$connection_upgrade;
-            proxy_pass http://127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT}/console/;
+            proxy_pass http://unix:${CDP_GATEWAY_SOCKET}:/console/;
         }
 EOF
 }
@@ -382,10 +378,9 @@ EOF
 # CDP API needs the API key (if one is set) and /console a session, like the
 # web UI.
 nginx_cdp_server() {
-    # The CDP gateway talks to the main chromium (and to every context
-    # browser) itself: it rewrites the Host header to the loopback upstream
-    # and the ws:// URLs in JSON bodies back to the Host the client dialed —
-    # so pass that Host through as-is. The console marker of the web UI's
+    # The CDP gateway makes the ws:// URLs of its /json answers from the Host
+    # the client dialed — so pass that Host through as-is. The console
+    # marker of the web UI's
     # cdp-console/ proxy must not be forgeable from here, and setting it
     # drops the http-level headers, so repeat those.
     local gateway="            proxy_set_header X-CDP-Console-Via \"\";
@@ -395,7 +390,7 @@ nginx_cdp_server() {
             proxy_set_header X-Forwarded-Proto \$scheme;
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection \$connection_upgrade;
-            proxy_pass http://127.0.0.1:${CDP_GATEWAY_INTERNAL_PORT};"
+            proxy_pass http://unix:${CDP_GATEWAY_SOCKET};"
     if [ "${ENABLE_AUTH}" != "true" ]; then
         cat <<EOF
     # public CDP endpoint, via the CDP gateway
@@ -466,7 +461,7 @@ nginx_auth_locations() {
 ${headers}
             proxy_set_header X-Auth-Base "${base}";
             proxy_set_header X-Auth-Home "${home}";
-            proxy_pass http://127.0.0.1:${AUTH_INTERNAL_PORT}/;
+            proxy_pass http://unix:${AUTH_SOCKET}:/;
         }
         location @agentene_login {
             auth_request off;
@@ -476,7 +471,7 @@ ${headers}
             proxy_pass_request_body off;
             proxy_set_header Content-Length "";
             rewrite ^ /page break;
-            proxy_pass http://127.0.0.1:${AUTH_INTERNAL_PORT};
+            proxy_pass http://unix:${AUTH_SOCKET};
         }
 EOF
     for check in web cdp; do
@@ -489,7 +484,7 @@ ${headers}
             proxy_set_header X-Original-Upgrade \$http_upgrade;
             proxy_pass_request_body off;
             proxy_set_header Content-Length "";
-            proxy_pass http://127.0.0.1:${AUTH_INTERNAL_PORT}/check/${check};
+            proxy_pass http://unix:${AUTH_SOCKET}:/check/${check};
         }
 EOF
     done

@@ -1,13 +1,11 @@
 // The main browser's stop (node --test), on a stand-in process: a plain
-// `sleep`, whose DevTools endpoint never answers, so stop() falls back to
-// SIGTERM.
+// `sleep` without a DevTools pipe, so stop() falls back to SIGTERM.
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { test } from 'node:test';
 
-process.env.CDP_INTERNAL_PORT = '1'; // nothing answers there
 const { mainBrowser } = await import('../src/main-browser.mjs');
 
 test('concurrent stops share one shutdown: one SIGTERM, all resolve with the exit', async () => {

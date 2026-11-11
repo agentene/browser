@@ -6,9 +6,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
-import { guardCommand, needsGuard, parseCommand } from '../src/client-frame.mjs';
+import { guardCommand, guardFrame, parseCommand } from '../src/client-frame.mjs';
 import { parseFileDirs } from '../src/config.mjs';
-import { allowedPath, checkFiles, mayTouchFiles, realLocation } from '../src/file-access.mjs';
+import { allowedPath, checkFiles, realLocation } from '../src/file-access.mjs';
 
 // a scratch tree:
 //   root/allowed/file.txt
@@ -120,20 +120,14 @@ test('checkFiles: a download directory outside the dirs is redirected into the f
   }
 });
 
-test('mayTouchFiles / needsGuard: the cheap pre-checks on raw frames', () => {
-  for (const m of ['DOM.setFileInputFiles', 'Input.dispatchDragEvent', 'PWA.launchFilesInApp', 'Extensions.loadUnpacked', 'Browser.setDownloadBehavior', 'Page.setDownloadBehavior']) {
-    const frame = Buffer.from(JSON.stringify({ id: 1, method: m, params: {} }));
-    assert.equal(mayTouchFiles(frame, dirs), true, m);
-    assert.equal(mayTouchFiles(frame, null), false, `${m} with *`);
-    // wrapped in a sendMessageToTarget: only its quotes are escaped
-    const wrapped = JSON.stringify({ id: 2, method: 'Target.sendMessageToTarget', params: { sessionId: 's', message: frame.toString() } });
-    assert.equal(mayTouchFiles(Buffer.from(wrapped), dirs), true, `${m} wrapped`);
-  }
-  assert.equal(needsGuard(Buffer.from('{"id":1,"method":"Runtime.evaluate","params":{"expression":"1"}}')), false);
-  assert.equal(needsGuard(Buffer.from('{"id":1,"method":"DOM.\\u0073etFileInputFiles"}')), true, 'escaped');
-  assert.equal(needsGuard(Buffer.from('{"id":1,"method":"DOM.setFileInputFiles"}')), true);
-  assert.equal(needsGuard(Buffer.from('{"id":1,"method":"Browser.close"}')), true);
-  assert.equal(needsGuard(Buffer.from('{"id":1,"method":"Target.exposeDevToolsProtocol","params":{"targetId":"T"}}')), true);
+test('guardFrame: every frame is read; an escaped method name is the method', () => {
+  // chromium decodes the escape too: the name cannot hide behind one
+  const escaped = guardFrame(Buffer.from(String.raw`{"id":1,"method":"Browser.\u0063lose"}`));
+  assert.equal(escaped.close, true);
+  assert.deepEqual(escaped.answer, { id: 1, sessionId: undefined, result: {} });
+  // anything else goes on as the command read, re-serialized
+  assert.deepEqual(guardFrame(Buffer.from('{"id":2, "method":"Runtime.evaluate","params":{"expression":"1"}}')),
+    { msg: { id: 2, method: 'Runtime.evaluate', params: { expression: '1' } }, notes: [] });
 });
 
 test('guardCommand: Target.exposeDevToolsProtocol is refused, wrapped or not', () => {

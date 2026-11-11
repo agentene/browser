@@ -2,10 +2,10 @@
 //
 // Chromium refuses a DevTools WebSocket whose Origin header is not listed in
 // --remote-allow-origins: without that, any page a user has open could drive
-// a local browser (WebSockets are not covered by CORS). The gateway dials
-// chromium itself, without an Origin, and rewrites the Host header to the
-// loopback upstream — so chromium's own Origin and DNS-rebinding checks never
-// see the client's request, and the gateway has to apply them here:
+// a local browser (WebSockets are not covered by CORS). The browsers here
+// have no DevTools port (the gateway speaks CDP with them over their pipes,
+// pipe.mjs), so chromium's own Origin and DNS-rebinding checks never see a
+// client's request, and the gateway has to apply them here:
 //   * a request with an Origin header is a web page's: refused unless that
 //     origin is in CDP_ALLOW_ORIGINS ('*' = any), like --remote-allow-origins
 //     (browsers send an Origin with every WebSocket handshake and every

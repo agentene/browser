@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # auth.sh — the built-in login and the CDP API key (ENABLE_AUTH=true).
 #
-# A small Node service on loopback (/usr/local/lib/auth-server/server.mjs)
+# A small Node service on a unix socket (/usr/local/lib/auth-server/server.mjs)
 # that nginx asks about every request (auth_request, nginx.sh):
 #   * the web UI and the CDP console (on either port) need a session cookie;
 #     until the first visitor sets up the administrator login (or skips it)
@@ -30,14 +30,14 @@ auth_start() {
         setup_code="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
         [ "${#setup_code}" -eq 16 ] || die "could not make a setup code from /dev/urandom"
     fi
-    log "starting auth service on 127.0.0.1:${AUTH_INTERNAL_PORT} (${AUTH_FILE})"
+    log "starting auth service on ${AUTH_SOCKET} (${AUTH_FILE})"
     start_service /tmp/auth-server.log \
-        env AUTH_INTERNAL_PORT="${AUTH_INTERNAL_PORT}" AUTH_FILE="${AUTH_FILE}" \
+        env AUTH_SOCKET="${AUTH_SOCKET}" AUTH_FILE="${AUTH_FILE}" \
         AUTH_SETUP_CODE="${setup_code}" ENABLE_CDP="${ENABLE_CDP}" \
         "${DROP[@]}" node /usr/local/lib/auth-server/server.mjs
     # nginx answers 500 to every protected request until the service is up
-    wait_until 50 0.1 curl -sf -o /dev/null "http://127.0.0.1:${AUTH_INTERNAL_PORT}/api/state" \
-        || die "the auth service did not come up on 127.0.0.1:${AUTH_INTERNAL_PORT} (see /tmp/auth-server.log)"
+    wait_until 50 0.1 curl -sf -o /dev/null --unix-socket "${AUTH_SOCKET}" http://auth/api/state \
+        || die "the auth service did not come up on ${AUTH_SOCKET} (see /tmp/auth-server.log)"
     # printed on every start: the login may be reset later (by deleting
     # AUTH_FILE) without a restart, and the form then asks for this code
     if [ -z "${AUTH_SETUP_CODE}" ]; then

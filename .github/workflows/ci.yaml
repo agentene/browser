@@ -81,7 +81,6 @@ jobs:
           node --check update-chrome-node.mjs
           for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
           for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
-          node --check entrypoint/helpers/chromium-close.mjs
           node --check entrypoint/helpers/password-hash.mjs
           python3 -m py_compile entrypoint/helpers/*.py
 
@@ -262,6 +261,14 @@ jobs:
           console.log('CDP_FILE_DIRS smoke test OK');
           EOF
           ! docker exec gateway-smoke test -e /browser/settings/smoke.txt
+          # nothing behind nginx on a TCP port a page could open: the only
+          # listener is nginx's CDP port (9222 = 0x2406), the browser has no
+          # DevTools port, the gateway and the auth service unix sockets
+          listening="$(docker exec gateway-smoke sh -c "awk 'NR > 1 && \$4 == \"0A\" { split(\$2, a, \":\"); print a[2] }' /proc/net/tcp /proc/net/tcp6 | sort -u")"
+          [ "${listening}" = "2406" ] || { echo "unexpected TCP listeners (hex): ${listening}"; exit 1; }
+          docker exec gateway-smoke test -S /tmp/agentene/cdp-gateway.sock
+          docker exec gateway-smoke test -S /tmp/agentene/auth.sock
+          docker exec gateway-smoke grep -q -- --remote-debugging-pipe "/proc/$(docker exec gateway-smoke pgrep -o -x chrome)/cmdline"
           # an isolated context must get its own chromium and be
           # destroyed again on dispose; driven with raw CDP from the image's node
           docker exec -i gateway-smoke node --input-type=module - <<'EOF'
@@ -319,8 +326,8 @@ jobs:
           const page = (await (await fetch('http://127.0.0.1:9222/json/list')).json()).find((t) => t.type === 'page');
           await closeOn(page.webSocketDebuggerUrl);
           await new Promise((r) => setTimeout(r, 2000));
-          const after = await (await fetch('http://127.0.0.1:9221/json/version')).json();
-          if (after.webSocketDebuggerUrl !== v.webSocketDebuggerUrl.replace('9222', '9221')) throw new Error('the main browser restarted');
+          const after = await (await fetch('http://127.0.0.1:9222/json/version')).json();
+          if (after.webSocketDebuggerUrl !== v.webSocketDebuggerUrl) throw new Error('the main browser restarted');
           console.log('Browser.close smoke test OK');
           EOF
           [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' gateway-smoke)" = "true 0" ]
@@ -558,8 +565,11 @@ jobs:
       - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
         run: |
           set -euo pipefail
+          # CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close stands in for
+          # the browser closing itself (its last window)
           docker run -d --name ondemand-smoke -p 9226:9222 \
             -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 -e AUTH_SETUP_CODE=ci-setup-code \
+            -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec ondemand-smoke cat /tmp/cdp-gateway.log || true; docker logs ondemand-smoke || true; docker rm -f ondemand-smoke >/dev/null' EXIT
           # the main browser's state, from the console's live state snapshot
@@ -582,7 +592,7 @@ jobs:
           # leaves the container running
           curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:9226/console/api/main/start | jq -e '.state == "running"' >/dev/null
           docker exec -i ondemand-smoke node --input-type=module - <<'EOF'
-          const v = await (await fetch('http://127.0.0.1:9221/json/version')).json();
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
           const ws = new WebSocket(v.webSocketDebuggerUrl);
           await new Promise((r) => { ws.onopen = r; });
           ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
@@ -654,19 +664,22 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name autostart-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
+            -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec autostart-smoke cat /tmp/cdp-gateway.log || true; docker logs autostart-smoke || true; docker rm -f autostart-smoke >/dev/null' EXIT
           nchrome() { docker exec autostart-smoke sh -c 'pgrep -c -x chrome || true'; }
           up() { [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' autostart-smoke)" = "true 0" ]; }
-          # started with the container, by the gateway
+          # started with the container, by the gateway (before any client asks)
           for i in $(seq 1 60); do
-            docker exec autostart-smoke curl -sf http://127.0.0.1:9221/json/version >/dev/null && break
+            [ "$(nchrome)" != 0 ] && break
             sleep 1
           done
-          docker exec autostart-smoke curl -sf http://127.0.0.1:9221/json/version >/dev/null
-          # the browser closing itself leaves the container (and the gateway) running
+          [ "$(nchrome)" != 0 ]
+          # the browser closing itself (a client's Browser.close, allowed through
+          # with CDP_ALLOW_BROWSER_CLOSE=true) leaves the container (and the
+          # gateway) running
           docker exec -i autostart-smoke node --input-type=module - <<'EOF'
-          const v = await (await fetch('http://127.0.0.1:9221/json/version')).json();
+          const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
           const ws = new WebSocket(v.webSocketDebuggerUrl);
           await new Promise((r) => { ws.onopen = r; });
           ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));

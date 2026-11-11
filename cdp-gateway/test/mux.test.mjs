@@ -1,4 +1,5 @@
-// Mux pass-through against a fake main chromium (node --test). Isolated
+// Mux pass-through against a fake main chromium (node --test), reached the
+// way the Mux reaches a browser's pipe (fake-upstream.mjs). Isolated
 // contexts need a real chromium; the e2e smoke tests in ci.yaml cover those.
 
 import assert from 'node:assert/strict';
@@ -9,6 +10,7 @@ import { REFUSED_MESSAGE } from '../src/browser-exit.mjs';
 import { INTERNAL_ID_BASE } from '../src/config.mjs';
 import { contexts } from '../src/contexts.mjs';
 import { Mux, openMuxes } from '../src/mux.mjs';
+import { wsConnection } from './fake-upstream.mjs';
 
 // The fake main browser: answers every command, fails disposals of unknown
 // contexts like chromium does, and records what it got.
@@ -81,21 +83,17 @@ class FakeClient extends EventEmitter {
   }
 }
 
-test('default-context traffic passes through verbatim, queued until the upstream is open', async () => {
+test('default-context traffic goes to main as the command the check read', async () => {
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
-  assert.equal(mux.queue.length, 0);
-  const reply = client.command({ id: 1, method: 'Browser.getVersion', params: {} });
-  assert.equal(mux.queue.length, 1, 'queued before open');
-  assert.deepEqual(await reply, { id: 1, result: { echo: 'Browser.getVersion' } });
-  const sent = received.find((m) => m.id === 1);
-  assert.deepEqual(sent, { id: 1, method: 'Browser.getVersion', params: {} });
+  new Mux(client, 'test', await wsConnection(mainUrl));
+  assert.deepEqual(await client.command({ id: 1, method: 'Browser.getVersion', params: {} }), { id: 1, result: { echo: 'Browser.getVersion' } });
+  assert.deepEqual(received.find((m) => m.id === 1), { id: 1, method: 'Browser.getVersion', params: {} });
   client.close();
 });
 
 test('sessions attached on main stay on main', async () => {
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const attached = client.next((m) => m.method === 'Target.attachedToTarget');
     assert.equal((await client.command({ id: 2, method: 'Target.attachToTarget', params: { targetId: 'T1', flatten: true } })).result.sessionId, 'S1');
@@ -111,7 +109,7 @@ test('sessions attached on main stay on main', async () => {
 
 test('client ids in the gateway\'s own id range still get their replies', async () => {
   const client = new FakeClient();
-  new Mux(client, 'test', mainUrl);
+  new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const id = INTERNAL_ID_BASE + 5;
     assert.deepEqual(await client.command({ id, method: 'Browser.getVersion', params: {} }), { id, result: { echo: 'Browser.getVersion' } });
@@ -122,7 +120,7 @@ test('client ids in the gateway\'s own id range still get their replies', async 
 
 test('main chromium replies are passed on as they came while nothing is awaited', async () => {
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const big = 'x'.repeat(1024 * 1024);
     const reply = await client.command({ id: 8, method: 'Runtime.evaluate', params: { expression: big } });
@@ -179,7 +177,7 @@ function stubContexts(onCreate = () => {}) {
       options,
       destroyed: false,
       mux: null,
-      browserWsUrl: () => contextUrl,
+      pipe: { connect: () => wsConnection(contextUrl) },
       async destroy() {
         if (this.destroyed) return;
         this.destroyed = true;
@@ -197,7 +195,7 @@ function stubContexts(onCreate = () => {}) {
 test('concurrent createBrowserContext: one context chromium, the second inside it', async () => {
   const stub = stubContexts();
   const client = new FakeClient();
-  new Mux(client, 'test', mainUrl);
+  new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const [first, second] = await Promise.all([
       client.command({ id: 20, method: 'Target.createBrowserContext', params: {} }),
@@ -216,7 +214,7 @@ test('concurrent createBrowserContext: one context chromium, the second inside i
 test('the proxy of a createBrowserContext goes to the context chromium it starts', async () => {
   const stub = stubContexts();
   const client = new FakeClient();
-  new Mux(client, 'test', mainUrl);
+  new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const answer = await client.command({ id: 25, method: 'Target.createBrowserContext', params: { proxyServer: 'http://proxy:3128', proxyBypassList: '<-loopback>' } });
     assert.match(answer.result.browserContextId, /^CONTEXT1/);
@@ -232,7 +230,7 @@ test('a client leaving while its context starts leaves no context behind', async
   // the client goes away right after the chromium is up, while the gateway
   // still opens its connection to it
   const stub = stubContexts(() => setImmediate(() => client.close()));
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     client.emit('message', Buffer.from(JSON.stringify({ id: 30, method: 'Target.createBrowserContext', params: {} })));
     while (mux.attaching || !stub.made.length) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -246,14 +244,14 @@ test('a client leaving while its context starts leaves no context behind', async
 
 test('disposing an unknown context succeeds instead of failing', async () => {
   const client = new FakeClient();
-  new Mux(client, 'test', mainUrl);
+  new Mux(client, 'test', await wsConnection(mainUrl));
   assert.deepEqual(await client.command({ id: 4, method: 'Target.disposeBrowserContext', params: { browserContextId: 'GONE' } }), { id: 4, result: {} });
   client.close();
 });
 
 test('setAutoAttach / setDiscoverTargets are remembered for a later context', async () => {
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   const auto = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
   await client.command({ id: 5, method: 'Target.setAutoAttach', params: auto });
   await client.command({ id: 6, method: 'Target.setDiscoverTargets', params: { discover: true } });
@@ -265,7 +263,7 @@ test('setAutoAttach / setDiscoverTargets are remembered for a later context', as
 test('a closed client closes its mux and the upstream connection', async () => {
   const client = new FakeClient();
   const before = openMuxes();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   assert.equal(openMuxes(), before + 1);
   await client.command({ id: 7, method: 'Browser.getVersion', params: {} });
   const upstreamGone = once(mux.main, 'close');
@@ -277,7 +275,7 @@ test('a closed client closes its mux and the upstream connection', async () => {
 
 test('Browser.close ends only this client\'s connection; the crash commands are refused', async () => {
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   await client.command({ id: 40, method: 'Browser.getVersion', params: {} });
   assert.deepEqual(await client.command({ id: 41, method: 'Browser.crash', params: {} }),
     { id: 41, error: { code: -32000, message: `Browser.crash ${REFUSED_MESSAGE}` } });
@@ -293,7 +291,7 @@ test('Browser.close ends only this client\'s connection; the crash commands are 
 
 test('Target.exposeDevToolsProtocol is refused and never reaches chromium', async () => {
   const client = new FakeClient();
-  new Mux(client, 'test', mainUrl);
+  new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const answer = await client.command({ id: 45, method: 'Target.exposeDevToolsProtocol', params: { targetId: 'T', bindingName: 'cdp' } });
     assert.equal(answer.error.code, -32000);
@@ -307,7 +305,7 @@ test('Target.exposeDevToolsProtocol is refused and never reaches chromium', asyn
 test('a browser-target session keeps its command order while its stand-in opens', async () => {
   const stub = stubContexts();
   const client = new FakeClient();
-  new Mux(client, 'test', mainUrl);
+  new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const { result: { browserContextId } } = await client.command({ id: 50, method: 'Target.createBrowserContext', params: {} });
     await client.command({ id: 51, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId } });
@@ -331,7 +329,7 @@ test('a browser-target session keeps its command order while its stand-in opens'
 
 test('an escaped Browser.close is caught all the same', async () => {
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   await client.command({ id: 60, method: 'Browser.getVersion', params: {} });
   const closed = once(client, 'close');
   client.emit('message', Buffer.from(String.raw`{"id":61,"method":"Browser.close","params":{}}`));
@@ -344,7 +342,7 @@ test('an escaped Browser.close is caught all the same', async () => {
 test('an escaped Target.createBrowserContext still gets an isolated context', async () => {
   const stub = stubContexts();
   const client = new FakeClient();
-  new Mux(client, 'test', mainUrl);
+  new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     client.emit('message', Buffer.from(String.raw`{"id":62,"method":"Target.createBrowserContext","params":{}}`));
     const reply = await client.next((m) => m.id === 62);
@@ -359,7 +357,7 @@ test('an escaped Target.createBrowserContext still gets an isolated context', as
 test('a client id that is one of the gateway\'s own in flight on the context gets its own reply', async () => {
   const stub = stubContexts();
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const { result: { browserContextId } } = await client.command({ id: 70, method: 'Target.createBrowserContext', params: {} });
     // an internal command of the gateway's, in flight under that id
@@ -381,7 +379,7 @@ test('a client id that is one of the gateway\'s own in flight on the context get
 test('context replies with nothing to track pass as they came, their bookkeeping done', async () => {
   const stub = stubContexts();
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const { result: { browserContextId } } = await client.command({ id: 80, method: 'Target.createBrowserContext', params: {} });
     const raw = [];
@@ -405,7 +403,7 @@ test('context replies with nothing to track pass as they came, their bookkeeping
 
 test('a frame JSON.parse rejects is answered with a parse error, never forwarded', async () => {
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     // chromium reads a raw TAB in a string; JSON.parse does not, so the
     // gateway could not have checked it: before the fix this closed the browser
@@ -426,7 +424,7 @@ test('a frame JSON.parse rejects is answered with a parse error, never forwarded
 
 test('file paths outside CDP_FILE_DIRS are refused; download directories redirected', async () => {
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     const refused = await client.command({ id: 21, sessionId: 'S9', method: 'DOM.setFileInputFiles', params: { files: ['/browser/settings/auth.json'], nodeId: 3 } });
     assert.equal(refused.sessionId, 'S9');
@@ -455,7 +453,7 @@ test('file paths outside CDP_FILE_DIRS are refused; download directories redirec
 
 test('a non-object params does not take the gateway down', async () => {
   const client = new FakeClient();
-  new Mux(client, 'test', mainUrl);
+  new Mux(client, 'test', await wsConnection(mainUrl));
   try {
     for (const [id, params] of [[31, null], [32, 'x'], [33, 7]]) {
       const reply = await client.command({ id, method: 'Runtime.evaluate', params });
@@ -472,7 +470,7 @@ test('a non-object params does not take the gateway down', async () => {
 async function contextConnection() {
   const stub = stubContexts();
   const client = new FakeClient();
-  const mux = new Mux(client, 'test', mainUrl);
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
   const { result: { browserContextId } } = await client.command({ id: 200, method: 'Target.createBrowserContext', params: {} });
   await client.command({ id: 201, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId } });
   return { stub, client, mux, alias: browserContextId };

@@ -30,7 +30,6 @@
 #                               earlier start — self-signed counts as valid);
 #                               only when no usable pair is found is a fresh
 #                               self-signed one generated.
-#   SELKIES_INTERNAL_PORT=8081  loopback port Selkies binds to (behind nginx)
 #   SELKIES_SUBFOLDER=""         URL path prefix the web UI is served under
 #                                (e.g. /desk -> http://host:port/desk/); empty
 #                                = the site root. Selkies' native setting; nginx
@@ -101,7 +100,15 @@
 #                                otherwise read whatever the browser's user
 #                                can. The CDP commands that name local files
 #                                are CDP_FILE_DIRS' business, not this one's
-#   CDP_INTERNAL_PORT=9221      chromium loopback DevTools port (behind nginx)
+#   CHROMIUM_ALLOW_DEVTOOLS=true  false = the browsers open no DevTools
+#                                window (managed policy URLBlocklist:
+#                                devtools://*, chrome://inspect): a DevTools
+#                                window speaks CDP to its page on a channel of
+#                                its own, which the CDP gateway never sees, so
+#                                a CDP client that opens one (a key press, a
+#                                click in chrome://inspect) gets past
+#                                CDP_FILE_DIRS. The CDP endpoint itself is not
+#                                affected
 #   (the CDP gateway always sits between nginx and chromium: every isolated
 #   CDP context — Target.createBrowserContext, e.g. a playwright-cli session
 #   with isolated: true — gets its own chromium on a clone of the main
@@ -110,7 +117,6 @@
 #   Clients need no changes.)
 #   CDP_CONTEXTS_MAX=4           most isolated contexts alive at once (each is
 #                                a whole browser); more get a CDP error
-#   CDP_GATEWAY_INTERNAL_PORT=9220 gateway loopback port (behind nginx)
 #   CDP_ALLOW_ORIGINS=""         web page origins allowed to use the CDP API
 #                                (comma-separated, * = any), like chromium's
 #                                --remote-allow-origins: the gateway refuses
@@ -166,7 +172,6 @@
 #                                every start, printed in the container log
 #                                (docker logs). Set one for scripted setups
 #                                (POST <base>/__auth/api/setup {code, ...})
-#   AUTH_INTERNAL_PORT=9219      auth service loopback port (behind nginx)
 #   PORT_FORWARDS=""             extra reverse proxies served by nginx, e.g.
 #                                "3080=peer:80 6080=other:6080" (space or
 #                                comma separated): each LISTEN=HOST:PORT entry
@@ -193,12 +198,23 @@
 #                                the browser profile (chowned to the user on
 #                                every start).
 #
+# Removed (a value set is ignored, with a warning): SELKIES_INTERNAL_PORT,
+# CDP_INTERNAL_PORT, CDP_GATEWAY_INTERNAL_PORT, AUTH_INTERNAL_PORT and
+# SELKIES_ADDR. The services behind nginx listen on no TCP port any more —
+# a page in the browser can open a loopback port's origin and talk to what
+# listens there past nginx (and past the CDP gateway, for chromium's own
+# DevTools port): Selkies, the CDP gateway and the auth service sit on unix
+# sockets in SOCKET_DIR, and the browsers speak CDP on a pipe to the gateway
+# only (--remote-debugging-pipe, cdp-gateway/src/pipe.mjs).
+#
 # Fixed by the image (no knobs; an env value is ignored): the browser data
 # paths (profile /browser/user-data, isolated-context clones
 # /browser/contexts, the CDP console's persisted settings
 # /browser/settings/settings.json — settings.sh — and the login + API key
 # /browser/settings/auth.json — auth.sh), the TLS pair /etc/nginx/tls/{fullchain,privkey}.pem
-# (self-signed CN=localhost), the first X display tried (:0), the Xvfb RandR
+# (self-signed CN=localhost), the internal unix sockets (SOCKET_DIR
+# /tmp/agentene: selkies.sock, cdp-gateway.sock, auth.sock), the first X
+# display tried (:0), the Xvfb RandR
 # ceiling (8192x4096x24), picom + the chromium screen follower on X11, the
 # wlr-screencopy capture of labwc, the Selkies device interposers in the
 # browsers, the CDP console sidebar, headless isolated contexts exactly when
@@ -207,6 +223,8 @@
 # --disable-features=..., the last occurrence wins).
 
 config_load() {
+    config_removed
+    config_sockets
     config_display
     config_selkies
     config_nginx
@@ -216,6 +234,25 @@ config_load() {
     config_auth
     config_check_ports
     config_runtime_env
+}
+
+# Knobs that are gone: a value still set (an old .env) is named, not used.
+config_removed() {
+    local knob
+    for knob in SELKIES_INTERNAL_PORT CDP_INTERNAL_PORT CDP_GATEWAY_INTERNAL_PORT AUTH_INTERNAL_PORT SELKIES_ADDR; do
+        [ -n "${!knob:-}" ] || continue
+        log "WARNING: ${knob}=${!knob} is ignored: the internal services listen on unix sockets in /tmp/agentene, the browsers on no port at all (see the README)"
+        unset "${knob}"
+    done
+}
+
+# The unix sockets nginx reaches the services behind it on (sockets_init
+# creates the directory; the services their sockets).
+config_sockets() {
+    SOCKET_DIR=/tmp/agentene
+    SELKIES_SOCKET="${SOCKET_DIR}/selkies.sock"
+    CDP_GATEWAY_SOCKET="${SOCKET_DIR}/cdp-gateway.sock"
+    AUTH_SOCKET="${SOCKET_DIR}/auth.sock"
 }
 
 config_display() {
@@ -245,9 +282,6 @@ config_display() {
 }
 
 config_selkies() {
-    # Selkies itself is loopback-only; nginx is the public front door.
-    SELKIES_INTERNAL_PORT="${SELKIES_INTERNAL_PORT:-8081}"
-    SELKIES_ADDR="${SELKIES_ADDR:-127.0.0.1}"
     # URL path prefix of the web UI (empty = root). Normalized to the form both
     # selkies and the nginx locations expect: "/a/b" — leading slash, no
     # trailing one. Restricted to URL-safe path characters, as the value lands
@@ -307,7 +341,6 @@ config_tls() {
 }
 
 config_chromium() {
-    CDP_INTERNAL_PORT="${CDP_INTERNAL_PORT:-9221}" # chromium loopback DevTools port
     CHROMIUM_HEADLESS="${CHROMIUM_HEADLESS:-0}"
     CHROMIUM_START_URL="${CHROMIUM_START_URL:-about:blank}"
     # The CDP gateway starts the main browser at container start (true) or
@@ -344,12 +377,17 @@ config_chromium() {
         true|false) : ;;
         *) die "CHROMIUM_ALLOW_FILE_URLS='${CHROMIUM_ALLOW_FILE_URLS}' must be true or false" ;;
     esac
+    # DevTools windows (a managed policy blocks them when false; chromium.sh).
+    CHROMIUM_ALLOW_DEVTOOLS="${CHROMIUM_ALLOW_DEVTOOLS:-true}"
+    case "${CHROMIUM_ALLOW_DEVTOOLS}" in
+        true|false) : ;;
+        *) die "CHROMIUM_ALLOW_DEVTOOLS='${CHROMIUM_ALLOW_DEVTOOLS}' must be true or false" ;;
+    esac
 }
 
 config_cdp_gateway() {
     # CDP gateway: isolated CDP contexts become profile-cloned browsers
     # (cdp-gateway.sh).
-    CDP_GATEWAY_INTERNAL_PORT="${CDP_GATEWAY_INTERNAL_PORT:-9220}" # gateway loopback port (behind nginx)
     CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX:-4}"
     case "${CDP_CONTEXTS_MAX}" in
         ''|*[!0-9]*|0) die "CDP_CONTEXTS_MAX='${CDP_CONTEXTS_MAX}' must be a positive number" ;;
@@ -405,7 +443,6 @@ config_auth() {
         true|false) : ;;
         *) die "ENABLE_AUTH='${ENABLE_AUTH}' must be true or false" ;;
     esac
-    AUTH_INTERNAL_PORT="${AUTH_INTERNAL_PORT:-9219}" # auth service loopback port (behind nginx)
     AUTH_FILE="/browser/settings/auth.json"
     # The setup form's code (auth.sh makes a random one when empty).
     AUTH_SETUP_CODE="${AUTH_SETUP_CODE:-}"
@@ -418,12 +455,10 @@ config_auth() {
 }
 
 # Every port knob must be a plain TCP port number; a typo would otherwise
-# only surface as an obscure nginx/selkies/chromium startup failure.
+# only surface as an obscure nginx startup failure.
 config_check_ports() {
     local port_var port_val
-    for port_var in NGINX_LISTEN_HTTP_PORT NGINX_LISTEN_HTTPS_PORT CDP_LISTEN_PORT \
-                    SELKIES_INTERNAL_PORT CDP_INTERNAL_PORT CDP_GATEWAY_INTERNAL_PORT \
-                    AUTH_INTERNAL_PORT; do
+    for port_var in NGINX_LISTEN_HTTP_PORT NGINX_LISTEN_HTTPS_PORT CDP_LISTEN_PORT; do
         port_val="${!port_var}"
         case "${port_val}" in
             ''|*[!0-9]*) die "${port_var}='${port_val}' is not a port number" ;;

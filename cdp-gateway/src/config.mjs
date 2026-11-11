@@ -15,8 +15,9 @@ export function intEnv(name, fallback, source = env) {
   return n;
 }
 
-export const LISTEN_PORT = intEnv('CDP_GATEWAY_INTERNAL_PORT', 9220);
-export const MAIN_PORT = intEnv('CDP_INTERNAL_PORT', 9221);
+// The gateway's own unix socket (nginx proxies the CDP port here): no TCP
+// port a page in the browser could open (pipe.mjs)
+export const SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
 export const MAX_CONTEXTS = intEnv('CDP_CONTEXTS_MAX', 4);
 export const CONTEXTS_DIR = env.CDP_CONTEXTS_DIR || '/browser/contexts';
 export const MAIN_PROFILE = env.CHROMIUM_USER_DATA_DIR || '/browser/user-data';
@@ -28,8 +29,11 @@ export const MAIN_LOG = '/tmp/chromium.log';
 // CHROMIUM_AUTOSTART=true starts it with the gateway, false on demand only.
 export const MAIN_AUTOSTART = env.CHROMIUM_AUTOSTART !== 'false';
 export const IDLE_TIMEOUT_MS = intEnv('CHROMIUM_IDLE_TIMEOUT', 0) * 60_000;
-// Selkies' loopback port: an open connection there is someone watching
-export const VIEWER_PORT = intEnv('CDP_GATEWAY_VIEWER_PORT', 0);
+// Selkies' unix socket: an open connection there is someone watching
+export const VIEWER_SOCKET = env.CDP_GATEWAY_VIEWER_SOCKET || '';
+// chromium's protocol description, captured from the binary at image build
+// (the browsers serve no /json/protocol over their pipe)
+export const PROTOCOL_FILE = env.CDP_GATEWAY_PROTOCOL_FILE || '/opt/chrome-for-testing/devtools-protocol.json';
 export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
 export const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
 export const CONTEXTS_HEADLESS = env.CDP_CONTEXTS_HEADLESS === '1';
@@ -70,10 +74,8 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 // ids (small integers counted up by Playwright) never get there.
 export const INTERNAL_ID_BASE = 1_000_000_000;
 const MAX_PAYLOAD = 256 * 1024 * 1024; // screenshots and traces can be large
-// options for every WebSocket the gateway opens or accepts
+// options for every client WebSocket the gateway accepts
 export const WS_OPTIONS = { perMessageDeflate: false, maxPayload: MAX_PAYLOAD };
-// how long the gateway waits for a WebSocket of its own to open (cdp-client.mjs)
-export const WS_OPEN_TIMEOUT_MS = 10_000;
 
 // Browser frame color per context (cycled), so a context window on the desktop
 // is recognizable and matches its dashboard card. No window manager draws

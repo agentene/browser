@@ -3,11 +3,11 @@
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { browserPid, portOf } from './browsers.mjs';
+import { browserPid, pipeOf } from './browsers.mjs';
 import { notifyChange } from './changes.mjs';
 import { CONTEXTS_HEADLESS, RAISE_SWITCH, ROOT, WAYLAND, appId } from './config.mjs';
-import { devtoolsFetch, fetchJson, pageTargets } from './devtools-http.mjs';
 import { mainBrowser } from './main-browser.mjs';
+import { pageInfos } from './targets.mjs';
 import { output, run, sleep } from './util.mjs';
 
 // Hand desktop.raiseNewWindows (settings.mjs) to the desktop: whether a
@@ -66,16 +66,23 @@ export function unwatchFront() {
 }
 
 // Bring a context's (or the main browser's) window to the front of the desktop
-// so it shows up in the Selkies stream. A browser whose tabs were all closed
-// (it keeps running without a window) gets a blank tab to show.
+// so it shows up in the Selkies stream, with the tab targetId in front if
+// one is given (else the tab in front stays). A browser whose tabs were all
+// closed (it keeps running without a window) gets a blank tab to show.
 // Resolves false when there is nothing to focus: no such browser or tab.
 export async function focus(name, targetId) {
-  const port = portOf(name);
-  if (!port) return false;
-  let id = targetId || (await pageTargets(port))[0]?.id;
-  const opened = !id;
-  if (opened) id = (await fetchJson(port, '/json/new?about:blank', 'PUT')).id;
-  if (!(await devtoolsFetch(port, `/json/activate/${encodeURIComponent(id)}`)).ok) return false;
+  const pipe = pipeOf(name);
+  if (!pipe) return false;
+  let id = targetId;
+  const opened = !id && !(await pageInfos(pipe)).length;
+  if (opened) ({ targetId: id } = await pipe.call('Target.createTarget', { url: 'about:blank' }));
+  if (id) {
+    try {
+      await pipe.call('Target.activateTarget', { targetId: id });
+    } catch {
+      return false; // no such tab (any more)
+    }
+  }
   if (name !== 'main' && CONTEXTS_HEADLESS) return true;
   // a freshly opened window may take a moment to map
   for (let tries = opened ? 20 : 1; tries > 0; tries--) {

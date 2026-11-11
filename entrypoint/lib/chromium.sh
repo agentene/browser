@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# chromium.sh — the Chrome for Testing browser with a loopback CDP endpoint.
+# chromium.sh — the Chrome for Testing browser, driven by the CDP gateway.
 #
 # The flags are assembled in three parts — CHROMIUM_COMMON_FLAGS, the
 # headless/headed mode part (chromium_mode_flags) and CHROMIUM_TAIL_FLAGS —
@@ -12,7 +12,9 @@
 # CHROMIUM_MAIN_FLAGS_FILE and the CDP gateway starts it as its own child —
 # right away with CHROMIUM_AUTOSTART=true, on demand with false. The gateway
 # is the supervised service, so the browser closing or crashing never stops
-# the container; the next CDP client or the console starts it again.
+# the container; the next CDP client or the console starts it again. The
+# browsers open no DevTools port: the gateway adds --remote-debugging-pipe
+# and speaks CDP with each on its pipe (cdp-gateway/src/pipe.mjs).
 #
 # Sets for cdp-gateway.sh: CHROME_BIN, CHROMIUM_COMMON_FLAGS,
 # CHROMIUM_TAIL_FLAGS, CHROMIUM_ENV, CHROMIUM_LOCALE_POSIX,
@@ -86,11 +88,20 @@ chromium_resolve_sandbox() {
     fi
 }
 
-# --- managed policy (CHROMIUM_ALLOW_FILE_URLS, CDP_FILE_DIRS) -------------------
+# --- managed policy (CHROMIUM_ALLOW_FILE_URLS, CHROMIUM_ALLOW_DEVTOOLS,
+# CDP_FILE_DIRS) --------------------------------------------------------------
 # Read by every browser, the context browsers too, whatever their flags.
 # Written at every start, so the knobs can change.
 #   URLBlocklist file://*  a page or CDP client opening file:// URLs could
 #                          read whatever the browser's user can
+#   URLBlocklist devtools://*, chrome://inspect
+#                          (CHROMIUM_ALLOW_DEVTOOLS=false) a DevTools window
+#                          speaks CDP to its page on a channel of its own,
+#                          past the gateway's checks; a CDP client can open
+#                          one (a key press, chrome://inspect). Blocked, the
+#                          window opens on an error page without that
+#                          channel. (DeveloperToolsAvailability would block
+#                          the CDP endpoint as well.)
 #   DownloadDirectory      the browsers' own download directory, the first
 #                          CDP_FILE_DIRS entry: fixed, so a CDP client cannot
 #                          point it elsewhere (through chrome://settings,
@@ -99,11 +110,20 @@ chromium_resolve_sandbox() {
 # What reaches local files through CDP commands without a URL (a file
 # input's DOM.setFileInputFiles, ...) is checked by the gateway, not here.
 chromium_write_policy() {
-    local policy="${CHROMIUM_POLICY_DIR}/agentene.json" entries=()
+    local policy="${CHROMIUM_POLICY_DIR}/agentene.json" entries=() blocked=()
     if [ "${CHROMIUM_ALLOW_FILE_URLS}" = "true" ]; then
         log "chromium: file:// URLs allowed (CHROMIUM_ALLOW_FILE_URLS=true)"
     else
-        entries+=('"URLBlocklist": ["file://*"]')
+        blocked+=('"file://*"')
+    fi
+    if [ "${CHROMIUM_ALLOW_DEVTOOLS}" = "false" ]; then
+        log "chromium: DevTools windows blocked (CHROMIUM_ALLOW_DEVTOOLS=false)"
+        blocked+=('"devtools://*"' '"chrome://inspect"')
+    fi
+    if [ "${#blocked[@]}" -gt 0 ]; then
+        local list
+        list="$(printf '%s, ' "${blocked[@]}")"
+        entries+=("\"URLBlocklist\": [${list%, }]")
     fi
     if [ "${CDP_FILE_DIRS}" = "*" ]; then
         log "chromium: CDP clients may name local files anywhere (CDP_FILE_DIRS=*)"
@@ -251,7 +271,6 @@ chromium_build_flags() {
     fi
     CHROMIUM_FLAGS=("${CHROMIUM_COMMON_FLAGS[@]}"
         --user-data-dir="${CHROMIUM_USER_DATA_DIR}"
-        --remote-debugging-port="${CDP_INTERNAL_PORT}"
         "${MODE_FLAGS[@]}" "${main_window_flags[@]}" "${CHROMIUM_TAIL_FLAGS[@]}")
 }
 
@@ -343,21 +362,10 @@ chromium_prepare_profile() {
         "${CHROMIUM_USER_DATA_DIR}/Default/Preferences" "${CHROMIUM_LANG}"
 }
 
-# STOP_HOOKS entry (supervisor.sh): close the main browser through CDP before
-# the services get their signals, so the cookies and the session it holds in
-# memory reach the profile (see the helper for why a signal is not enough).
-# The gateway would close it as well, but the supervisor may SIGKILL the
-# gateway before it finished. Bounded well inside docker stop's 10s.
-chromium_close() {
-    timeout 8 node "${ENTRYPOINT_HELPERS}/chromium-close.mjs" "${CDP_INTERNAL_PORT}" 6000 \
-        || log "WARNING: chromium did not close in time; stopping it with a signal (recent cookies may be lost)"
-}
-
 # Hands the main browser's command line to the CDP gateway, which launches it
 # (cdp-gateway.sh).
 chromium_launch() {
     CHROMIUM_MAIN_FLAGS_FILE=/tmp/cdp-gateway-main-flags
-    STOP_HOOKS+=(chromium_close)
     # NUL-separated, read by the gateway; the log file is pre-created for
     # the (possibly dropped) gateway, which appends a run per start
     printf '%s\0' "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
@@ -366,6 +374,6 @@ chromium_launch() {
     if [ "${CHROMIUM_AUTOSTART}" = "false" ]; then
         log "chromium: on demand (CHROMIUM_AUTOSTART=false) — the CDP gateway starts it on the first CDP client or from the console"
     else
-        log "chromium: started by the CDP gateway (headless=${CHROMIUM_HEADLESS}) with CDP on 127.0.0.1:${CDP_INTERNAL_PORT}"
+        log "chromium: started by the CDP gateway (headless=${CHROMIUM_HEADLESS}), CDP on its pipe to the gateway"
     fi
 }

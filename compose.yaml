@@ -30,7 +30,7 @@
 # For NETWORK_* (bridge mode only) see the networks: block at the bottom.
 #
 # The entrypoint starts everything in one container:
-#   Xvfb (or labwc) -> PulseAudio -> Selkies (loopback) -> Chrome
+#   Xvfb (or labwc) -> PulseAudio -> Selkies (unix socket) -> Chrome
 #   (+ CDP gateway) -> nginx front door
 #   nginx serves: NGINX_LISTEN_HTTP_PORT (web UI, HTTP)
 #                 + NGINX_LISTEN_HTTPS_PORT (web UI, HTTPS, ENABLE_HTTPS=true)
@@ -190,6 +190,10 @@ services:
       # true = the browsers may open file:// URLs; blocked by default so a
       # CDP client cannot read the container's files through the browser
       CHROMIUM_ALLOW_FILE_URLS: "${CHROMIUM_ALLOW_FILE_URLS:-false}"
+      # false = the browsers open no DevTools window: one speaks CDP to its
+      # page past the CDP gateway's checks (CDP_FILE_DIRS), and a CDP client
+      # can open one. The CDP endpoint itself is not affected
+      CHROMIUM_ALLOW_DEVTOOLS: "${CHROMIUM_ALLOW_DEVTOOLS:-true}"
       # Directories CDP clients may name local files in (colon-separated):
       # file uploads (setInputFiles with a container path) read only from
       # them, and a download directory outside them is redirected into the
