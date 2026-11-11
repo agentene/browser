@@ -9,7 +9,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { REFUSED_MESSAGE } from '../src/browser-exit.mjs';
 import { INTERNAL_ID_BASE } from '../src/config.mjs';
 import { contexts } from '../src/contexts.mjs';
-import { Mux, openMuxes } from '../src/mux.mjs';
+import { contextWindowId, Mux, openMuxes } from '../src/mux.mjs';
 import { wsConnection } from './fake-upstream.mjs';
 
 // The fake main browser: answers every command, fails disposals of unknown
@@ -21,6 +21,10 @@ const rawReceived = []; // the frames as they came, for re-serialization checks
 const arrivals = []; // [upstream, method, sessionId] across both fake chromiums, in arrival order
 
 // What the fake main answers the list commands with (its "own" targets).
+// Each fake chromium's only window: id 1 in both, told apart by its bounds.
+const MAIN_BOUNDS = { left: 0, top: 0, width: 1920, height: 1080, windowState: 'normal' };
+const CTX_BOUNDS = { left: 0, top: 0, width: 1280, height: 720, windowState: 'normal' };
+
 const MAIN_TARGET_INFOS = [{ targetId: 'MT1', type: 'page', url: 'about:main', attached: false, browserContextId: 'MAINCTX' }];
 
 before(async () => {
@@ -44,6 +48,13 @@ before(async () => {
         ws.send(JSON.stringify({ id: msg.id, result: { targetInfos: MAIN_TARGET_INFOS } }));
       } else if (msg.method === 'Target.getBrowserContexts') {
         ws.send(JSON.stringify({ id: msg.id, result: { browserContextIds: ['MAINCTX'], defaultBrowserContextId: 'MAINDEFAULT' } }));
+      } else if (msg.method === 'Browser.getWindowForTarget') {
+        // chromium numbers its windows from 1: the main's first is 1, like the context's
+        ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result: { windowId: 1, bounds: MAIN_BOUNDS } }));
+      } else if (msg.method === 'Browser.getWindowBounds') {
+        ws.send(JSON.stringify(msg.params.windowId === 1
+          ? { id: msg.id, sessionId: msg.sessionId, result: { bounds: MAIN_BOUNDS } }
+          : { id: msg.id, sessionId: msg.sessionId, error: { code: -32000, message: 'Browser window not found' } }));
       } else {
         ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result: { echo: msg.method } }));
       }
@@ -147,6 +158,7 @@ const CTX_RESULTS = {
   'Target.attachToBrowserTarget': { sessionId: 'CTXB' },
   'Target.getTargets': { targetInfos: CTX_TARGET_INFOS },
   'Target.getTargetInfo': { targetInfo: CTX_TARGET_INFOS[0] },
+  'Browser.getWindowForTarget': { windowId: 1, bounds: CTX_BOUNDS },
 };
 
 before(async () => {
@@ -161,6 +173,18 @@ before(async () => {
       // like chromium: a detach reports the session gone before its reply
       if (msg.method === 'Target.detachFromTarget') {
         ws.send(JSON.stringify({ method: 'Target.detachedFromTarget', params: { sessionId: msg.params.sessionId } }));
+      }
+      // a page session attached on the root connection, as chromium reports it
+      if (msg.method === 'Target.attachToTarget' && !msg.sessionId) {
+        ws.send(JSON.stringify({ method: 'Target.attachedToTarget', params: { sessionId: 'CS1', targetInfo: { ...CTX_TARGET_INFOS[0] }, waitingForDebugger: false } }));
+        ws.send(JSON.stringify({ id: msg.id, result: { sessionId: 'CS1' } }));
+        return;
+      }
+      if (msg.method === 'Browser.getWindowBounds') {
+        ws.send(JSON.stringify(msg.params.windowId === 1
+          ? { id: msg.id, sessionId: msg.sessionId, result: { bounds: CTX_BOUNDS } }
+          : { id: msg.id, sessionId: msg.sessionId, error: { code: -32000, message: 'Browser window not found' } }));
+        return;
       }
       ws.send(JSON.stringify({ id: msg.id, sessionId: msg.sessionId, result: CTX_RESULTS[msg.method] ?? {} }));
     });
@@ -625,6 +649,83 @@ test('Q3: nothing accumulates across browser sessions, and a fresh one works', a
     // the round-trip still works on a fresh stand-in
     const reply = await client.command({ id: 271, sessionId: 'MB', method: 'Storage.getCookies', params: { browserContextId: alias } });
     assert.deepEqual(reply, { id: 271, sessionId: 'MB', result: {} });
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+// --- W: the context chromium's windows, named by windowId alone ------------
+
+test('W: a context window id routes back to the context chromium on the root connection', async () => {
+  const { stub, client, mux } = await contextConnection();
+  try {
+    const win = await client.command({ id: 300, method: 'Browser.getWindowForTarget', params: { targetId: 'CT1' } });
+    // the context's window 1 is not the main's window 1
+    assert.equal(win.result.windowId, contextWindowId(1));
+    assert.deepEqual(win.result.bounds, CTX_BOUNDS);
+    received.length = 0;
+    contextReceived.length = 0;
+    const bounds = await client.command({ id: 301, method: 'Browser.getWindowBounds', params: { windowId: win.result.windowId } });
+    assert.deepEqual(bounds, { id: 301, result: { bounds: CTX_BOUNDS } });
+    await client.command({ id: 302, method: 'Browser.setWindowBounds', params: { windowId: win.result.windowId, bounds: { windowState: 'minimized' } } });
+    // both went to the context chromium under its own id; the main saw none
+    assert.deepEqual(contextReceived.map((m) => [m.method, m.params.windowId]),
+      [['Browser.getWindowBounds', 1], ['Browser.setWindowBounds', 1]]);
+    assert.equal(received.filter((m) => m.method?.startsWith('Browser.')).length, 0);
+    // the main chromium's own window 1 stays the main's
+    const own = await client.command({ id: 303, method: 'Browser.getWindowBounds', params: { windowId: 1 } });
+    assert.deepEqual(own.result.bounds, MAIN_BOUNDS);
+    assert.equal(mux.contextWindows.size, 1);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('W: on a context page session (what Playwright sends) the id goes back as chromium\'s own', async () => {
+  const { stub, client } = await contextConnection();
+  try {
+    const { result: { sessionId } } = await client.command({ id: 310, method: 'Target.attachToTarget', params: { targetId: 'CT1', flatten: true } });
+    assert.equal(sessionId, 'CS1');
+    const win = await client.command({ id: 311, sessionId, method: 'Browser.getWindowForTarget', params: {} });
+    assert.equal(win.result.windowId, contextWindowId(1));
+    contextReceived.length = 0;
+    await client.command({ id: 312, sessionId, method: 'Browser.setWindowBounds', params: { windowId: win.result.windowId, bounds: { width: 800, height: 600 } } });
+    assert.deepEqual(contextReceived.map((m) => [m.method, m.sessionId, m.params.windowId]), [['Browser.setWindowBounds', 'CS1', 1]]);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('W: a browser-target session reaches a context window through its stand-in', async () => {
+  const { stub, client } = await contextConnection();
+  try {
+    const win = await client.command({ id: 320, method: 'Browser.getWindowForTarget', params: { targetId: 'CT1' } });
+    await client.command({ id: 321, method: 'Target.attachToBrowserTarget', params: {} });
+    received.length = 0;
+    contextReceived.length = 0;
+    const bounds = await client.command({ id: 322, sessionId: 'MB', method: 'Browser.getWindowBounds', params: { windowId: win.result.windowId } });
+    assert.deepEqual(bounds, { id: 322, sessionId: 'MB', result: { bounds: CTX_BOUNDS } });
+    const asked = contextReceived.find((m) => m.method === 'Browser.getWindowBounds');
+    assert.deepEqual([asked.sessionId, asked.params.windowId], ['CTXB', 1]);
+    assert.equal(received.filter((m) => m.method === 'Browser.getWindowBounds').length, 0);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('W: a context window id is forgotten with its context', async () => {
+  const { stub, client, mux } = await contextConnection();
+  try {
+    const win = await client.command({ id: 330, method: 'Browser.getWindowForTarget', params: { targetId: 'CT1' } });
+    await mux.context.destroy('test');
+    assert.equal(mux.contextWindows.size, 0);
+    // now a window no chromium knows: the main says so, as chromium would
+    const gone = await client.command({ id: 331, method: 'Browser.getWindowBounds', params: { windowId: win.result.windowId } });
+    assert.equal(gone.error.message, 'Browser window not found');
   } finally {
     client.close();
     stub.restore();

@@ -11,6 +11,11 @@
 // main or the context's chromium, and its events get their browserContextId
 // rewritten to the alias. Target.getTargets / Target.getBrowserContexts are
 // answered from both chromiums, the context's ids rewritten to the alias.
+// The context chromium's window ids (Browser.getWindowForTarget) are
+// rewritten to ids no main window can have (contextWindowId), so a
+// Browser.getWindowBounds / setWindowBounds that names only the window finds
+// its way back there instead of reaching a main chromium window of the same
+// number.
 // Target.disposeBrowserContext(alias) or the client
 // disconnecting destroys the context.
 //
@@ -46,6 +51,21 @@ const MERGED = new Set(['Target.getTargets', 'Target.getBrowserContexts']);
 // they come: a disposal it may answer itself, and the session id of a
 // client's browser-target session (clientBrowserSessions).
 const READ_MAIN_REPLIES = new Set(['Target.disposeBrowserContext', 'Target.attachToBrowserTarget']);
+
+// Context chromium replies the gateway reads: the window id it rewrites.
+const READ_CONTEXT_REPLIES = new Set(['Browser.getWindowForTarget']);
+
+// The window id a client gets for a context chromium window, and back: the
+// negated id. Each chromium numbers its windows on its own (SessionID), and
+// the context chromium's profile is a clone of the main's, so it carries on
+// from the same counter — a context window id as it came can name a main
+// window too. Chromium's ids are always positive, so the negated ones never
+// do, and they still fit CDP's 32-bit integer.
+export function contextWindowId(windowId) {
+  return -windowId;
+}
+
+const realWindowId = contextWindowId;
 
 // A client command's params as an object: chromium refuses any other kind
 // itself, but the gateway reads them first (and a null would throw).
@@ -84,6 +104,8 @@ export class Mux {
     this.sessionTarget = new Map(); // context chromium's sessionId -> targetId (any other session is main's)
     this.sessionParent = new Map(); // context sessionId -> the client session it was attached on
     this.contextTargets = new Set();
+    // the window ids handed out for the context chromium's windows (contextWindowId)
+    this.contextWindows = new Set();
     // A client's browser-target session (Target.attachToBrowserTarget, e.g.
     // Playwright's newCDPSession) lives on the main chromium; whatever it
     // addresses in the context chromium goes through a browser-target session
@@ -128,6 +150,11 @@ export class Mux {
     if (!this.context) {
       this.answerGone(answerAs);
       return;
+    }
+    // a window id the gateway handed out goes back as the context chromium's own
+    const params = paramsOf(msg);
+    if (this.contextWindows.has(params.windowId)) {
+      msg = { ...msg, params: { ...params, windowId: realWindowId(params.windowId) } };
     }
     if (msg.id !== undefined) {
       // the gateway's own commands there count up from INTERNAL_ID_BASE; a
@@ -293,10 +320,12 @@ export class Mux {
 
   // Browser-level params addressed to the context chromium any way a client
   // can: the alias (its default context), one of the contexts created inside
-  // it (innerContexts), or a target or session of it.
+  // it (innerContexts), a target or session of it, or one of its windows
+  // (Browser.getWindowBounds / setWindowBounds name nothing else).
   routesContext(params) {
     return Boolean(this.context) && (params.browserContextId === this.alias
-      || this.innerContexts.has(params.browserContextId) || this.addressesContext(params));
+      || this.innerContexts.has(params.browserContextId) || this.addressesContext(params)
+      || this.contextWindows.has(params.windowId));
   }
 
   // Target.getTargets / Target.getBrowserContexts on a connection with an
@@ -502,6 +531,11 @@ export class Mux {
       if (pending.msg.method === 'Target.attachToBrowserTarget' && typeof msg.result?.sessionId === 'string') {
         this.clientBrowserSessions.add(msg.result.sessionId);
       }
+      if (origin === 'context' && pending.msg.method === 'Browser.getWindowForTarget'
+        && Number.isInteger(msg.result?.windowId) && msg.result.windowId > 0) {
+        msg.result.windowId = contextWindowId(msg.result.windowId);
+        this.contextWindows.add(msg.result.windowId);
+      }
     }
     if (origin === 'context') {
       // the gateway's own browser-target sessions stay invisible to the client
@@ -535,6 +569,7 @@ export class Mux {
       const pending = this.pending.get(id);
       if (pending?.origin === origin) {
         if (pending.msg.id !== id || READ_MAIN_REPLIES.has(pending.msg.method)) return true;
+        if (origin === 'context' && READ_CONTEXT_REPLIES.has(pending.msg.method)) return true;
         this.pending.delete(id);
       }
     }
@@ -601,6 +636,7 @@ export class Mux {
     this.sessionTarget.clear();
     this.sessionParent.clear();
     this.contextTargets.clear();
+    this.contextWindows.clear();
     this.browserSessions.clear();
     this.browserSessionOf.clear();
     this.contextWs?.close();
