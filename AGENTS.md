@@ -52,7 +52,6 @@ for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
 npm test --prefix auth-server                                  # auth server unit tests (no deps)
-node --check entrypoint/helpers/password-hash.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .
 ```

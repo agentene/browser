@@ -5,8 +5,7 @@
 # e.g. SELKIES_ENCODER (selkies' own default: h264enc).
 
 selkies_start() {
-    local auth_flag extra_args=()
-    auth_flag="$(selkies_auth_flag)"
+    local extra_args=()
     selkies_backend_args
     selkies_media_defaults
     [ -n "${SELKIES_EXTRA_ARGS:-}" ] && read -r -a extra_args <<< "${SELKIES_EXTRA_ARGS}"
@@ -15,22 +14,25 @@ selkies_start() {
     # TLS terminates at nginx, so selkies itself always serves plain HTTP on
     # the socket nginx proxies to. A unix socket, not a loopback port: a page
     # in the browser could open a loopback port's origin and use the desktop
-    # past nginx's login (config.sh).
+    # past nginx's login (config.sh). Authentication belongs to nginx: Basic
+    # Auth and token-based secure mode stay disabled even when extra args or
+    # native env settings request them.
     start_service - \
         "${DROP[@]}" selkies \
         --unix-socket="${SELKIES_SOCKET}" \
         --subfolder="${SELKIES_SUBFOLDER}" \
         --enable-resize="${SELKIES_ENABLE_RESIZE:-true}" \
         "${SELKIES_BACKEND_ARGS[@]}" \
-        "${auth_flag}" \
-        "${extra_args[@]}"
+        "${extra_args[@]}" \
+        --enable-basic-auth=false \
+        --master-token=
 }
 
 # Hold nginx back until Selkies answers on its socket: it binds only after
 # attaching to the display (~0.5 s after its start on X11 and Wayland alike,
 # by which time chromium is up and nginx would already be serving), so the
 # first web UI requests got 502s and the "ready" line came early. Any HTTP
-# answer counts (a login-protected UI replies 401). The socket is then
+# answer counts. The socket is then
 # opened to the nginx workers, who are nobody with RUN_USER=0 (Selkies:
 # root); otherwise they are Selkies' own user anyway.
 selkies_wait_ready() {
@@ -38,21 +40,6 @@ selkies_wait_ready() {
         chmod 0666 "${SELKIES_SOCKET}"
     else
         log "WARNING: selkies is not answering on ${SELKIES_SOCKET} after 30s; nginx serves 502 until it does"
-    fi
-}
-
-# Enable the login screen only when a password is around; Selkies refuses to
-# start with auth enabled and no password. Username resolves natively from
-# SELKIES_BASIC_AUTH_USER / CUSTOM_USER / USERNAME / USER and falls back to
-# selkies' built-in default "ubuntu" (e.g. no USER in the image).
-selkies_auth_flag() {
-    if [ -n "${SELKIES_ENABLE_BASIC_AUTH:-}" ]; then
-        echo "--enable-basic-auth=${SELKIES_ENABLE_BASIC_AUTH}"
-    elif [ -n "${SELKIES_BASIC_AUTH_PASSWORD:-}${PASSWORD:-}${PASSWD:-}" ]; then
-        echo "--enable-basic-auth=true"
-    else
-        log "no SELKIES_BASIC_AUTH_PASSWORD set -> serving without login" >&2
-        echo "--enable-basic-auth=false"
     fi
 }
 

@@ -139,9 +139,7 @@ services:
       PORT_FORWARDS: "${PORT_FORWARDS:-}"
 
       # --- Selkies ---
-      # Set a password to enable the login screen (username defaults to
-      # "ubuntu"; override with SELKIES_BASIC_AUTH_USER). Empty = no login.
-      SELKIES_BASIC_AUTH_PASSWORD: "${SELKIES_BASIC_AUTH_PASSWORD:-}"
+      # Authentication is managed by ENABLE_AUTH and the console.
       # URL path prefix the web UI is served under, e.g. "/desk" ->
       # http://host:port/desk/ (slashes optional; empty = site root). An
       # outer reverse proxy mounting it at a subpath must forward the path
@@ -223,8 +221,8 @@ services:
       # (their pointer never moves the desktop's): text = pointer, clicks,
       # wheel, key combos and the text typed (password / one-time-code / card
       # fields and frames show as ••••); keys = only a count of the
-      # characters typed; off = no overlay. Seen by Selkies' master-password
-      # users; each can hide it in the CDP sidebar's settings.
+      # characters typed; off = no overlay. Seen by the sidebar's users (the built-in login);
+      # each can hide it in the CDP sidebar's settings.
       CDP_INPUT_OVERLAY: "${CDP_INPUT_OVERLAY:-text}"
 
       # --- Desktop ---

@@ -34,7 +34,6 @@
 #                                (e.g. /desk -> http://host:port/desk/); empty
 #                                = the site root. Selkies' native setting; nginx
 #                                additionally redirects / and /desk to /desk/
-#   SELKIES_BASIC_AUTH_PASSWORD  set it to enable the login screen
 #   SELKIES_ENABLE_RESIZE=true   browser-driven resize of the virtual display;
 #                                false = fixed at SCREEN_GEOMETRY
 #   SELKIES_EXTRA_ARGS=""        extra selkies CLI flags (word-split)
@@ -144,7 +143,7 @@
 #                                = the same with only a count of the
 #                                characters typed; off = no overlay. Needs
 #                                Selkies and CDP both on; seen by the sidebar's
-#                                users (Selkies' master password), each can
+#                                users (the built-in login), each can
 #                                hide it in the sidebar's settings
 #   CDP_FILE_DIRS=/browser/downloads  directories (colon-separated) CDP
 #                                clients may name local files in: file

@@ -81,7 +81,6 @@ jobs:
           node --check update-chrome-node.mjs
           for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
           for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
-          node --check entrypoint/helpers/password-hash.mjs
           python3 -m py_compile entrypoint/helpers/*.py
 
       - name: CDP gateway unit tests
@@ -336,38 +335,59 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name panel-smoke -p 9225:9222 -p 8082:80 \
-            -e SELKIES_BASIC_AUTH_PASSWORD=pw -e ENABLE_AUTH=false \
+            -e AUTH_SETUP_CODE=panel-setup-code \
+            -e SELKIES_ENABLE_BASIC_AUTH=true -e SELKIES_BASIC_AUTH_PASSWORD=unused \
+            -e SELKIES_MASTER_TOKEN=unused-token \
+            -e "SELKIES_EXTRA_ARGS=--enable-basic-auth=true --master-token=unused-cli-token" \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec panel-smoke cat /tmp/cdp-gateway.log /tmp/nginx/error.log || true; docker logs panel-smoke || true; docker rm -f panel-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9225/json/version >/dev/null \
-              && curl -sf -u ubuntu:pw http://127.0.0.1:8082/ >/dev/null && break
+              && [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/)" = 401 ] && break
             sleep 1
           done
-          # the entry page carries the sidebar script, served by the gateway
-          curl -sf -u ubuntu:pw http://127.0.0.1:8082/ | grep -c 'cdp-console/panel.js' >/dev/null
-          curl -sf -u ubuntu:pw http://127.0.0.1:8082/cdp-console/panel.js | grep -c '__cdpConsolePanel' >/dev/null
-          # it takes the master password only, without a login prompt
-          [ "$(curl -s -o /dev/null -w '%{http_code}' -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/panel.js)" = 401 ]
-          ! curl -sI -u ubuntu:wrong http://127.0.0.1:8082/cdp-console/panel.js | grep -ci '^www-authenticate' >/dev/null
+          J=$(mktemp)
+          curl -sf -c "$J" -H 'Content-Type: application/json' -d '{"code":"panel-setup-code","username":"admin","password":"password1"}' http://127.0.0.1:8082/__auth/api/setup | jq -e '.ok' >/dev/null
+          # Selkies' own auth (native env vars or CLI flags) must not add a
+          # second gate: the built-in login is the only one.
+          # The entry page carries the sidebar script, served by the gateway
+          curl -sf -b "$J" http://127.0.0.1:8082/ | grep -c 'cdp-console/panel.js' >/dev/null
+          curl -sf -b "$J" http://127.0.0.1:8082/cdp-console/panel.js | grep -c '__cdpConsolePanel' >/dev/null
+          # Selkies' own API must use the same session, without a native token.
+          curl -sf -b "$J" http://127.0.0.1:8082/api/sessions >/dev/null
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/api/sessions)" = 401 ]
+          # a session is required for the sidebar
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/cdp-console/panel.js)" = 401 ]
+          if curl -sI http://127.0.0.1:8082/cdp-console/panel.js | grep -ci '^www-authenticate' >/dev/null; then
+            echo "unexpected Basic Auth challenge" >&2
+            exit 1
+          fi
           # so does its live state WebSocket, from same-origin pages only
           ws_status() { curl -s -o /dev/null -m 2 -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" http://127.0.0.1:8082/cdp-console/ws || true; }
-          [ "$(ws_status -u ubuntu:pw)" = 101 ]
-          [ "$(ws_status -u ubuntu:wrong)" = 401 ]
-          [ "$(ws_status -u ubuntu:pw -H 'Origin: http://evil.example')" = 403 ]
+            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" "http://127.0.0.1:8082${WS_PATH:-/cdp-console/ws}" || true; }
+          [ "$(ws_status -b "$J")" = 101 ]
+          [ "$(ws_status)" = 401 ]
+          [ "$(ws_status -b "$J" -H 'Origin: http://evil.example')" = 403 ]
+          # The desktop stream and overlay must have the same session gate.
+          for WS_PATH in /api/websockets /cdp-console/overlay; do
+            export WS_PATH
+            [ "$(ws_status -b "$J")" = 101 ]
+            [ "$(ws_status)" = 401 ]
+            [ "$(ws_status -b "$J" -H 'Origin: http://evil.example')" = 403 ]
+          done
+          unset WS_PATH
           # writes need the X-CDP-Console header
-          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api/nope)" = 403 ]
-          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'X-CDP-Console: 1' -u ubuntu:pw http://127.0.0.1:8082/cdp-console/api/nope)" = 404 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -b "$J" http://127.0.0.1:8082/cdp-console/api/nope)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'X-CDP-Console: 1' -b "$J" http://127.0.0.1:8082/cdp-console/api/nope)" = 404 ]
           # the CDP port's console is unchanged (and cannot forge the marker)
-          curl -sf http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
-          curl -sf -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
+          curl -sf -b "$J" http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
+          curl -sf -b "$J" -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
           # the web port reaches the console only: no CDP API through it, with
-          # or without the password, however the path is spelled
+          # or without the session, however the path is spelled
           code() { curl -s -o /dev/null -w '%{http_code}' --path-as-is "$@"; }
-          [ "$(code 'http://127.0.0.1:8082/cdp-console/..\json/version')" = 400 ]
-          [ "$(code -u ubuntu:pw 'http://127.0.0.1:8082/cdp-console/..\json/version')" = 400 ]
-          [ "$(code -u ubuntu:pw 'http://127.0.0.1:8082/cdp-console/json/version')" = 404 ]
+          [ "$(code 'http://127.0.0.1:8082/cdp-console/..\json/version')" = 401 ]
+          [ "$(code -b "$J" 'http://127.0.0.1:8082/cdp-console/..\json/version')" = 400 ]
+          [ "$(code -b "$J" 'http://127.0.0.1:8082/cdp-console/json/version')" = 404 ]
           echo "CDP console sidebar smoke test OK"
 
       - name: Smoke test — built-in login and CDP API key

@@ -5,10 +5,8 @@
 // nginx injects it into the Selkies entry page (sub_filter before </head>,
 // entrypoint/lib/nginx.sh) and proxies cdp-console/ — relative to the page,
 // so SELKIES_SUBFOLDER works — to /console/ on the gateway. Same origin as
-// Selkies on purpose: the browser resends the page's Basic Auth, which the
-// gateway checks against Selkies' master password (view-only users get 401
-// and never see the handle), and the built-in login's session cookie, which
-// nginx checks (ENABLE_AUTH). Its settings menu also carries the built-in
+// Selkies on purpose: nginx checks the built-in login's session cookie
+// (ENABLE_AUTH). Its settings menu also carries the built-in
 // login's controls (login, CDP API key, log out): __auth/ui.js, served by
 // the auth service next to the page.
 //
@@ -837,8 +835,6 @@
 
   setLang(lang, false);
 
-  // Running at all means the gateway let this user in: it serves this script
-  // uncached, behind the same master password as the console (a view-only
-  // login gets 401 and the Selkies page stays untouched).
+  // nginx protects this script with the same login as the console.
   document.body.appendChild(host);
 })();

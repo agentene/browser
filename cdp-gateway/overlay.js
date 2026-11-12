@@ -6,7 +6,7 @@
 //
 // nginx injects it into the Selkies entry page next to panel.js
 // (CDP_INPUT_OVERLAY, entrypoint/lib/nginx.sh); same origin and auth as the
-// sidebar: a view-only login gets a 401 for this script and never runs it.
+// sidebar: nginx checks the built-in login before serving this script.
 // The gateway streams the input over cdp-console/overlay
 // (cdp-gateway/src/input-overlay.mjs — the op format is documented there)
 // while this page is visible and the viewer has the overlay on (the

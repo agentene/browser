@@ -377,9 +377,9 @@ EOF
 nginx_cdp_console_location() {
     cat <<EOF
         # the sidebar's script, API and live state WebSocket, served by the
-        # CDP gateway's console; the marker header makes the gateway require
-        # Selkies' master password and serve its console only (never the
-        # CDP API, which is the CDP port's)
+        # CDP gateway's console; the marker restricts routing to the console
+        # (never the CDP API, which is the CDP port's). Authentication is
+        # inherited from this server's auth_request.
         location ${SELKIES_SUBFOLDER}/cdp-console/ {
 $(nginx_fwd_headers)
             proxy_set_header X-CDP-Console-Via web;
