@@ -13,8 +13,8 @@ import { listedToplevels } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
 import { consoleDenied, consoleOriginDenied, hashPassword, verifyPassword } from '../src/console-auth.mjs';
 import { requestPath, viaWeb } from '../src/respond.mjs';
-import { connectionsTo } from '../src/idle.mjs';
-import { adjustPrefs, cloned } from '../src/profile.mjs';
+import { connectionsTo } from '../src/util.mjs';
+import { adjustPrefs, cloned, cloneProfile } from '../src/profile.mjs';
 import { cookieKey, cookieParam, originTabs } from '../src/storage-sync.mjs';
 
 test('intEnv: default, integer, rejects junk', () => {
@@ -151,10 +151,29 @@ test('consoleOriginDenied: same host:port or no Origin only', () => {
   assert.deepEqual(consoleOriginDenied(req({ host: 'h:8080', origin: 'null' })), [403, 'cross-origin console connection']);
 });
 
+test('profile clone copies the tree, links and all, minus the skipped entries', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clone-'));
+  const src = path.join(root, 'src');
+  fs.mkdirSync(path.join(src, 'Default', 'Local Storage'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'Local State'), '{}');
+  fs.writeFileSync(path.join(src, 'Default', 'Local Storage', 'LOG'), 'x');
+  fs.writeFileSync(path.join(src, 'Default', '.org.chromium.Chromium.Prefs.abc'), 'tmp');
+  fs.symlinkSync('host-1', path.join(src, 'SingletonLock'));
+  fs.symlinkSync('Local State', path.join(src, 'state-link'));
+  const dst = path.join(root, 'dst');
+  await cloneProfile(src, dst);
+  assert.equal(fs.readFileSync(path.join(dst, 'Default', 'Local Storage', 'LOG'), 'utf8'), 'x');
+  assert.equal(fs.readlinkSync(path.join(dst, 'state-link')), 'Local State');
+  assert.ok(!fs.existsSync(path.join(dst, 'SingletonLock')));
+  assert.ok(!fs.existsSync(path.join(dst, 'Default', '.org.chromium.Chromium.Prefs.abc')));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('profile clone skips locks, caches and sessions', () => {
   for (const skipped of ['SingletonLock', 'SingletonSocket', 'DevToolsActivePort', 'Default/Cache',
     'Default/Code Cache', 'GrShaderCache', 'BrowserMetrics-spare.pma', 'Default/Sessions',
-    'Default/Sessions_Encrypted', 'Default/Current Session', 'Default/Last Tabs', 'Crashpad']) {
+    'Default/Sessions_Encrypted', 'Default/Current Session', 'Default/Last Tabs', 'Crashpad',
+    'Default/.org.chromium.Chromium.SCT Auditing Pending Reports.WqPGKW']) {
     assert.equal(cloned(`/p/${skipped}`), false, skipped);
   }
   for (const kept of ['Default', 'Default/Cookies', 'Default/Local Storage', 'Default/IndexedDB',

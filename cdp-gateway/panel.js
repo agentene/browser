@@ -60,20 +60,25 @@
   root.innerHTML = `
     <style>
       :host {
-        --bg:#1b2029; --card:#232a35; --text:#e6e9ef; --muted:#98a2b3; --line:#2f3744;
-        --accent:#6b9cf5; --danger:#f07171; --chip:#2c3442; --thumb:#2f3744; --handle:#2f6fde;
+        --bg:#131417; --card:#1a1b1f; --text:#ededf0; --muted:#8d8f99; --line:#28292e;
+          --accent:#6384ff; --danger:#f2726b; --chip:#232429; --thumb:#232429;
+        --handle:#3563e9;
         color-scheme:dark;
       }
       :host([data-theme="light"]) {
-        --bg:#f6f7f9; --card:#ffffff; --text:#1d2330; --muted:#667085; --line:#e3e6eb;
-        --accent:#2f6fde; --danger:#c43d3d; --chip:#eef2f8; --thumb:#dde2ea;
+        --bg:#f7f7f8; --card:#ffffff; --text:#18181b; --muted:#71717a; --line:#e6e6e9;
+          --accent:#3563e9; --danger:#d0443e; --chip:#f1f1f3; --thumb:#ececef;
         color-scheme:light;
       }
-      * { box-sizing:border-box; }
+      /* the handle: a slim grip on the page's right edge */
       .handle {
-        position:absolute; top:50%; right:0; width:15px; height:60px; transform:translateY(-50%);
-        background:var(--handle); border-radius:6px 0 0 6px; cursor:pointer; opacity:0;
-        transition:opacity .2s, right .2s;
+        position:absolute; top:50%; right:0; width:14px; height:64px; transform:translateY(-50%);
+        background:var(--handle); border-radius:8px 0 0 8px; cursor:pointer; opacity:0;
+        box-shadow:-1px 0 6px rgb(0 0 0 / 25%); transition:opacity .2s, right .2s;
+      }
+      .handle::after {
+        content:""; position:absolute; top:50%; left:50%; width:2px; height:18px; margin:-9px 0 0 -1px;
+        border-radius:1px; background:rgb(255 255 255 / 85%);
       }
       .handle.near, .handle:hover, :host(.open) .handle { opacity:1; }
       @media (hover: none) { .handle { opacity:.6; width:24px; } }
@@ -81,141 +86,164 @@
       .panel {
         position:absolute; top:0; right:0; width:min(var(--panel-width), 100vw); height:100%;
         display:flex; flex-direction:column; background:var(--bg); color:var(--text);
-        font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-        box-shadow:-4px 0 16px rgba(0,0,0,.35); transform:translateX(100%); transition:transform .2s;
+        font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing:antialiased;
+        border-left:1px solid var(--line); box-shadow:-8px 0 28px rgb(0 0 0 / 28%);
+        transform:translateX(100%); transition:transform .2s;
       }
+      :host(:not(.open)) .panel { box-shadow:none; }
       :host(.open) .panel { transform:none; }
       header {
-        display:flex; align-items:center; gap:8px; padding:12px 14px;
+        display:flex; align-items:center; gap:8px; padding:10px 10px 10px 14px;
         border-bottom:1px solid var(--line);
       }
-      h2 { font-size:15px; margin:0; }
-      .summary { color:var(--muted); font-size:12px; }
-      .spacer { flex:1; }
-      .actions { margin-left:auto; display:flex; align-items:center; gap:6px; }
-      .actions [hidden] { display:none; }
-      /* settings: the header's gear and its menu */
-      .settings { position:relative; }
-      .settings-btn {
-        display:inline-flex; align-items:center; justify-content:center; width:30px; height:28px; padding:0;
-        border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--muted); cursor:pointer;
-      }
-      .settings-btn:hover, .settings-btn[aria-expanded="true"] { border-color:var(--accent); color:var(--accent); }
-      .settings-menu {
-        position:absolute; right:0; top:calc(100% + 6px); z-index:20; width:min(300px, calc(100vw - 32px));
-        display:grid; gap:12px; padding:12px 14px; background:var(--card); color:var(--text);
-        border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.2);
-        font-size:13px; line-height:1.45; text-align:left;
-      }
-      .settings-menu[hidden], .setting[hidden] { display:none; }
-      .settings-title { margin:0; font-weight:600; }
-      .setting { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:default; }
-      label.setting { cursor:pointer; }
-      .setting-hint { display:block; margin-top:2px; color:var(--muted); font-size:12px; }
-      .seg { display:inline-flex; flex:none; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
-      .seg button {
-        border:none; border-radius:0; padding:3px 10px; background:transparent; color:var(--muted);
-        font:inherit; font-size:12px; cursor:pointer;
-      }
-      .seg button + button { border-left:1px solid var(--line); }
-      .seg button[aria-pressed="true"], .seg button[aria-pressed="true"]:hover { background:var(--accent); color:#fff; }
-      .switch {
-        appearance:none; -webkit-appearance:none; flex:none; position:relative; width:36px; height:20px; margin:0;
-        border-radius:999px; background:color-mix(in srgb, var(--muted) 45%, transparent); cursor:pointer; transition:background .15s;
-      }
-      .switch::before {
-        content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%;
-        background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.3); transition:transform .15s;
-      }
-      .switch:checked { background:var(--accent); }
-      .switch:checked::before { transform:translateX(16px); }
-      .settings-btn:focus-visible, .seg button:focus-visible, .switch:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-      .error { color:var(--danger); font-size:12px; padding:6px 14px 0; }
-      .error:empty { display:none; }
+      h2 { font-size:14px; font-weight:600; letter-spacing:-.01em; margin:0; }
+      button.close { font-size:18px; font-weight:400; line-height:1; }
+      .error:not(:empty) { margin:10px 14px 0; }
       /* cards side by side once the panel is wide enough for two */
       .body {
-        flex:1; overflow:auto; padding:12px 14px 24px; display:grid; gap:12px; align-content:start;
+        flex:1; overflow:auto; padding:14px 14px 24px; display:grid; gap:12px; align-content:start; align-items:start;
         grid-template-columns:repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+        scrollbar-width:thin; scrollbar-color:var(--line) transparent;
       }
       .resizer {
         position:absolute; top:0; bottom:0; left:-3px; width:7px; z-index:1; cursor:ew-resize;
         touch-action:none;
       }
-      .resizer:hover, :host(.resizing) .resizer { background:var(--accent); opacity:.6; }
+      .resizer:hover, :host(.resizing) .resizer { background:var(--accent); opacity:.5; }
       :host(.resizing) .handle, :host(.resizing) .panel { transition:none; user-select:none; }
+
+      * { box-sizing:border-box; }
+      .spacer { flex:1; }
+      .summary { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+      /* buttons: quiet outlines; the tint comes on hover */
+      button {
+        font:inherit; font-size:12px; font-weight:500; line-height:18px; border-radius:7px; padding:3px 10px; cursor:pointer;
+        border:1px solid var(--line); background:transparent; color:var(--text); white-space:nowrap;
+        transition:background .12s, border-color .12s, color .12s;
+      }
+      button:hover { background:var(--chip); }
+      button.danger { color:var(--muted); }
+      button.danger:hover {
+        color:var(--danger); border-color:color-mix(in srgb, var(--danger) 40%, transparent);
+        background:color-mix(in srgb, var(--danger) 10%, transparent);
+      }
+      button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+      button.primary:hover { background:var(--accent); filter:brightness(1.08); }
+      button:disabled { opacity:.55; cursor:default; }
+      button:focus-visible, .switch:focus-visible, .shot:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+      /* the header's icon buttons: the settings gear (and the panel's close) */
+      .settings-btn, button.close {
+        display:inline-flex; align-items:center; justify-content:center; flex:none; width:28px; height:28px; padding:0;
+        border:none; border-radius:7px; background:transparent; color:var(--muted);
+      }
+      .settings-btn:hover, .settings-btn[aria-expanded="true"], button.close:hover { background:var(--chip); color:var(--text); }
+      /* settings: the gear's menu */
+      .settings { position:relative; }
+      .settings-menu {
+        position:absolute; right:0; top:calc(100% + 8px); z-index:20; width:min(300px, calc(100vw - 32px));
+        display:grid; gap:14px; padding:14px; background:var(--card); color:var(--text);
+        border:1px solid var(--line); border-radius:12px;
+        box-shadow:0 1px 2px rgb(0 0 0 / 6%), 0 12px 32px rgb(0 0 0 / 16%);
+        font-size:13px; line-height:1.45; text-align:left;
+      }
+      .settings-title { margin:0; font-weight:600; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+      .setting { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:default; }
+      label.setting { cursor:pointer; }
+      .setting-hint { display:block; margin-top:2px; color:var(--muted); font-size:12px; }
+      .seg { display:inline-flex; flex:none; gap:2px; padding:2px; border-radius:8px; background:var(--chip); }
+      .seg button { border:none; border-radius:6px; padding:2px 10px; color:var(--muted); }
+      .seg button:hover { background:transparent; color:var(--text); }
+      .seg button[aria-pressed="true"], .seg button[aria-pressed="true"]:hover {
+        background:var(--card); color:var(--text); box-shadow:0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 8%);
+      }
+      .switch {
+        appearance:none; -webkit-appearance:none; flex:none; position:relative; width:34px; height:20px; margin:0;
+        border-radius:999px; background:color-mix(in srgb, var(--muted) 40%, transparent); cursor:pointer; transition:background .15s;
+      }
+      .switch::before {
+        content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%;
+        background:#fff; box-shadow:0 1px 2px rgb(0 0 0 / 30%); transition:transform .15s;
+      }
+      .switch:checked { background:var(--accent); }
+      .switch:checked::before { transform:translateX(14px); }
+      .error:not(:empty) {
+        color:var(--danger); font-size:12px; padding:7px 10px; border-radius:8px;
+        background:color-mix(in srgb, var(--danger) 9%, transparent);
+        border:1px solid color-mix(in srgb, var(--danger) 28%, transparent);
+      }
       .card {
-        background:var(--card); border:1px solid var(--line); border-radius:10px;
-        display:flex; flex-direction:column; min-width:0;
+        background:var(--card); border:1px solid var(--line); border-radius:12px;
+        box-shadow:0 1px 2px rgb(0 0 0 / 4%);
+        display:flex; flex-direction:column; min-width:0; transition:border-color .2s, box-shadow .2s;
       }
-      .card-head {
-        display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:10px 12px;
-        border-bottom:1px solid var(--line);
-      }
+      .card-head { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; padding:12px 14px 0; }
       /* a narrow card wraps its buttons rather than squeezing the name */
-      .name { font-weight:600; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .name {
+        font-weight:600; letter-spacing:-.005em; min-width:0; max-width:100%;
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      }
+      /* the swatch: a context's color (--tint), also its browser frame color on the desktop */
+      .name::before {
+        content:""; display:inline-block; width:9px; height:9px; margin-right:8px; border-radius:3px;
+        background:var(--tint, color-mix(in srgb, var(--muted) 45%, transparent));
+      }
       .chip {
         background:var(--chip); color:var(--muted); border-radius:999px;
-        padding:1px 8px; font-size:12px; white-space:nowrap;
+        padding:1px 8px; font-size:11px; font-weight:500; line-height:18px; white-space:nowrap;
+        font-variant-numeric:tabular-nums;
       }
-      .meta { color:var(--muted); font-size:12px; padding:8px 12px 0; }
-      button {
-        font:inherit; font-size:12px; border-radius:6px; padding:3px 8px; cursor:pointer;
-        border:1px solid var(--line); background:transparent; color:var(--text); white-space:nowrap;
-      }
-      button:hover { border-color:var(--accent); color:var(--accent); }
-      button.danger:hover { border-color:var(--danger); color:var(--danger); }
-      button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-      button.primary:hover { color:#fff; filter:brightness(1.1); }
-      button:disabled { opacity:.6; cursor:default; }
-      button.close { border:none; font-size:18px; line-height:1; padding:0 4px; }
-      /* current tab (thumbnail, title below) | all tabs, as tall as the thumbnail */
-      .tabview {
-        display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-        gap:10px; padding:10px 12px 12px;
-      }
-      .tabview[hidden], .empty[hidden], .chip[hidden] { display:none; }
+      .actions { margin-left:auto; display:flex; align-items:center; gap:6px; }
+      .meta { color:var(--muted); font-size:12px; padding:6px 14px 0; font-variant-numeric:tabular-nums; }
+      /* current tab (thumbnail, its title across the bottom) | all tabs, as tall as the thumbnail */
+      .tabview { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; padding:12px 14px 14px; }
       .shot {
         position:relative; overflow:hidden; cursor:pointer;
-        background:var(--thumb); border-radius:6px; border:1px solid var(--line);
+        background:var(--thumb); border-radius:8px; border:1px solid var(--line); transition:border-color .12s;
       }
+      .shot:hover { border-color:color-mix(in srgb, var(--accent) 55%, var(--line)); }
       .thumb { display:block; width:100%; aspect-ratio:16 / 10; object-fit:cover; object-position:top; }
-      /* the current tab's title, on a 70% gray banner across the thumbnail's bottom */
+      .thumb:not([src]) { visibility:hidden; }
+      /* the current tab's title, on a fade across the thumbnail's bottom */
       .cur-title {
-        position:absolute; left:0; right:0; bottom:0; padding:2px 6px;
-        background:rgb(72 76 84 / 70%); color:#fff; font-size:12px; font-weight:500;
+        position:absolute; left:0; right:0; bottom:0; padding:14px 8px 4px;
+        background:linear-gradient(transparent, rgb(0 0 0 / 55%)); color:#fff; font-size:11px; font-weight:500;
         overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
       }
       .cur-title:empty { display:none; }
-      /* the browser in front on the desktop: a slow, soft glow */
+      /* the browser in front on the desktop: an accent ring, and a live dot on its chip */
       .card.front {
-        border-color:var(--accent);
-        animation:glow 2.4s ease-in-out infinite alternate;
+        border-color:color-mix(in srgb, var(--accent) 70%, var(--line));
+        box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
       }
-      @keyframes glow {
-        from { box-shadow:0 0 4px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
-        to { box-shadow:0 0 14px 3px color-mix(in srgb, var(--accent) 65%, transparent); }
+      .chip.front {
+        display:inline-flex; align-items:center; gap:5px;
+        background:color-mix(in srgb, var(--accent) 14%, transparent); color:var(--accent);
       }
-      @media (prefers-reduced-motion: reduce) {
-        .card.front { animation:none; box-shadow:0 0 10px 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+      .chip.front::before {
+        content:""; width:6px; height:6px; border-radius:50%; background:currentColor;
+        animation:live 1.6s ease-in-out infinite alternate;
       }
-      .chip.front { background:var(--accent); color:#fff; }
+      @keyframes live { from { opacity:.35; } to { opacity:1; } }
+      @media (prefers-reduced-motion: reduce) { .chip.front::before { animation:none; } }
       .tabs-box { position:relative; }
       .tabs {
-        position:absolute; inset:0; overflow:auto; list-style:none; margin:0; padding:3px;
-        display:flex; flex-direction:column; gap:2px; border:1px solid var(--line); border-radius:6px;
+        position:absolute; inset:0; overflow:auto; list-style:none; margin:0; padding:0;
+        display:flex; flex-direction:column; gap:1px; scrollbar-width:thin; scrollbar-color:var(--line) transparent;
       }
       .tabs li { min-width:0; flex:none; }
       .tabs button {
-        display:block; width:100%; text-align:left; padding:2px 5px;
-        border:none; border-left:3px solid transparent; border-radius:4px;
+        display:block; width:100%; text-align:left; font-weight:400; padding:3px 8px;
+        border:none; border-radius:6px; color:var(--muted);
         overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
       }
       .tabs button:hover { background:var(--chip); color:var(--text); }
+      .tabs button:focus-visible { outline-offset:-2px; }
       .tabs button.current {
-        background:color-mix(in srgb, var(--accent) 22%, transparent);
-        border-left-color:var(--accent); font-weight:600;
+        background:var(--chip); color:var(--text); font-weight:500;
+        box-shadow:inset 2px 0 0 var(--accent);
       }
-      .empty { color:var(--muted); padding:12px; }
+      .empty { color:var(--muted); font-size:13px; padding:10px 14px 14px; }
+      .settings-menu[hidden], .setting[hidden], .tabview[hidden], .empty[hidden], .chip[hidden], .actions [hidden] { display:none; }
     </style>
     <div class="handle"></div>
     <aside class="panel" role="dialog" inert>
@@ -512,7 +540,7 @@
         call('POST', '/main/start').catch(showError);
       } }, starting ? t('starting') : t('startBrowser'));
     start.disabled = starting;
-    return { card: el('section', { class: 'card', style: 'border-top: 4px solid var(--line)' },
+    return { card: el('section', { class: 'card' },
       el('div', { class: 'card-head' },
         el('span', { class: 'name' }, t('mainBrowser')),
         el('span', { class: 'chip' }, starting ? t('stateStarting') : t('stateStopped')),
@@ -557,8 +585,8 @@
     v.list = el('ul', { class: 'tabs' });
     v.tabview = el('div', { class: 'tabview' }, shot, el('div', { class: 'tabs-box' }, v.list));
     v.empty = el('div', { class: 'empty' }, t('noTabs'));
-    // a context's color is also its browser frame color on the desktop
-    v.card = el('section', { class: 'card', style: `border-top: 4px solid ${context.color || 'var(--line)'}` },
+    // a context's color (the swatch by its name) is also its browser frame color on the desktop
+    v.card = el('section', { class: 'card', ...(context.color ? { style: `--tint:${context.color}` } : {}) },
       head, v.meta, v.tabview, v.empty);
     return v;
   }
@@ -673,13 +701,17 @@
   }
 
   // --- live state: WebSocket to the gateway (cdp-console/ws) -----------------
-  // A snapshot, then only changes. Reconnects with backoff while open.
+  // A snapshot, then only changes. Reconnects with backoff while open and
+  // the page is visible: a subscriber keeps the gateway's once-a-second tick
+  // and the thumbnail screencasts going, so a Selkies page left open with the
+  // panel out in a background tab disconnects and picks up a fresh snapshot
+  // when it is shown again.
   let ws = null;
   let retry = 1000;
   let retryTimer = 0;
 
   function connect() {
-    if (ws) return;
+    if (ws || document.hidden || !host.classList.contains('open')) return;
     ws = new WebSocket(WS);
     ws.onopen = () => {
       retry = 1000;
@@ -709,6 +741,15 @@
     ws.close();
     ws = null;
   }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      disconnect();
+    } else {
+      retry = 1000;
+      connect();
+    }
+  });
 
   setLang(lang, false);
 

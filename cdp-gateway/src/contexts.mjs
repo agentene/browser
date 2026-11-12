@@ -10,6 +10,7 @@ import {
   appId, readFlags,
 } from './config.mjs';
 import { browserReady, launchChromium } from './launch.mjs';
+import { restoreScreen } from './screen.mjs';
 import { cloneProfile, preparePrefs } from './profile.mjs';
 import { copyCookies, restoreLocalStorage, snapshotLocalStorage } from './storage-sync.mjs';
 import { killGroup, log } from './util.mjs';
@@ -85,6 +86,7 @@ class Context {
       logFile.once('open', resolve);
       logFile.once('error', reject);
     });
+    if (!CONTEXTS_HEADLESS) await restoreScreen();
     const { proc, pipe } = launchChromium(flags, logFile, this.name);
     this.proc = proc;
     this.pipe = pipe;

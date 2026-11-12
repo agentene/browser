@@ -1,6 +1,7 @@
 // Small helpers without gateway state.
 
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 export function log(...args) {
   console.log(new Date().toISOString(), '[cdp-gateway]', ...args);
@@ -33,4 +34,23 @@ export function output(cmd, args) {
 // Signal a process group, ignoring one that is already gone.
 export function killGroup(pid, signal) {
   try { process.kill(-pid, signal); } catch { /* already gone */ }
+}
+
+// Connected streams on a unix socket: the connections its server accepted
+// are listed under its path too, in state 03 (connected); the listening
+// socket itself is 01. nginx keeps no idle upstream connections, so outside
+// a request only a viewer's stream WebSocket is open.
+export function connectionsTo(socketPath, table = '/proc/net/unix') {
+  let text = '';
+  try {
+    text = readFileSync(table, 'utf8');
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const line of text.split('\n').slice(1)) {
+    const fields = line.trim().split(/\s+/);
+    if (fields[5] === '03' && fields[7] === socketPath) n++;
+  }
+  return n;
 }

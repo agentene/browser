@@ -20,7 +20,9 @@ const SKIP_NAMES = new Set([
   'Crashpad', 'component_crx_cache', 'extensions_crx_cache',
   'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs',
 ]);
-const SKIP_PREFIXES = ['Singleton', 'BrowserMetrics', 'Sessions'];
+// '.org.chromium.Chromium.' is chromium's atomic-write temp file (written,
+// then renamed over the real one).
+const SKIP_PREFIXES = ['Singleton', 'BrowserMetrics', 'Sessions', '.org.chromium.'];
 
 // Whether a profile entry (file or directory) goes into the clone.
 export function cloned(source) {
@@ -29,10 +31,33 @@ export function cloned(source) {
   return !SKIP_PREFIXES.some((p) => base.startsWith(p));
 }
 
+// The main browser keeps writing while it is copied (most right after a CDP
+// client restarted it), so an entry listed may be gone (renamed, deleted) by
+// the time it is copied: it is left out, as if listed a moment later —
+// fs.cp would fail the whole clone on it (ENOENT).
 export async function cloneProfile(src, dst) {
-  // COPYFILE_FICLONE = reflink (copy-on-write) where the filesystem supports
-  // it, a plain copy otherwise
-  await fs.cp(src, dst, { recursive: true, mode: fsConstants.COPYFILE_FICLONE, filter: cloned });
+  await fs.mkdir(dst, { recursive: true });
+  let entries;
+  try {
+    entries = await fs.readdir(src, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return;
+    throw err;
+  }
+  await Promise.all(entries.map(async (entry) => {
+    const from = path.join(src, entry.name);
+    const to = path.join(dst, entry.name);
+    if (!cloned(from)) return;
+    try {
+      if (entry.isDirectory()) await cloneProfile(from, to);
+      else if (entry.isSymbolicLink()) await fs.symlink(await fs.readlink(from), to);
+      // COPYFILE_FICLONE = reflink (copy-on-write) where the filesystem
+      // supports it, a plain copy otherwise
+      else if (entry.isFile()) await fs.copyFile(from, to, fsConstants.COPYFILE_FICLONE);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+  }));
 }
 
 // Whether cloneProfile gets reflinks: FICLONE needs source and destination

@@ -59,6 +59,7 @@
 //   main-browser.mjs    the main browser (at start, or on demand)
 //   idle.mjs            CHROMIUM_IDLE_TIMEOUT
 //   browsers.mjs        main + contexts by name (pipe, pid, target owner)
+//   screen.mjs          the desktop back to SCREEN_GEOMETRY before a context window opens unwatched
 //   desktop.mjs         the browser windows (the one in front, their titles), bringing one to the front
 //   settings.mjs        the console's persisted settings (/browser/settings)
 //   console-live.mjs    the console's live state over /console/ws
