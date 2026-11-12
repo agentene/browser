@@ -6,6 +6,11 @@
 
 import { CdpClient } from './cdp-client.mjs';
 
+// How long before a frame may go out the frame for it is asked for (one
+// ack): enough for chromium to repaint and encode it, so the thumbnail is
+// about this fresh rather than an interval old.
+export const ACK_LEAD_MS = 250;
+
 export class Screencast {
   // interval(): how often a frame may go out at most (re-read on reschedule);
   // onFrame(jpeg): hands one out, false when it was not sent (unchanged);
@@ -21,6 +26,15 @@ export class Screencast {
     this.sentAt = 0;
     this.timer = null;
     this.every = interval();
+    // Chromium sends a frame only while it has a free slot (a few frames
+    // may wait for an ack), and every frame it encodes costs a JPEG, its
+    // base64 and its parse here. So frames are acked at most one per
+    // interval, ACK_LEAD_MS before the next one may go out: chromium
+    // encodes about as many frames as go out, the latest at that moment.
+    this.unacked = 0;
+    this.castSession = null; // Page.screencastFrame's sessionId, echoed in acks
+    this.ackedAt = Date.now(); // the first frames come without one
+    this.ackTimer = null;
     this.start(pipe);
   }
 
@@ -30,16 +44,12 @@ export class Screencast {
       if (this.closed) return cdp.close();
       this.cdp = cdp;
       cdp.ws.once('close', () => this.onEnd()); // the next tick retries
-      // Late acks slow chromium down (a frame at most every ackMs, so a sent
-      // thumbnail is at most that old), but it keeps a few frames in flight,
-      // so the frames are throttled here too: the latest one goes out at most
-      // every this.every.
       cdp.on('Page.screencastFrame', ({ data, sessionId }) => {
-        setTimeout(() => {
-          if (!this.closed) cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => { /* tab gone */ });
-        }, Math.min(this.interval() / 2, 5000));
+        this.castSession = sessionId;
+        this.unacked++;
         this.frame = data;
         this.schedule();
+        this.scheduleAck();
       });
       await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, maxWidth: 640, maxHeight: 400 });
     } catch {
@@ -58,22 +68,45 @@ export class Screencast {
     this.frame = null;
     if (this.closed || !data) return;
     if (this.onFrame(data) !== false) this.sentAt = Date.now();
+    this.scheduleAck(); // the sent frame's slot goes back before the next send
+  }
+
+  scheduleAck() {
+    if (this.ackTimer !== null || !this.unacked || this.closed) return;
+    const at = Math.max(this.sentAt + this.every - ACK_LEAD_MS, this.ackedAt + this.every);
+    this.ackTimer = setTimeout(() => this.ack(), Math.max(0, at - Date.now()));
+  }
+
+  ack() {
+    this.ackTimer = null;
+    if (this.closed || !this.unacked) return;
+    this.unacked--;
+    this.ackedAt = Date.now();
+    this.cdp.send('Page.screencastFrameAck', { sessionId: this.castSession }).catch(() => { /* tab gone */ });
+    this.scheduleAck();
   }
 
   // The interval may have changed (the browser came to the front, or went
-  // behind): a frame waiting for the old one goes by the new one.
+  // behind): a frame or an ack waiting for the old one goes by the new one.
   reschedule() {
     if (this.every === this.interval()) return;
     this.every = this.interval();
-    if (this.timer === null) return;
-    clearTimeout(this.timer);
-    this.timer = null;
-    this.schedule();
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+      this.schedule();
+    }
+    if (this.ackTimer !== null) {
+      clearTimeout(this.ackTimer);
+      this.ackTimer = null;
+      this.scheduleAck();
+    }
   }
 
   close() {
     this.closed = true;
     clearTimeout(this.timer);
+    clearTimeout(this.ackTimer);
     this.cdp?.close();
   }
 }

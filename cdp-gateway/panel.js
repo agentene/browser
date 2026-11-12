@@ -701,13 +701,17 @@
   }
 
   // --- live state: WebSocket to the gateway (cdp-console/ws) -----------------
-  // A snapshot, then only changes. Reconnects with backoff while open.
+  // A snapshot, then only changes. Reconnects with backoff while open and
+  // the page is visible: a subscriber keeps the gateway's once-a-second tick
+  // and the thumbnail screencasts going, so a Selkies page left open with the
+  // panel out in a background tab disconnects and picks up a fresh snapshot
+  // when it is shown again.
   let ws = null;
   let retry = 1000;
   let retryTimer = 0;
 
   function connect() {
-    if (ws) return;
+    if (ws || document.hidden || !host.classList.contains('open')) return;
     ws = new WebSocket(WS);
     ws.onopen = () => {
       retry = 1000;
@@ -737,6 +741,15 @@
     ws.close();
     ws = null;
   }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      disconnect();
+    } else {
+      retry = 1000;
+      connect();
+    }
+  });
 
   setLang(lang, false);
 
