@@ -198,6 +198,21 @@
   .tabs button.working { color:var(--text); }
   .empty { color:var(--muted); font-size:13px; padding:10px 14px 14px; }
   .settings-menu[hidden], .setting[hidden], .tabview[hidden], .empty[hidden], .chip[hidden], .actions [hidden] { display:none; }
+  /* the console's confirmations (ask()): an in-page overlay, never window.confirm() */
+  .ask {
+    position:fixed; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; padding:16px;
+    background:color-mix(in srgb, var(--bg) 55%, rgb(0 0 0 / 45%));
+  }
+  .ask-box {
+    width:min(340px, 100%); display:grid; gap:14px; padding:18px 18px 14px; background:var(--card); color:var(--text);
+    border:1px solid var(--line); border-radius:12px; box-shadow:0 1px 2px rgb(0 0 0 / 6%), 0 16px 40px rgb(0 0 0 / 28%);
+    font-size:13px; line-height:1.5;
+  }
+  .ask-box p { margin:0; overflow-wrap:anywhere; }
+  .ask-buttons { display:flex; justify-content:flex-end; gap:8px; }
+  .ask-buttons button { padding:4px 14px; }
+  button.danger-solid { background:var(--danger); border-color:var(--danger); color:#fff; }
+  button.danger-solid:hover { background:var(--danger); filter:brightness(1.08); }
 </style>
 </head>
 <body>
@@ -256,7 +271,7 @@
       startBrowser: 'Start browser',
       stateStarting: 'starting',
       stateStopped: 'stopped',
-      notRunning: 'Not running. It starts on demand: with this button, or by itself when a CDP client connects.',
+      notRunning: 'Not running. It starts on demand: with this button.',
       frontTitle: 'This browser window is in front on the desktop',
       showing: 'Showing',
       showTitle: 'Bring this browser window to the front of the desktop',
@@ -267,6 +282,7 @@
       deleteTitle: 'Close the context and disconnect its client',
       deleteConfirm: (name) => `Delete ${name}? Its client gets disconnected.`,
       delete: 'Delete',
+      cancel: 'Cancel',
       shotTitle: 'Show this tab on the desktop',
       noTabs: 'No open tabs.',
       untitled: '(untitled)',
@@ -296,7 +312,7 @@
       startBrowser: '启动浏览器',
       stateStarting: '启动中',
       stateStopped: '已停止',
-      notRunning: '未运行。按需启动：点击此按钮，或在有 CDP 客户端连接时自动启动。',
+      notRunning: '未运行。按需启动：点击此按钮。',
       frontTitle: '此浏览器窗口位于桌面最前',
       showing: '显示中',
       showTitle: '将此浏览器窗口切到桌面最前',
@@ -307,6 +323,7 @@
       deleteTitle: '关闭此上下文并断开其客户端',
       deleteConfirm: (name) => `删除 ${name}？它的客户端将断开连接。`,
       delete: '删除',
+      cancel: '取消',
       shotTitle: '在桌面上显示此标签页',
       noTabs: '没有打开的标签页。',
       untitled: '（无标题）',
@@ -421,6 +438,48 @@
     return node;
   }
 
+  // A confirmation of the console's own, never window.confirm(): that one is
+  // modal for the whole page and blocks its main thread (the live thumbnails stop with it). This one is an
+  // overlay on the page.
+  // Resolves true on confirm.
+  let asking = null; // the open confirmation's done(), if any
+  function ask(message, okLabel) {
+    asking?.(false);
+    return new Promise((resolve) => {
+      const behind = [...document.body.children].filter((n) => n.tagName !== 'SCRIPT' && !n.inert);
+      const back = document.activeElement;
+      const cancel = el('button', { type: 'button' }, t('cancel'));
+      const ok = el('button', { type: 'button', class: 'danger-solid' }, okLabel);
+      const layer = el('div', { class: 'ask' },
+        el('div', { class: 'ask-box', role: 'alertdialog', 'aria-modal': 'true', 'aria-label': message },
+          el('p', {}, message), el('div', { class: 'ask-buttons' }, cancel, ok)));
+      const done = (yes) => {
+        if (asking !== done) return;
+        asking = null;
+        layer.remove();
+        for (const n of behind) n.inert = false;
+        if (back?.isConnected) back.focus();
+        resolve(yes);
+      };
+      asking = done;
+      cancel.onclick = () => done(false);
+      ok.onclick = () => done(true);
+      layer.addEventListener('pointerdown', (e) => { if (e.target === layer) done(false); });
+      layer.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation(); // closes the confirmation only, not anything behind it
+          done(false);
+        } else if (e.key === 'Tab') {
+          e.preventDefault(); // the focus stays on its two buttons
+          (e.target === ok ? cancel : ok).focus();
+        }
+      });
+      for (const n of behind) n.inert = true;
+      document.body.append(layer);
+      cancel.focus();
+    });
+  }
+
   async function call(method, path, body) {
     // X-CDP-Console: the gateway takes no console write without it, which no
     // cross-site form can send (console-auth.mjs)
@@ -525,12 +584,12 @@
       actions);
     if (isMain) {
       actions.append(el('button', { class: 'danger', title: t('stopTitle'),
-        onclick: () => confirm(t('stopConfirm'))
+        onclick: async () => await ask(t('stopConfirm'), t('stop'))
           && call('POST', `${base}/stop`).catch(showError) }, t('stop')));
     }
     if (!isMain) {
       actions.append(el('button', { class: 'danger', title: t('deleteTitle'),
-        onclick: () => confirm(t('deleteConfirm', name))
+        onclick: async () => await ask(t('deleteConfirm', name), t('delete'))
           && call('DELETE', base).catch(showError) }, t('delete')));
     }
     v.meta = el('div', { class: 'meta' });
