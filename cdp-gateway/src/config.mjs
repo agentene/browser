@@ -31,6 +31,8 @@ export const MAIN_AUTOSTART = env.CHROMIUM_AUTOSTART !== 'false';
 export const IDLE_TIMEOUT_MS = intEnv('CHROMIUM_IDLE_TIMEOUT', 0) * 60_000;
 // Selkies' unix socket: an open connection there is someone watching
 export const VIEWER_SOCKET = env.CDP_GATEWAY_VIEWER_SOCKET || '';
+// SCREEN_GEOMETRY as WxH: the desktop size while nobody watches (screen.mjs)
+export const SCREEN_SIZE = env.CDP_GATEWAY_SCREEN_SIZE || '';
 // chromium's protocol description, captured from the binary at image build
 // (the browsers serve no /json/protocol over their pipe)
 export const PROTOCOL_FILE = env.CDP_GATEWAY_PROTOCOL_FILE || '/opt/chrome-for-testing/devtools-protocol.json';

@@ -13,7 +13,7 @@ import { listedToplevels } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
 import { consoleDenied, consoleOriginDenied, hashPassword, verifyPassword } from '../src/console-auth.mjs';
 import { requestPath, viaWeb } from '../src/respond.mjs';
-import { connectionsTo } from '../src/idle.mjs';
+import { connectionsTo } from '../src/util.mjs';
 import { adjustPrefs, cloned } from '../src/profile.mjs';
 import { cookieKey, cookieParam, originTabs } from '../src/storage-sync.mjs';
 

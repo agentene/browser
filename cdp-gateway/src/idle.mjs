@@ -3,32 +3,12 @@
 // WebSocket), an isolated context alive or starting, a Selkies viewer
 // connected.
 
-import { readFileSync } from 'node:fs';
 import { IDLE_TIMEOUT_MS, VIEWER_SOCKET } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { openMuxes } from './mux.mjs';
 import { openRelays } from './relay.mjs';
-import { log } from './util.mjs';
-
-// Connected streams on a unix socket: the connections its server accepted
-// are listed under its path too, in state 03 (connected); the listening
-// socket itself is 01. nginx keeps no idle upstream connections, so outside
-// a request only a viewer's stream WebSocket is open.
-export function connectionsTo(socketPath, table = '/proc/net/unix') {
-  let text = '';
-  try {
-    text = readFileSync(table, 'utf8');
-  } catch {
-    return 0;
-  }
-  let n = 0;
-  for (const line of text.split('\n').slice(1)) {
-    const fields = line.trim().split(/\s+/);
-    if (fields[5] === '03' && fields[7] === socketPath) n++;
-  }
-  return n;
-}
+import { connectionsTo, log } from './util.mjs';
 
 function busy() {
   return openMuxes() > 0 || openRelays() > 0 || contexts.busy

@@ -350,7 +350,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | ------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TZ`                | `UTC`          | 容器时区(任意 IANA 时区,如 `Asia/Shanghai`)                                                                                                                                                                          |
 | `DISPLAY_BACKEND`   | `wayland`      | 有头浏览器所在的桌面:`wayland` = labwc,一个无头 Wayland 合成器 + 窗口管理器,由 Selkies 在 GPU 上采集 —— 挂了 GPU 时,动画页面的 CPU 占用降低数倍,见 [Wayland 桌面](#wayland-桌面display_backendwayland);`x11` = Xvfb(+ picom)—— 使用 NVIDIA GPU 时请选它 |
-| `SCREEN_GEOMETRY`   | `1920x1080x24` | Xvfb 屏幕尺寸 `宽x高x深`(`wayland` 时为 labwc 输出的尺寸);同时决定 Selkies 串流分辨率                                                                                                                                 |
+| `SCREEN_GEOMETRY`   | `1920x1080x24` | Xvfb 屏幕尺寸 `宽x高x深`(`wayland` 时为 labwc 输出的尺寸);同时决定 Selkies 串流分辨率。无人观看时新建隔离 CDP context,会先把显示器恢复为该尺寸(观看端离开后会留下它自己的尺寸)                                                                                                                                 |
 | `RUN_USER`          | `browser`      | 桌面栈(Xvfb 或 labwc、picom、PulseAudio、selkies、chromium、CDP 网关、认证服务)与 nginx *worker* 的运行用户 —— 未设置/为空 = `browser`(uid 1001,镜像内置);也可填已存在的用户名或 `uid[:gid]`;`0` = 全部以 root 运行。PID 1 与 nginx master 保持 root。见[权限降级(`RUN_USER`)](#权限降级run_user) |
 
 ### 权限降级(`RUN_USER`)
