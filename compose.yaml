@@ -224,6 +224,8 @@ services:
       # characters typed; off = no overlay. Seen by the sidebar's users (the built-in login);
       # each can hide it in the CDP sidebar's settings.
       CDP_INPUT_OVERLAY: "${CDP_INPUT_OVERLAY:-text}"
+      # Allow creating browsers and closing individual tabs from the console/sidebar.
+      CDP_CONSOLE_ACTIONS: "${CDP_CONSOLE_ACTIONS:-true}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: wayland = labwc, a headless

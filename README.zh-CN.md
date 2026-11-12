@@ -190,6 +190,8 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 * 「Show」把对应浏览器窗口提到 Selkies 画面最前;
 * 「Delete」强制关闭隔离 context 并断开它的客户端。
 
+顶部的 **+** 图标按钮（新建浏览器）会复制主浏览器配置，打开带有空白标签页的独立浏览器。它与 CDP 创建的 context 共用 `CDP_CONTEXTS_MAX` 上限，关闭控制台不会结束它；删除其卡片会停止浏览器并清理副本。鼠标悬停或键盘聚焦标签行时，行内右侧才显示 **×** 按钮，标签行宽度保持不变（触屏设备始终显示），平时标题使用完整行宽。按钮仅关闭对应标签（包括自动化正在使用的标签）。关闭最后一个标签可能结束该浏览器。侧边栏提供相同操作；`CDP_CONSOLE_ACTIONS=false` 会隐藏这两个入口并禁用对应 API。
+
 每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。控制台页面的状态只通过 `/console/ws` WebSocket 获取:连上时先收到一份全量快照,之后只收变化;页面上的操作则是 `/console/api/` 下的普通 HTTP 请求,所有写操作(`POST`/`PATCH`/`DELETE`)都必须带 `X-CDP-Console: 1` 请求头,跨站表单无法发送它。控制台(以及下面的侧边栏)支持英文和简体中文:默认跟随浏览器语言,可在设置菜单(标题栏的齿轮按钮)里切换(按浏览器记住)。
 
 桌面上新打开的浏览器窗口(例如新隔离 context 的窗口)默认会切到最前,和一般窗口管理器的行为一样。在同一个设置菜单里关闭 *新窗口切到最前*,之后新窗口就会开在当前最前窗口的后面,自动化任务不会抢走你正在看的窗口;「Show」仍然可以把任意窗口切到最前。开关只影响之后新打开的窗口,并保存在服务端:控制台的设置存放在 `/browser` 挂载下的 `/browser/settings/settings.json`(按分组组织的 JSON 对象,例如 `{"desktop": {"raiseNewWindows": false}}`),容器重启或重建后依然保留;这些设置没有对应的环境变量,控制台通过 `GET` / `PATCH /console/api/settings` 读取和修改。语言设置因人而异,仍保存在各自的浏览器里。浏览器以有头模式运行时才显示这个开关。Wayland 下由 labwc 在新窗口映射时、画出第一帧之前把它放到底层;X11 下由屏幕跟随进程代替缺失的窗口管理器(Chromium 改为请求它激活窗口,而不是自己置顶),因此不存在事后再切回去的过程。
@@ -346,6 +348,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDP_CONTEXTS_MAX`          | `4`                         | 同时存在的隔离 context 上限(每个都是完整浏览器);超出后新建 context 返回 CDP 错误                                                        |
 | `CDP_ALLOW_ORIGINS`         | *(空)*                      | 允许使用 CDP API 的网页 origin,逗号分隔(`*` = 任意),与 Chromium 的 `--remote-allow-origins` 相同;空 = 都不允许 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |
+| `CDP_CONSOLE_ACTIONS`       | `true`                      | 允许在控制台和侧边栏新建独立浏览器、关闭单个标签页 |
 | `CDP_INPUT_OVERLAY`         | `text`                      | Selkies 页面在串流上叠加画出的 CDP 客户端输入(见上文“看到 AI Agent 在做什么”):`text` = 指针、点击、滚轮、组合键和输入的文字(密码 / 一次性验证码 / 银行卡字段及 frame 内显示为 `••••`);`keys` = 同上,但文字只显示字数;`off` = 不显示。需要 Selkies 和 CDP 同时启用 |
 | `CDP_ALLOW_BROWSER_CLOSE`   | `false`                     | 客户端的 `Browser.close`(Puppeteer 的 `browser.close()`)是否关闭共享的浏览器(容器不会退出,下一个客户端会再把它启动起来);`false` = 只关闭该客户端自己的连接(及其隔离 context),`Browser.crash*` 一律拒绝 |
 | `CDP_FILE_DIRS`             | `/browser/downloads`        | CDP 客户端可以指定本地文件的目录(冒号分隔):按路径读取文件的命令(`DOM.setFileInputFiles`、拖放、PWA 启动、`Extensions.loadUnpacked`)读取其他位置的文件一律拒绝(先解析符号链接),不在其中的下载目录会被改到第一个目录。第一个目录同时也是浏览器的下载目录(托管策略 `DownloadDirectory`;启动时创建并交给 `RUN_USER`)。没有这项限制,CDP 客户端可以读取浏览器用户能读的任何文件(登录的 `auth.json`),并往它能写的目录里写入新文件。`*` = 不检查,也不设策略 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |

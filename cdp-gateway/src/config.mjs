@@ -18,6 +18,7 @@ export function intEnv(name, fallback, source = env) {
 // The gateway's own unix socket (nginx proxies the CDP port here): no TCP
 // port a page in the browser could open (pipe.mjs)
 export const SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
+export const CONSOLE_ACTIONS = env.CDP_CONSOLE_ACTIONS !== 'false';
 export const MAX_CONTEXTS = intEnv('CDP_CONTEXTS_MAX', 4);
 export const CONTEXTS_DIR = env.CDP_CONTEXTS_DIR || '/browser/contexts';
 export const MAIN_PROFILE = env.CHROMIUM_USER_DATA_DIR || '/browser/user-data';

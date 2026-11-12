@@ -134,6 +134,7 @@
 #                                Browser.crash* are refused. true: passed
 #                                through — the browser exits (the container
 #                                keeps running; the next client restarts it)
+#   CDP_CONSOLE_ACTIONS=true    allow console/sidebar browser creation and tab closing
 #   CDP_INPUT_OVERLAY=text       what the Selkies page draws over the stream of
 #                                the CDP clients' input, which never moves the
 #                                desktop's own pointer: text = their pointer,
@@ -437,6 +438,12 @@ config_cdp_gateway() {
             esac
         done
     fi
+    # Console browser creation and individual tab closing.
+    CDP_CONSOLE_ACTIONS="${CDP_CONSOLE_ACTIONS:-true}"
+    case "${CDP_CONSOLE_ACTIONS}" in
+        true|false) ;;
+        *) die "CDP_CONSOLE_ACTIONS='${CDP_CONSOLE_ACTIONS}' must be true or false" ;;
+    esac
     # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
     # needs the web UI to sit in and the gateway to talk to.
     CDP_CONSOLE_PANEL_ACTIVE=false

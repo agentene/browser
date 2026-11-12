@@ -91,7 +91,7 @@
       :host(:not(.open)) .panel { box-shadow:none; }
       :host(.open) .panel { transform:none; }
       header {
-        display:flex; align-items:center; gap:8px; padding:10px 10px 10px 14px;
+        display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 10px 10px 14px;
         border-bottom:1px solid var(--line);
       }
       h2 { font-size:14px; font-weight:600; letter-spacing:-.01em; margin:0; }
@@ -228,11 +228,23 @@
         position:absolute; inset:0; overflow:auto; list-style:none; margin:0; padding:0;
         display:flex; flex-direction:column; gap:1px; scrollbar-width:thin; scrollbar-color:var(--line) transparent;
       }
-      .tabs li { min-width:0; flex:none; }
+      .tabs li { position:relative; min-width:0; flex:none; }
       .tabs button {
         display:flex; align-items:center; gap:6px; width:100%; text-align:left; font-weight:400; padding:3px 8px;
         border:none; border-radius:6px; color:var(--muted);
       }
+      .tabs li > button:first-child { min-width:0; }
+      .tabs button.tab-close { display:none; position:absolute; right:2px; top:50%; transform:translateY(-50%); width:24px; height:24px; padding:0; justify-content:center; font-size:18px; }
+      .tabs li:hover > .tab-close, .tabs li:focus-within > .tab-close { display:flex; }
+      .tabs li:hover > button:first-child, .tabs li:focus-within > button:first-child { background:var(--chip); color:var(--text); }
+      .tabs li:has(> .tab-close:not([hidden])):is(:hover, :focus-within) > button:first-child { padding-right:28px; }
+      @media (hover:none) {
+        .tabs button.tab-close { display:flex; }
+        .tabs li:has(> .tab-close:not([hidden])) > button:first-child { padding-right:28px; }
+      }
+      .tabs button.tab-close:hover { color:var(--danger); background:color-mix(in srgb, var(--danger) 10%, transparent); }
+      .tabs button.tab-close[hidden], .new-browser[hidden] { display:none; }
+      .new-browser { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; }
       .tab-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .tabs button:hover { background:var(--chip); color:var(--text); }
       .tabs button:focus-visible { outline-offset:-2px; }
@@ -265,6 +277,7 @@
       <header>
         <h2></h2><span class="summary"></span>
         <span class="spacer"></span>
+        <button class="settings-btn new-browser" type="button" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         <div class="settings">
           <button class="settings-btn" type="button" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           <div class="settings-menu" role="dialog" hidden>
@@ -285,7 +298,7 @@
         </div>
         <button class="close">×</button>
       </header>
-      <div class="error"></div>
+      <div role="alert" class="error"></div>
       <div class="body"></div>
     </aside>`;
   const $ = (sel) => root.querySelector(sel);
@@ -298,6 +311,11 @@
     en: {
       title: 'CDP Console',
       loading: 'loading…',
+      newBrowser: 'New browser',
+      browserLimit: 'Browser limit reached — delete an isolated browser to make room',
+      creatingBrowser: 'Creating…',
+      newBrowserHint: 'Open an independent browser with a copy of the main profile',
+      closeTab: (title) => `Close tab: ${title}`,
       mainBrowser: 'Main browser',
       startTitle: 'Start the main browser on the desktop',
       starting: 'Starting…',
@@ -337,6 +355,11 @@
     zh: {
       title: 'CDP 控制台',
       loading: '加载中…',
+      newBrowser: '新建浏览器',
+      browserLimit: '浏览器数量已达上限，请先删除一个独立浏览器',
+      creatingBrowser: '正在创建…',
+      newBrowserHint: '复制主浏览器配置，打开独立浏览器',
+      closeTab: (title) => `关闭标签页：${title}`,
       mainBrowser: '主浏览器',
       startTitle: '在桌面上启动主浏览器',
       starting: '启动中…',
@@ -396,6 +419,7 @@
     $('.resizer').title = t('resizeTitle');
     $('h2').textContent = t('title');
     $('.close').setAttribute('aria-label', t('close'));
+    renderNewBrowser();
     settingsBtn.title = t('settings');
     settingsBtn.setAttribute('aria-label', t('settings'));
     settingsMenu.setAttribute('aria-label', t('settings'));
@@ -417,7 +441,7 @@
   // Settings: the header's gear opens a menu with the console's language and
   // the desktop's "new windows to the front" switch (only with a desktop).
   const settings = $('.settings');
-  const settingsBtn = $('.settings-btn');
+  const settingsBtn = $('.settings .settings-btn');
   const settingsMenu = $('.settings-menu');
   function setMenu(open) {
     settingsMenu.hidden = !open;
@@ -521,9 +545,13 @@
   const aiColor = (c) => AI_COLORS[(c - 1) % AI_COLORS.length];
   const views = new Map(); // name -> the card's DOM parts, see liveCard()
   let max = 0;
+  let actionsEnabled = false;
+  let creatingBrowser = false;
+  const closingTabs = new Set();
   let serverSettings = {}; // the server-side settings on offer (settings.mjs): {section: {key: value}}
 
   function renderSummary() {
+    renderNewBrowser();
     const n = [...browsers.values()].filter((b) => !b.main).length;
     $('.summary').textContent = views.size ? t('summary', n, max) : '';
   }
@@ -563,6 +591,43 @@
     renderOverlay();
   });
   renderOverlay();
+
+  function renderNewBrowser() {
+    const button = $('.new-browser');
+    button.hidden = !actionsEnabled;
+    const atLimit = views.size > 0 && [...browsers.values()].filter((b) => !b.main).length >= max;
+    button.disabled = creatingBrowser || atLimit;
+    button.setAttribute('aria-busy', String(creatingBrowser));
+    button.title = t(atLimit ? 'browserLimit' : 'newBrowserHint');
+    button.setAttribute('aria-label', t(creatingBrowser ? 'creatingBrowser' : 'newBrowser'));
+    if (creatingBrowser) button.title = t('creatingBrowser');
+  }
+
+  $('.new-browser').addEventListener('click', async () => {
+    if (creatingBrowser) return;
+    creatingBrowser = true;
+    renderNewBrowser();
+    showError('');
+    try { await call('POST', '/browsers'); }
+    catch (err) { showError(err); }
+    finally { creatingBrowser = false; renderNewBrowser(); }
+  });
+
+  async function closeTab(name, id, button) {
+    const key = `${name}/${id}`;
+    if (closingTabs.has(key)) return;
+    closingTabs.add(key);
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    showError('');
+    try { await call('DELETE', `/${encodeURIComponent(name)}/tabs/${encodeURIComponent(id)}`); }
+    catch (err) { showError(err); }
+    finally {
+      closingTabs.delete(key);
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
 
   // Switch the browser to a tab and raise its window; highlighted right
   // away, the gateway's next 'current' confirms it.
@@ -663,6 +728,9 @@
     v.empty.hidden = !!n;
     for (const [id, li] of v.items) {
       if (context.tabs.has(id)) continue;
+      if (li.contains(root.activeElement)) {
+        (li.nextElementSibling?.firstChild ?? li.previousElementSibling?.firstChild ?? $('.new-browser')).focus();
+      }
       li.remove();
       v.items.delete(id);
     }
@@ -670,13 +738,19 @@
       let li = v.items.get(tab.id);
       if (!li) {
         li = el('li', {}, el('button', { type: 'button', onclick: () => focusTab(context.name, tab.id) },
-          el('span', { class: 'tab-title' }), el('span', { class: 'ai-marks' })));
+          el('span', { class: 'tab-title' }), el('span', { class: 'ai-marks' })),
+          el('button', { type: 'button', class: 'tab-close',
+            onclick: (event) => closeTab(context.name, tab.id, event.currentTarget) }, '×'));
         v.items.set(tab.id, li);
         v.list.append(li);
       }
       const button = li.firstChild;
       const [label, marks] = button.children;
       const title = tab.title || t('untitled');
+      const close = li.lastChild;
+      close.hidden = !actionsEnabled;
+      close.disabled = closingTabs.has(`${context.name}/${tab.id}`);
+      close.setAttribute('aria-label', t('closeTab', title));
       if (label.textContent !== title) label.textContent = title;
       const here = working.filter((w) => w.name === context.name && w.id === tab.id).map((w) => w.c);
       fillMarks(marks, here, (c) => el('span', { class: 'ai', style: `--ai:${aiColor(c)}` }, `AI #${c}`));
@@ -832,6 +906,12 @@
       connect();
     }
   });
+
+  call('GET', '/browsers').then((data) => {
+    actionsEnabled = data.enabled;
+    renderNewBrowser();
+    browsers.forEach((b, name) => update(name));
+  }).catch(showError);
 
   setLang(lang, false);
 
