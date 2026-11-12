@@ -74,7 +74,7 @@ RUN apt-get update && \
 # The browser is Google's Chrome for Testing (CfT) build of the Stable
 # channel, downloaded straight from the official CfT bucket. Override with any version in the CfT known-good
 # feed: --build-arg CHROME_VERSION=<version>.
-ARG CHROME_VERSION=157.0.8103.50
+ARG CHROME_VERSION=157.0.8103.78
 # The image is linux/amd64 only (the CfT linux64 build, x86_64 wheels).
 # The apt packages: the shared libraries chrome links against, the font set
 # (emoji, CJK, Thai, Cyrillic, ...) pages are expected to render with, and
