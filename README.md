@@ -262,7 +262,7 @@ Everything is configured via environment variables; with Compose, put them in `.
 
 | Arg | Default | Description |
 | --- | --- | --- |
-| `CHROME_VERSION` | `157.0.8103.50` | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) version (Stable channel by default; any version in the CfT known-good list works) |
+| `CHROME_VERSION` | `157.0.8103.78` | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) version (Stable channel by default; any version in the CfT known-good list works) |
 | `NODE_VERSION` | `26` | Node.js major (kept in sync by [`update-chrome-node.mjs`](#keeping-versions-in-sync)) |
 | `SELKIES_VERSION` | `2.2.1` | Selkies upstream release; its wheels and the pixelflux/pcmflux dependency wheels are fetched from the GitHub releases, and the webcam/gamepad interposers are built from the same tag's source (see `Dockerfile`) |
 | `TZ` | `UTC` | container timezone, exposed as `ENV TZ` (runtime-overridable) |
