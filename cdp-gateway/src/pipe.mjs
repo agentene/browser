@@ -43,6 +43,11 @@ const EVENT_HEAD = /^\{"method":"([^"\\]+)"/;
 const SESSION_TAIL = /,"sessionId":"([^"\\]+)"\}$/;
 // the attach/detach events that change which connection owns a session
 const SESSION_EVENTS = new Set(['Target.attachedToTarget', 'Target.detachedFromTarget']);
+// the client commands the 'input' event reports (input-overlay.mjs): what a
+// page is made to see as user input, and the viewport emulation that moves
+// where it lands. A command wrapped in Target.sendMessageToTarget (the old,
+// non-flat sessions) is not looked into.
+const OBSERVED = /^(Input\.|Emulation\.(set|clear)DeviceMetricsOverride$)/;
 
 const CALL_TIMEOUT_MS = 15_000;
 // A client that has read nothing for this long while its browser waited for
@@ -118,6 +123,7 @@ export class CdpPipe extends EventEmitter {
       ? await this.call('Target.attachToBrowserTarget', {}, { timeout })
       : await this.call('Target.attachToTarget', { targetId, flatten: true }, { timeout });
     const conn = new PipeConnection(this, sessionId);
+    if (targetId !== undefined) conn.targets.set(sessionId, targetId);
     if (this.closed) conn.gone();
     else this.#sessions.set(sessionId, conn);
     return conn;
@@ -157,6 +163,12 @@ export class CdpPipe extends EventEmitter {
     }
     const params = msg.params !== null && typeof msg.params === 'object' ? msg.params : {};
     if (msg.method === 'Target.disposeBrowserContext') conn.contexts.delete(params.browserContextId);
+    // The input overlay (input-overlay.mjs) watches what clients make the
+    // pages see — only while a viewer has it open: no listener, no cost but
+    // this count. The message is the object the gateway parsed anyway.
+    if (this.listenerCount('input') && typeof msg.method === 'string' && OBSERVED.test(msg.method)) {
+      this.emit('input', { conn, sessionId, targetId: conn.targets.get(sessionId), msg });
+    }
     let id;
     if (msg.id !== undefined) {
       id = this.#nextId++;
@@ -274,14 +286,18 @@ export class CdpPipe extends EventEmitter {
     const conn = this.#sessions.get(session);
     if (!conn) return; // one of the gateway's own sessions, or one gone since
     if (SESSION_EVENTS.has(method)) {
-      const child = parse(buf)?.params?.sessionId;
+      const params = parse(buf)?.params;
+      const child = params?.sessionId;
       if (typeof child === 'string') {
         if (method === 'Target.attachedToTarget') {
           this.#sessions.set(child, conn);
           conn.sessions.add(child);
+          const targetId = params.targetInfo?.targetId;
+          if (typeof targetId === 'string') conn.targets.set(child, targetId);
         } else {
           this.#sessions.delete(child);
           conn.sessions.delete(child);
+          conn.targets.delete(child);
           this.#forget(conn, (sent) => sent.session === child);
         }
       }
@@ -318,6 +334,7 @@ export class PipeConnection extends EventEmitter {
     this.pipe = pipe;
     this.session = session; // its own session: implied in both directions
     this.sessions = new Set([session]); // every session it owns
+    this.targets = new Map(); // its target sessions -> their targetId (the input overlay's)
     this.contexts = new Set(); // contexts to dispose when it closes
     this.pending = new Set(); // pipe ids of its commands not answered yet
   }

@@ -135,6 +135,17 @@
 #                                Browser.crash* are refused. true: passed
 #                                through — the browser exits (the container
 #                                keeps running; the next client restarts it)
+#   CDP_INPUT_OVERLAY=text       what the Selkies page draws over the stream of
+#                                the CDP clients' input, which never moves the
+#                                desktop's own pointer: text = their pointer,
+#                                clicks, wheel, key combos and the text typed
+#                                (a password / one-time-code / card field, or
+#                                a focus inside a frame, shows as ••••); keys
+#                                = the same with only a count of the
+#                                characters typed; off = no overlay. Needs
+#                                Selkies and CDP both on; seen by the sidebar's
+#                                users (Selkies' master password), each can
+#                                hide it in the sidebar's settings
 #   CDP_FILE_DIRS=/browser/downloads  directories (colon-separated) CDP
 #                                clients may name local files in: file
 #                                inputs, drops, PWA launches, unpacked
@@ -433,6 +444,15 @@ config_cdp_gateway() {
     if [ "${ENABLE_SELKIES}" = "true" ] && [ "${ENABLE_CDP}" = "true" ]; then
         CDP_CONSOLE_PANEL_ACTIVE=true
     fi
+    # The CDP clients' input drawn over the Selkies stream (the gateway's
+    # input-overlay.mjs, cdp-gateway/overlay.js), next to the sidebar: off
+    # without it.
+    CDP_INPUT_OVERLAY="${CDP_INPUT_OVERLAY:-text}"
+    case "${CDP_INPUT_OVERLAY}" in
+        text|keys|off) : ;;
+        *) die "CDP_INPUT_OVERLAY='${CDP_INPUT_OVERLAY}' must be text, keys or off" ;;
+    esac
+    [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] || CDP_INPUT_OVERLAY=off
 }
 
 config_auth() {

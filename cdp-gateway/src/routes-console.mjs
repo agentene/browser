@@ -1,5 +1,5 @@
-// /console/*: the dashboard, the sidebar script nginx injects into the
-// Selkies page (nginx proxies /cdp-console/ on the web port here), and the
+// /console/*: the dashboard, the sidebar and input overlay scripts nginx
+// injects into the Selkies page (nginx proxies /cdp-console/ on the web port here), and the
 // console's actions, POST/DELETE /console/api/<name>… (its state comes over
 // the /console/ws WebSocket, console-live.mjs):
 //   POST   /console/api/main/start|stop     the main browser
@@ -23,6 +23,7 @@ import { settingsView, updateSettings } from './settings.mjs';
 const FILES = {
   '/console/': ['dashboard.html', 'text/html; charset=UTF-8'],
   '/console/panel.js': ['panel.js', 'text/javascript; charset=UTF-8'],
+  '/console/overlay.js': ['overlay.js', 'text/javascript; charset=UTF-8'],
 };
 
 // Answers the request and returns true if it is one of these routes.

@@ -275,7 +275,7 @@ EXPOSE 80 443 9222
 COPY cdp-gateway/package.json cdp-gateway/package-lock.json /usr/local/lib/cdp-gateway/
 RUN npm ci --omit=dev --no-audit --no-fund --prefix /usr/local/lib/cdp-gateway && \
     rm -rf ~/.npm/
-COPY cdp-gateway/gateway.mjs cdp-gateway/dashboard.html cdp-gateway/panel.js cdp-gateway/raise-window.py cdp-gateway/front-window.py /usr/local/lib/cdp-gateway/
+COPY cdp-gateway/gateway.mjs cdp-gateway/dashboard.html cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/raise-window.py cdp-gateway/front-window.py /usr/local/lib/cdp-gateway/
 COPY cdp-gateway/src/ /usr/local/lib/cdp-gateway/src/
 
 # Built-in login + CDP API key (ENABLE_AUTH=true, entrypoint/lib/auth.sh): a

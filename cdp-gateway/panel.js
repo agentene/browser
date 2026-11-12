@@ -263,6 +263,10 @@
               <span><span class="raise-label"></span><span class="setting-hint raise-hint"></span></span>
               <input class="switch" type="checkbox" role="switch">
             </label>
+            <label class="setting overlay-row" hidden>
+              <span><span class="overlay-label"></span><span class="setting-hint overlay-hint"></span></span>
+              <input class="switch overlay-switch" type="checkbox" role="switch">
+            </label>
           </div>
         </div>
         <button class="close">×</button>
@@ -311,6 +315,8 @@
       language: 'Language',
       raiseNew: 'New windows to the front',
       raiseNewHint: 'Off: windows that open later (e.g. a new isolated context) stay behind the one in front; Show brings one forward.',
+      showInput: 'Show AI input',
+      showInputHint: 'Draw the CDP clients\' pointer, clicks and keys over the desktop (this browser only).',
     },
     zh: {
       title: 'CDP 控制台',
@@ -346,6 +352,8 @@
       language: '语言',
       raiseNew: '新窗口切到最前',
       raiseNewHint: '关闭后，之后新打开的窗口（如新的隔离上下文）留在当前窗口之后，可用“显示”切过去。',
+      showInput: '显示 AI 操作',
+      showInputHint: '在桌面画面上画出 CDP 客户端的指针、点击和按键（只对本浏览器生效）。',
     },
   };
   const LANG_KEY = 'cdp-console-lang';
@@ -378,6 +386,9 @@
     for (const b of settings.querySelectorAll('[data-lang]')) b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
     $('.raise-label').textContent = t('raiseNew');
     $('.raise-hint').textContent = t('raiseNewHint');
+    $('.overlay-label').textContent = t('showInput');
+    $('.overlay-hint').textContent = t('showInputHint');
+    window.AgenteneInputOverlay?.setLang(lang);
     window.AgenteneAuth?.setLang(lang);
     for (const v of views.values()) v.card.remove();
     views.clear();
@@ -394,7 +405,10 @@
     settingsMenu.hidden = !open;
     settingsBtn.setAttribute('aria-expanded', String(open));
   }
-  settingsBtn.addEventListener('click', () => setMenu(settingsMenu.hidden));
+  settingsBtn.addEventListener('click', () => {
+    if (settingsMenu.hidden) renderOverlay();
+    setMenu(settingsMenu.hidden);
+  });
   document.addEventListener('pointerdown', (e) => {
     if (!settingsMenu.hidden && !e.composedPath().includes(settings)) setMenu(false);
   });
@@ -510,6 +524,22 @@
       renderRaiseNew();
     });
   });
+
+  // The input overlay's switch (overlay.js, when nginx injected it): the
+  // viewer's own choice, kept in this browser by the overlay itself.
+  const overlayRow = $('.overlay-row');
+  const overlayBox = $('.overlay-switch');
+  function renderOverlay() {
+    const overlay = window.AgenteneInputOverlay;
+    overlayRow.hidden = !overlay;
+    overlayBox.checked = !!overlay?.enabled();
+  }
+  overlayBox.addEventListener('change', () => window.AgenteneInputOverlay?.setEnabled(overlayBox.checked));
+  window.addEventListener('agentene-input-overlay', () => {
+    window.AgenteneInputOverlay.setLang(lang);
+    renderOverlay();
+  });
+  renderOverlay();
 
   // Switch the browser to a tab and raise its window; highlighted right
   // away, the gateway's next 'current' confirms it.

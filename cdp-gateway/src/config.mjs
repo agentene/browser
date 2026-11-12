@@ -54,6 +54,11 @@ export const ALLOW_ORIGINS_RAW = env.CDP_ALLOW_ORIGINS || '';
 // CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close / Browser.crash
 // reaches the shared browser (browser-exit.mjs)
 export const ALLOW_BROWSER_CLOSE = env.CDP_ALLOW_BROWSER_CLOSE === 'true';
+// CDP_INPUT_OVERLAY: what the Selkies page's overlay of the clients' input
+// shows (input-overlay.mjs) — text: the pointer, keys and the text typed;
+// keys: the same with only a count of the characters typed; off: no overlay.
+// The entrypoint passes off whenever there is no Selkies page to show it on.
+export const INPUT_OVERLAY = ['text', 'keys'].includes(env.CDP_INPUT_OVERLAY) ? env.CDP_INPUT_OVERLAY : 'off';
 
 // CDP_FILE_DIRS: the directories CDP clients may name local files in
 // (file-access.mjs), colon-separated; * = any (null here).

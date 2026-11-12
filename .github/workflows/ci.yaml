@@ -79,7 +79,7 @@ jobs:
       - name: syntax check (node scripts, entrypoint python helpers)
         run: |
           node --check update-chrome-node.mjs
-          for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
+          for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
           for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
           node --check entrypoint/helpers/password-hash.mjs
           python3 -m py_compile entrypoint/helpers/*.py

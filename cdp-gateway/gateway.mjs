@@ -63,6 +63,7 @@
 //   desktop.mjs         the browser windows (the one in front, their titles), bringing one to the front
 //   settings.mjs        the console's persisted settings (/browser/settings)
 //   console-live.mjs    the console's live state over /console/ws
+//   input-overlay.mjs   the clients' input for the Selkies page's overlay (/console/overlay)
 //   screencast.mjs      console thumbnails
 //   console-auth.mjs    who may use the console
 //   changes.mjs         change notifications for the console

@@ -86,3 +86,10 @@ test('a page WebSocket for a target no browser has is a 404', async () => {
   // no browser runs here: nobody owns the target
   assert.equal(await upgradeStatus('/devtools/page/NOSUCH'), 404);
 });
+
+test('the input overlay\'s WebSocket is a 404 with CDP_INPUT_OVERLAY off (the default without the entrypoint)', async () => {
+  assert.equal(await upgradeStatus('/console/overlay'), 404);
+  assert.equal(await upgradeStatus('/console/overlay', 'X-CDP-Console-Via: web\r\n'), 404);
+  // the web UI port still reaches no CDP WebSocket
+  assert.equal(await upgradeStatus('/devtools/browser/x', 'X-CDP-Console-Via: web\r\n'), 404);
+});

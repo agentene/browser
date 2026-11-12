@@ -65,7 +65,13 @@ export async function desktopWindows(names) {
   return { front: focused.map(([id]) => byAppId(id)).find(Boolean) ?? null, titles };
 }
 
+// X11: front-window.py runs while anyone needs the window in front — the
+// console (console-live.mjs) and the input overlay (input-overlay.mjs) each
+// watch and unwatch once.
+let frontUsers = 0;
+
 export function watchFront() {
+  frontUsers++;
   if (WAYLAND || frontWatch) return;
   const child = spawn('python3', [path.join(ROOT, 'front-window.py')], { stdio: ['pipe', 'pipe', 'ignore'] });
   frontWatch = child;
@@ -91,6 +97,8 @@ export function watchFront() {
 }
 
 export function unwatchFront() {
+  if (frontUsers > 0) frontUsers--;
+  if (frontUsers) return;
   frontWatch?.stdin.end();
   frontWatch = null;
   x11Windows = [];

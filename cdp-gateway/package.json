@@ -6,7 +6,7 @@
   "main": "gateway.mjs",
   "scripts": {
     "start": "node gateway.mjs",
-    "check": "for f in gateway.mjs src/*.mjs test/*.mjs panel.js; do node --check \"$f\" || exit 1; done",
+    "check": "for f in gateway.mjs src/*.mjs test/*.mjs panel.js overlay.js; do node --check \"$f\" || exit 1; done",
     "test": "node --test 'test/*.test.mjs'"
   },
   "dependencies": {

@@ -333,8 +333,10 @@ EOF
 }
 
 # The Selkies entry page with scripts injected before </head>: the CDP
-# console sidebar (cdp-gateway/panel.js, CDP_CONSOLE_PANEL_ACTIVE) and the
-# login's session keepalive (auth-server/keepalive.js, ENABLE_AUTH). Only
+# console sidebar (cdp-gateway/panel.js, CDP_CONSOLE_PANEL_ACTIVE), the CDP
+# clients' input overlay (cdp-gateway/overlay.js, CDP_INPUT_OVERLAY; served
+# by the gateway's console like the sidebar, same auth) and the login's
+# session keepalive (auth-server/keepalive.js, ENABLE_AUTH). Only
 # the entry page (the /api/files/ browser is HTML too); the paths are
 # relative to the subfolder, like the page's own. Nothing to inject = no
 # extra locations.
@@ -342,6 +344,9 @@ nginx_web_entry_locations() {
     local scripts="" entry
     if [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ]; then
         scripts='<script src="cdp-console/panel.js" defer></script>'
+    fi
+    if [ "${CDP_INPUT_OVERLAY}" != "off" ]; then
+        scripts="${scripts}"'<script src="cdp-console/overlay.js" defer></script>'
     fi
     if [ "${ENABLE_AUTH}" = "true" ]; then
         scripts="${scripts}"'<script src="__auth/keepalive.js" defer></script>'
@@ -367,7 +372,8 @@ EOF
 
 # The CDP console sidebar's backend on the web UI (CDP_CONSOLE_PANEL_ACTIVE):
 # <subfolder>/cdp-console/ proxied to the gateway's console, Upgrade/
-# Connection included (the console's live state WebSocket, cdp-console/ws).
+# Connection included (the console's live state WebSocket, cdp-console/ws,
+# and the input overlay's, cdp-console/overlay).
 nginx_cdp_console_location() {
     cat <<EOF
         # the sidebar's script, API and live state WebSocket, served by the

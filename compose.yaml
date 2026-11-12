@@ -219,6 +219,13 @@ services:
       # client starts it again). false: only that client's connection (and its
       # isolated context) is closed; Browser.crash* are refused.
       CDP_ALLOW_BROWSER_CLOSE: "${CDP_ALLOW_BROWSER_CLOSE:-false}"
+      # What the Selkies page draws over the stream of the CDP clients' input
+      # (their pointer never moves the desktop's): text = pointer, clicks,
+      # wheel, key combos and the text typed (password / one-time-code / card
+      # fields and frames show as ••••); keys = only a count of the
+      # characters typed; off = no overlay. Seen by Selkies' master-password
+      # users; each can hide it in the CDP sidebar's settings.
+      CDP_INPUT_OVERLAY: "${CDP_INPUT_OVERLAY:-text}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: wayland = labwc, a headless
