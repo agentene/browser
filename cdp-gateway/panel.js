@@ -232,16 +232,32 @@
       }
       .tabs li { min-width:0; flex:none; }
       .tabs button {
-        display:block; width:100%; text-align:left; font-weight:400; padding:3px 8px;
+        display:flex; align-items:center; gap:6px; width:100%; text-align:left; font-weight:400; padding:3px 8px;
         border:none; border-radius:6px; color:var(--muted);
-        overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
       }
+      .tab-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .tabs button:hover { background:var(--chip); color:var(--text); }
       .tabs button:focus-visible { outline-offset:-2px; }
       .tabs button.current {
         background:var(--chip); color:var(--text); font-weight:500;
         box-shadow:inset 2px 0 0 var(--accent);
       }
+      /* the CDP clients working in a tab: their numbers in the input overlay's colors (overlay.js) */
+      .ai-marks { display:inline-flex; align-items:center; gap:3px; flex:none; }
+      .ai-marks:empty { display:none; }
+      .ai {
+        display:inline-flex; align-items:center; gap:4px; padding:0 6px; border-radius:999px;
+        background:var(--ai); color:#fff; font-size:10px; font-weight:600; line-height:16px; letter-spacing:.01em;
+        white-space:nowrap; font-variant-numeric:tabular-nums; box-shadow:0 1px 3px color-mix(in srgb, var(--ai) 45%, transparent);
+      }
+      .ai::before {
+        content:""; width:5px; height:5px; border-radius:50%; background:currentColor;
+        animation:live 1.2s ease-in-out infinite alternate;
+      }
+      @media (prefers-reduced-motion: reduce) { .ai::before { animation:none; } }
+      button.ai { border:none; cursor:pointer; font-family:inherit; }
+      button.ai:hover { filter:brightness(1.1); }
+      .tabs button.working { color:var(--text); }
       .empty { color:var(--muted); font-size:13px; padding:10px 14px 14px; }
       .settings-menu[hidden], .setting[hidden], .tabview[hidden], .empty[hidden], .chip[hidden], .actions [hidden] { display:none; }
     </style>
@@ -304,6 +320,8 @@
       shotTitle: 'Show this tab on the desktop',
       noTabs: 'No open tabs.',
       untitled: '(untitled)',
+      aiWorking: (c) => `AI #${c} is working in this tab`,
+      aiShow: (c) => `AI #${c} is working here: show its tab`,
       tabs: (n) => `${n} tab${n === 1 ? '' : 's'}`,
       mainMeta: 'The persistent profile every isolated context is cloned from.',
       contextMeta: (client, since, pid) => `client ${client} · since ${since} · pid ${pid}`,
@@ -341,6 +359,8 @@
       shotTitle: '在桌面上显示此标签页',
       noTabs: '没有打开的标签页。',
       untitled: '（无标题）',
+      aiWorking: (c) => `AI #${c} 正在此标签页中操作`,
+      aiShow: (c) => `AI #${c} 正在这里操作：显示它所在的标签页`,
       tabs: (n) => `${n} 个标签页`,
       mainMeta: '持久化的浏览器配置，每个隔离上下文都从它克隆。',
       contextMeta: (client, since, pid) => `客户端 ${client} · 创建于 ${since} · pid ${pid}`,
@@ -496,6 +516,11 @@
   // --- rendering (mirrors dashboard.html) ------------------------------------
   // what the gateway pushed over the WebSocket: name -> { ...fields, tabs: Map, current, thumb }
   const browsers = new Map();
+  // the tabs the CDP clients work in: [{c, name, id}], c numbering them as
+  // the input overlay does — and in its colors (overlay.js' COLORS)
+  let working = [];
+  const AI_COLORS = ['#7c5cff', '#0ea5e9', '#f43f7a', '#10b981', '#f59e0b', '#ef5a3c'];
+  const aiColor = (c) => AI_COLORS[(c - 1) % AI_COLORS.length];
   const views = new Map(); // name -> the card's DOM parts, see liveCard()
   let max = 0;
   let serverSettings = {}; // the server-side settings on offer (settings.mjs): {section: {key: value}}
@@ -585,6 +610,8 @@
     const base = `/${encodeURIComponent(name)}`;
     const v = { items: new Map(), src: '', shownCurrent: null };
     v.chip = el('span', { class: 'chip' });
+    // the clients working in this browser: a click shows their tab
+    v.ai = el('span', { class: 'ai-marks' });
     // the browser in front on the desktop shows "Showing" where its Show button was
     v.frontChip = el('span', { class: 'chip front', title: t('frontTitle') }, t('showing'));
     v.show = el('button', { title: t('showTitle'),
@@ -592,7 +619,7 @@
     // the buttons wrap as one group, right-aligned, when the card gets narrow
     const actions = el('span', { class: 'actions' }, v.frontChip, v.show);
     const head = el('div', { class: 'card-head' },
-      el('span', { class: 'name', title: isMain ? t('mainBrowser') : name }, isMain ? t('mainBrowser') : name), v.chip,
+      el('span', { class: 'name', title: isMain ? t('mainBrowser') : name }, isMain ? t('mainBrowser') : name), v.chip, v.ai,
       actions);
     if (isMain) {
       actions.append(el('button', { class: 'danger', title: t('stopTitle'),
@@ -644,16 +671,29 @@
     for (const tab of context.tabs.values()) {
       let li = v.items.get(tab.id);
       if (!li) {
-        li = el('li', {}, el('button', { type: 'button', onclick: () => focusTab(context.name, tab.id) }));
+        li = el('li', {}, el('button', { type: 'button', onclick: () => focusTab(context.name, tab.id) },
+          el('span', { class: 'tab-title' }), el('span', { class: 'ai-marks' })));
         v.items.set(tab.id, li);
         v.list.append(li);
       }
       const button = li.firstChild;
+      const [label, marks] = button.children;
       const title = tab.title || t('untitled');
-      if (button.textContent !== title) button.textContent = title;
-      button.title = tab.url;
+      if (label.textContent !== title) label.textContent = title;
+      const here = working.filter((w) => w.name === context.name && w.id === tab.id).map((w) => w.c);
+      fillMarks(marks, here, (c) => el('span', { class: 'ai', style: `--ai:${aiColor(c)}` }, `AI #${c}`));
+      button.classList.toggle('working', here.length > 0);
+      button.title = [tab.url, ...here.map((c) => t('aiWorking', c))].join('\n');
       button.classList.toggle('current', tab.id === context.current);
     }
+    const mine = working.filter((w) => w.name === context.name && context.tabs.has(w.id));
+    fillMarks(v.ai, mine.map((w) => w.c), (c) => el('button', {
+      type: 'button', class: 'ai', style: `--ai:${aiColor(c)}`, title: t('aiShow', c),
+      onclick: () => {
+        const w = working.find((x) => x.c === c && x.name === context.name);
+        if (w) focusTab(context.name, w.id);
+      },
+    }, `AI #${c}`));
     const current = context.tabs.get(context.current);
     v.title.textContent = current ? current.title || t('untitled') : '';
     v.title.title = current?.url ?? '';
@@ -672,6 +712,14 @@
         v.list.scrollTop = li.offsetTop - 3;
       }
     }
+  }
+
+  // A set of AI marks, rebuilt only when its numbers change.
+  function fillMarks(box, cs, make) {
+    const key = cs.join(',');
+    if (box.dataset.cs === key) return;
+    box.dataset.cs = key;
+    box.replaceChildren(...cs.map(make));
   }
 
   function update(name) {
@@ -704,11 +752,17 @@
       views.clear();
       body.replaceChildren();
       for (const b of op.browsers) browsers.set(b.name, { ...b, tabs: new Map(b.tabs.map((t) => [t.id, t])) });
+      working = op.ai ?? [];
       return [...browsers.keys()];
     }
     if (op.t === 'settings') {
       serverSettings = op.settings;
       return [];
+    }
+    if (op.t === 'ai') {
+      const touched = new Set([...working, ...op.ai].map((w) => w.name));
+      working = op.ai;
+      return [...touched].filter((name) => browsers.has(name));
     }
     if (op.t === 'gone') {
       browsers.delete(op.name);

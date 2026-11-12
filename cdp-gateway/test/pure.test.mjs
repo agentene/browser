@@ -8,12 +8,12 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { browserExitAction } from '../src/browser-exit.mjs';
 import { appId, intEnv } from '../src/config.mjs';
-import { broadcast, MAX_BUFFERED } from '../src/console-live.mjs';
+import { broadcast } from '../src/console-live.mjs';
 import { listedToplevels } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
 import { consoleDenied, consoleOriginDenied, hashPassword, verifyPassword } from '../src/console-auth.mjs';
 import { requestPath, viaWeb } from '../src/respond.mjs';
-import { connectionsTo } from '../src/util.mjs';
+import { MAX_BUFFERED, connectionsTo } from '../src/util.mjs';
 import { adjustPrefs, cloned, cloneProfile } from '../src/profile.mjs';
 import { cookieKey, cookieParam, originTabs } from '../src/storage-sync.mjs';
 

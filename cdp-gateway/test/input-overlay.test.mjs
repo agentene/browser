@@ -12,7 +12,8 @@ process.env.CDP_INPUT_OVERLAY = 'text';
 process.env.DISPLAY_BACKEND = 'wayland';
 
 const {
-  addOp, keyAction, keyCombo, keyText, overlayState, pointerActions, subscribeOverlay, tabLabel, textOp, toDesktop, viewportGeometry,
+  addOp, keyAction, keyCombo, keyText, overlayState, pointerActions, subscribeOverlay, tabLabel, textOp, toDesktop, unwatchInput,
+  viewportGeometry, watchInput, workingTabs,
 } = await import('../src/input-overlay.mjs');
 const { CdpPipe } = await import('../src/pipe.mjs');
 const { mainBrowser } = await import('../src/main-browser.mjs');
@@ -269,9 +270,41 @@ test('a client\'s input reaches the overlay as desktop ops; sensitive text is ma
   // the last overlay closes: nothing listens, the gateway's sessions are detached
   viewer.close();
   assert.equal(pipe.listenerCount('input'), 0);
-  assert.deepEqual(overlayState(), { subscribers: 0, watched: 0, clients: 0 });
+  assert.deepEqual(overlayState(), { subscribers: 0, watched: 0, clients: 0, consoles: 0 });
   await sleep(20);
   assert.ok(got.some((m) => m.method === 'Target.detachFromTarget' && m.params.sessionId !== session));
+  pipe.close();
+  mainBrowser.state = 'stopped';
+  mainBrowser.pipe = null;
+});
+
+test('a console sees which tab each client works in, without the overlay\'s questions', async () => {
+  const page = { vis: 'visible', sensitive: false };
+  const { pipe, got } = fakeChromium(page);
+  mainBrowser.state = 'running';
+  mainBrowser.pipe = pipe;
+  const conn = await pipe.connect();
+  const session = await pageSession(conn, 'T2');
+
+  watchInput();
+  assert.equal(pipe.listenerCount('input'), 1);
+  assert.deepEqual(workingTabs(), []);
+  conn.send({ id: 2, sessionId: session, method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', key: 'a' } });
+  await sleep(30);
+  assert.deepEqual(workingTabs(), [], 'a key-up does nothing a viewer would see');
+  conn.send({ id: 3, sessionId: session, method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x: 1, y: 1, button: 'left' } });
+  await sleep(30);
+  assert.deepEqual(workingTabs(), [{ c: 1, name: 'main', id: 'T2' }]);
+  assert.deepEqual(workingTabs(Date.now() + 60000), [], 'a minute without input: no longer working there');
+  // only the overlay asks the page anything
+  assert.equal(got.filter((m) => m.method === 'Runtime.evaluate' || m.method === 'Browser.getWindowForTarget').length, 0);
+
+  conn.close();
+  await sleep(30);
+  assert.deepEqual(workingTabs(), []);
+  unwatchInput();
+  assert.equal(pipe.listenerCount('input'), 0);
+  assert.deepEqual(overlayState(), { subscribers: 0, watched: 0, clients: 0, consoles: 0 });
   pipe.close();
   mainBrowser.state = 'stopped';
   mainBrowser.pipe = null;

@@ -24,7 +24,11 @@
 // c numbers the CDP connections (the lowest free one), b names the browser
 // ('main', 'context-N'); x, y are desktop coordinates in DIP.
 //
-// Costs nothing while no overlay is open: the pipes only report input to a
+// The consoles (console-live.mjs) show the same numbers on the tabs the
+// clients work in: while one is open (watchInput), workingTabs() lists
+// each connection's last input target, for WORKING_MS after its input.
+//
+// Costs nothing while no overlay or console is open: the pipes only report input to a
 // listener (pipe.mjs), attached while one is. Per target it then keeps a
 // session of the gateway's own and asks it, at most once a second (and
 // again before text once the focus may have moved), where the viewport sits
@@ -35,10 +39,9 @@ import WebSocket from 'ws';
 import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
 import { CONTEXTS_HEADLESS, INPUT_OVERLAY, WAYLAND } from './config.mjs';
-import { MAX_BUFFERED } from './console-live.mjs';
 import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
 import { readScreen } from './screen.mjs';
-import { log } from './util.mjs';
+import { MAX_BUFFERED, log } from './util.mjs';
 
 const BATCH_MS = 33; // ops go out at most ~30 times a second
 const GEOMETRY_MS = 1000; // how long what a target said of itself holds
@@ -46,6 +49,7 @@ const FRONT_MS = 1000; // how long the window in front holds
 const SCREEN_MS = 2000; // how long the desktop size read on X11 holds
 const CALL_MS = 1000; // the gateway's window / layout questions
 const TAB_CHARS = 40; // a tab title longer than this is cut
+const WORKING_MS = 60000; // a console marks a client's tab this long after its last input
 const FACTS_MS = 300; // the page's own answer (a dialog or a busy page may never give it)
 
 // What the page says of itself, in one evaluation (silent, returning a
@@ -221,6 +225,8 @@ const watched = new Map(); // pipe -> { name, onInput, onDetached, onClose }
 const targets = new Map(); // pipe -> Map(targetId -> Target)
 const toolbars = new Map(); // pipe -> the chrome's height above the viewport, last measured (DIP)
 const clients = new Map(); // PipeConnection -> { c, shown: null | true | where it was hidden }
+const working = new Map(); // PipeConnection -> { c, name, id, at }: where its last input went
+let consoles = 0; // the consoles watching (watchInput)
 let batch = [];
 let batchTimer = null;
 let screen = null; // { w, h }
@@ -261,6 +267,7 @@ function clientOf(conn) {
   clients.set(conn, client);
   conn.once('close', () => {
     clients.delete(conn);
+    working.delete(conn);
     if (subscribers.size) push({ t: 'bye', c });
   });
   return client;
@@ -270,7 +277,7 @@ function clientOf(conn) {
 
 function syncPipes() {
   const live = new Map();
-  if (subscribers.size) {
+  if (subscribers.size || consoles) {
     for (const name of browserNames()) {
       const pipe = pipeOf(name);
       if (pipe && !pipe.closed) live.set(pipe, name);
@@ -342,7 +349,6 @@ function onInput(pipe, name, { conn, targetId, msg }) {
     t.facts = null;
     return;
   }
-  const { c } = clientOf(conn);
   const items = [];
   if (msg.method === 'Input.dispatchKeyEvent') {
     const action = keyAction(params);
@@ -353,6 +359,10 @@ function onInput(pipe, name, { conn, targetId, msg }) {
   } else {
     items.push(...pointerActions(msg.method, params));
   }
+  if (!items.length) return;
+  const { c } = clientOf(conn);
+  working.set(conn, { c, name, id: targetId, at: Date.now() });
+  if (!subscribers.size) return; // only a console watches
   for (const item of items) enqueue(t, { ...item, c, conn, name });
 }
 
@@ -567,15 +577,46 @@ function flush() {
 }
 
 onChange(() => {
-  if (subscribers.size) syncPipes();
+  if (subscribers.size || consoles) syncPipes();
 });
+
+// A console opened / closed (console-live.mjs): while any is open the
+// pipes report input, for workingTabs().
+export function watchInput() {
+  if (INPUT_OVERLAY === 'off') return;
+  if (consoles++ === 0) syncPipes();
+}
+
+export function unwatchInput() {
+  if (INPUT_OVERLAY === 'off' || consoles === 0) return;
+  if (--consoles) return;
+  syncPipes();
+  if (!subscribers.size) working.clear();
+}
+
+// The tabs the CDP clients work in: [{ c, name, id }] — each connection's
+// last input target (name: its browser, id: its targetId), while that
+// input is no older than WORKING_MS.
+export function workingTabs(now = Date.now()) {
+  const list = [];
+  for (const w of working.values()) {
+    if (now - w.at < WORKING_MS) list.push({ c: w.c, name: w.name, id: w.id });
+  }
+  return list.sort((a, b) => a.c - b.c);
+}
 
 export function subscribeOverlay(ws) {
   ws.on('error', () => { /* close follows */ });
   ws.on('close', () => {
     if (!subscribers.delete(ws) || subscribers.size) return;
-    // the last overlay closed: nothing listens to the pipes any more
+    // the last overlay closed: the gateway's own sessions go, and nothing
+    // listens to the pipes any more unless a console does
+    for (const [pipe, byId] of targets) {
+      for (const t of byId.values()) releaseTarget(t);
+      targets.delete(pipe);
+    }
     syncPipes();
+    if (!consoles) working.clear();
     unwatchFront();
     clearTimeout(batchTimer);
     batchTimer = null;
@@ -594,5 +635,5 @@ export function subscribeOverlay(ws) {
 
 // for the tests
 export function overlayState() {
-  return { subscribers: subscribers.size, watched: watched.size, clients: clients.size };
+  return { subscribers: subscribers.size, watched: watched.size, clients: clients.size, consoles };
 }
