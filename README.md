@@ -512,7 +512,7 @@ What changes in this mode:
 * Container start == service start: the entrypoint is a minimal PID-1 supervisor that **exits when any service dies**, so `--restart always` / `restart: always` turns that into automatic recovery.
 * The compose healthcheck polls `http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT}/` (nginx fronting Selkies) every 30 s: a 2xx, a redirect (`SELKIES_SUBFOLDER`) or a 401 (login screen on) counts as healthy, a 502 (Selkies down) does not. With `ENABLE_SELKIES=false` there is no web listener, so it probes `http://127.0.0.1:${CDP_LISTEN_PORT}/json/version` instead. A plain `docker run` has no healthcheck (the image defines none).
 * Both `ENABLE_SELKIES=false` and `ENABLE_CDP=false` at once is a configuration error and fails fast.
-* Logs live in `/tmp/*.log` inside the container (`xvfb.log` or `labwc.log`, `picom.log`, `pulseaudio.log`, `chromium.log`, `cdp-gateway.log`, `nginx/*.log`, …) — `docker compose logs` shows the entrypoint's own output plus Selkies' and nginx's.
+* Logs live in `/tmp/*.log` inside the container (`xvfb.log` or `labwc.log`, `picom.log`, `pulseaudio.log`, `chromium.log`, `cdp-gateway.log`, `nginx/*.log`, …) — `docker compose logs` shows the entrypoint's own output plus Selkies' and nginx's. `nginx/access.log` leaves out the CDP port's `/json/*` requests (CDP clients poll them, often once a second).
 
 ## Building from source
 

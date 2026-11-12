@@ -551,13 +551,20 @@
   }
 
   // Live state over a WebSocket next to this page (/console/ws): a snapshot,
-  // then only changes. Reconnects with backoff.
+  // then only changes. Reconnects with backoff — while the page is visible:
+  // a subscriber keeps the gateway's once-a-second tick going (every tab of
+  // every browser probed, screencasts for the thumbnails), so a console left
+  // open in a background tab disconnects and picks up a fresh snapshot when
+  // it is shown again.
   let retry = 1000;
   let connected = false; // a snapshot has arrived
+  let ws = null;
+  let retryTimer = 0;
   function connect() {
+    if (ws || document.hidden) return;
     const url = new URL('ws', location.href);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(url);
+    ws = new WebSocket(url);
     ws.onopen = () => {
       retry = 1000;
       showError(null);
@@ -573,11 +580,29 @@
       renderRaiseNew();
     };
     ws.onclose = () => {
+      ws = null;
       showError(t('reconnecting', retry / 1000));
-      setTimeout(connect, retry);
+      retryTimer = setTimeout(connect, retry);
       retry = Math.min(retry * 2, 10000);
     };
   }
+
+  function disconnect() {
+    clearTimeout(retryTimer);
+    if (!ws) return;
+    ws.onclose = null;
+    ws.close();
+    ws = null;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      disconnect();
+    } else {
+      retry = 1000;
+      connect();
+    }
+  });
 
   setLang(lang, false);
   connect();

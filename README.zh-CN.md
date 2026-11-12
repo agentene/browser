@@ -511,7 +511,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # 建议:CDP 与 Web UI 不暴露到网络
 * 容器启动 == 服务启动:入口脚本是一个极简 PID 1 监管器,**任一服务退出即退出**,配合 `--restart always` / `restart: always` 即为自动恢复。
 * compose 健康检查每 30 秒轮询 `http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT}/`(nginx 代理 Selkies):2xx、重定向(`SELKIES_SUBFOLDER`)或 401(开启了登录页)都视为健康,502(Selkies 未就绪)不算。`ENABLE_SELKIES=false` 时没有 Web 监听,改为探测 `http://127.0.0.1:${CDP_LISTEN_PORT}/json/version`。直接 `docker run` 没有健康检查(镜像本身未定义)。
 * 同时设置 `ENABLE_SELKIES=false` 和 `ENABLE_CDP=false` 是配置错误,会立即失败。
-* 日志在容器内 `/tmp/*.log`(`xvfb.log` 或 `labwc.log`、`picom.log`、`pulseaudio.log`、`chromium.log`、`cdp-gateway.log`、`nginx/*.log` 等);`docker compose logs` 显示入口脚本自身以及 Selkies、nginx 的输出。
+* 日志在容器内 `/tmp/*.log`(`xvfb.log` 或 `labwc.log`、`picom.log`、`pulseaudio.log`、`chromium.log`、`cdp-gateway.log`、`nginx/*.log` 等);`docker compose logs` 显示入口脚本自身以及 Selkies、nginx 的输出。`nginx/access.log` 不记录 CDP 端口上的 `/json/*` 请求(CDP 客户端会轮询它们,常常每秒一次)。
 
 ## 从源码构建
 
