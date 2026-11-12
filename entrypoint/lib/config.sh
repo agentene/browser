@@ -71,11 +71,13 @@
 #   CHROMIUM_START_URL=about:blank  page the main browser opens at startup
 #   CHROMIUM_AUTOSTART=true      the CDP gateway owns the main browser and
 #                                starts it with the container; false = only
-#                                on the first CDP client (/json/version, a
-#                                browser WebSocket) or from the CDP console
-#                                ("Start"), so an idle container runs no
-#                                chromium at all. Either way closing (or a
-#                                crash of) the main browser leaves the
+#                                when a CDP client uses the default context
+#                                (/json/new, a page opened there — connecting
+#                                and isolated contexts do not need it) or from
+#                                the CDP console ("Start"), so an idle
+#                                container runs no main browser at all.
+#                                Either way closing (or a crash of) the
+#                                main browser leaves the
 #                                container running; the next client or
 #                                "Start" brings it back
 #   CHROMIUM_IDLE_TIMEOUT=0      minutes the main browser may sit idle before

@@ -708,8 +708,13 @@ jobs:
           [ "$(nchrome)" = 0 ]
           sleep 2
           up
-          # the next CDP client starts it again
+          # connecting does not start it again: /json/version is answered
+          # without it ...
           curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser and .webSocketDebuggerUrl' >/dev/null
+          sleep 2
+          [ "$(nchrome)" = 0 ]
+          # ... a client using the default context does
+          curl -sf -X PUT 'http://127.0.0.1:9227/json/new?about:blank' | jq -e '.id' >/dev/null
           [ "$(nchrome)" != 0 ]
           up
           echo "autostart main browser smoke test OK"

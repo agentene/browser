@@ -205,14 +205,16 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 * 只有侧边栏的用户能看到(内置登录;叠加层的 WebSocket 是同源的 `cdp-console/overlay`),每位观看者都可以在侧边栏设置里用 *显示 AI 操作* 隐藏它(按浏览器记住)。没人观看时没有任何开销;有人观看时,网关对每个要画的页面每秒最多查询一次它在桌面上的位置。
 * 局限:客户端仿真了视口(`Emulation.setDeviceMetricsOverride`,例如 Playwright 在自己新建的页面上用 `viewport` 选项)时指针变为虚线,位置是近似的;用脚本完成的点击(通过 `Runtime.evaluate` 执行 `element.click()`)不是输入,不会显示。
 
-**主浏览器归网关所有。** 容器监管的常驻服务是网关而不是浏览器:主浏览器由网关作为子进程启动,因此关闭浏览器(关掉它的窗口、点卡片上的 **Stop**、`CDP_ALLOW_BROWSER_CLOSE=true` 时客户端的 `Browser.close`)或浏览器崩溃都不会让容器退出,只会断开它的 CDP 客户端。默认(`CHROMIUM_AUTOSTART=true`)网关随容器一起启动主浏览器;设置 `CHROMIUM_AUTOSTART=false` 后,容器启动时不启动主浏览器,闲置的容器里完全没有 Chromium 进程。无论哪种,已停止的主浏览器都会在以下时机再次启动:
+**主浏览器归网关所有。** 容器监管的常驻服务是网关而不是浏览器:主浏览器由网关作为子进程启动,因此关闭浏览器(关掉它的窗口、点卡片上的 **Stop**、`CDP_ALLOW_BROWSER_CLOSE=true` 时客户端的 `Browser.close`)或浏览器崩溃都不会让容器退出,只会断开它上面没有隔离 context 的 CDP 客户端。默认(`CHROMIUM_AUTOSTART=true`)网关随容器一起启动主浏览器;设置 `CHROMIUM_AUTOSTART=false` 后,容器启动时不启动主浏览器,闲置的容器里完全没有 Chromium 进程。无论哪种,已停止的主浏览器都会在以下时机再次启动:
 
-* 有 CDP 客户端连接时(`/json/version`、`/json/new`、浏览器级 WebSocket)。客户端无需改动,第一次连接只是多等浏览器启动的一两秒;
+* 有 CDP 客户端用到默认 context 时(`/json/new`、`browser.contexts()[0].newPage()`、任何发往主浏览器页面的命令)。仅仅连接不会启动它:主浏览器停止期间,网关自己应答客户端的握手(`/json/version`、`Browser.getVersion`、`Target.setAutoAttach` 等),等浏览器起来后再把这些设置重放过去,所以客户端无需改动 —— 第一条需要它的命令只是多等浏览器启动的一两秒。只在隔离 context 里工作的客户端(`browser.newContext()`、playwright-cli)完全不会让它运行。需要注意:在它停止时连接的客户端,在自己打开页面之前看不到任何页面(`(await browser.pages())[0]` 为空 —— 请写成 `pages()[0] ?? newPage()`);
 * 在 `/console/` 或 Selkies 侧边栏里点主浏览器卡片上的 **Start browser**。
 
-**Stop** 的关闭方式与关窗口相同,cookie 和会话会先保存到 profile。列表类请求(`/json/list`)和控制台都不会启动它,所以 `ENABLE_SELKIES=false` 时 compose 的 healthcheck 改为探测 `/json/list`。隔离 context 无需额外处理:它的客户端经由主浏览器连接,会顺带把主浏览器启动起来。
+**Stop** 的关闭方式与关窗口相同,cookie 和会话会先保存到 profile。列表类请求(`/json/list`)和控制台都不会启动它,所以 `ENABLE_SELKIES=false` 时 compose 的 healthcheck 改为探测 `/json/list`。
 
-把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端连接、没有隔离 context、也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。
+**隔离 context 不依附于主浏览器。** 每个隔离 context 都是独立的浏览器进程,和主浏览器一样是网关的子进程,因此主浏览器关闭(关窗口、**Stop**、空闲超时、崩溃)时,它们以及它们客户端的连接都会继续运行:这类客户端会收到其主浏览器页面已消失的通知(`Target.detachedFromTarget` / `Target.targetDestroyed`,与页面关闭时相同),发往主浏览器的未完成命令会失败,而隔离 context 照常工作。之后如果它再用到默认 context,网关会为它重新启动主浏览器。没有隔离 context 的客户端仍会像以前一样被断开。
+
+把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端在使用它,也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。持有隔离 context 的客户端只有在给主浏览器发命令时才算在使用它,所以只在隔离 context 里工作的 agent 不会让主浏览器一直开着。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。
 
 局限:
 
@@ -333,8 +335,8 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_HEADLESS`         | `0`                                                                                                 | `0` = 有头,显示在桌面上(Xvfb 或 labwc,串流可见);`1` = 无头                                                                                                                                  |
 | `CHROMIUM_LANG`             | `en-US`                                                                                             | 浏览器 UI 语言 + `Accept-Language`(如 `zh-CN`)                                                                                                                                    |
 | `CHROMIUM_START_URL`        | `about:blank`                                                                                       | 启动时打开的页面                                                                                                                                                                  |
-| `CHROMIUM_AUTOSTART`        | `true`                                                                                              | 由 CDP 网关随容器启动主浏览器;`false` = 只在首个 CDP 客户端连接或在 CDP 控制台点 *Start browser* 时才启动。无论哪种,关闭它(或崩溃)都不会让容器退出,下一个客户端会再把它启动起来([详情](#cdp-网关带登录态的隔离-context)) |
-| `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 主浏览器空闲(无 CDP 客户端、无隔离 context、无人观看串流)多少分钟后自动关闭;`0` = 不自动关闭 |
+| `CHROMIUM_AUTOSTART`        | `true`                                                                                              | 由 CDP 网关随容器启动主浏览器;`false` = 只在 CDP 客户端用到默认 context(隔离 context 不需要它)或在 CDP 控制台点 *Start browser* 时才启动。无论哪种,关闭它(或崩溃)都不会让容器退出,下一个客户端会再把它启动起来([详情](#cdp-网关带登录态的隔离-context)) |
+| `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 主浏览器空闲(没有 CDP 客户端在使用它、无人观看串流;隔离 context 不算)多少分钟后自动关闭;`0` = 不自动关闭 |
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
 | `CHROMIUM_SANDBOX`          | `auto`                                                                                              | Chromium 自身的沙箱(主浏览器和 context 浏览器):`auto` = 浏览器以非特权用户运行(`RUN_USER` 不为 `0`,即默认情况)**且**容器允许创建 user namespace 时开启,否则使用 `--no-sandbox`;`off` = 始终 `--no-sandbox`。见[权限降级(`RUN_USER`)](#权限降级run_user) |

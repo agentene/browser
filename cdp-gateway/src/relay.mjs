@@ -9,7 +9,7 @@ import { log } from './util.mjs';
 
 let relays = 0;
 
-// open relays, for idle.mjs
+// open relays to the main browser's pages, for idle.mjs
 export function openRelays() {
   return relays;
 }
@@ -20,8 +20,9 @@ export function openRelays() {
 // page WebSocket ends the whole browser just the same, a command naming
 // local files (file-access.mjs), or one opening a CDP channel of its own.
 // What passes goes upstream as the command the check read.
-export function relay(client, upstream) {
-  relays++;
+// onMain: the target is the main browser's (counted for idle.mjs).
+export function relay(client, upstream, onMain = true) {
+  if (onMain) relays++;
   client.on('message', (raw) => {
     const checked = guardFrame(raw);
     if (checked.notes) for (const note of checked.notes) log(`page relay: ${note}`);
@@ -40,7 +41,7 @@ export function relay(client, upstream) {
   const closeBoth = () => {
     if (closed) return;
     closed = true;
-    relays--;
+    if (onMain) relays--;
     upstream.close();
     client.terminate();
   };

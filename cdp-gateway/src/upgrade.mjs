@@ -1,5 +1,7 @@
 // WebSocket upgrades:
-//   /devtools/browser/<id>  a Mux on the main browser (mux.mjs)
+//   /devtools/browser/<id>  a Mux on the main browser (mux.mjs); a stopped
+//                           one is not started for it — the Mux does when
+//                           the client uses the default context
 //   /devtools/page/<id>     a relay to the browser owning the target (relay.mjs)
 //   /console/ws             the console's live state (console-live.mjs)
 //   /console/overlay        the clients' input, for the Selkies page's
@@ -50,6 +52,7 @@ async function resolveTarget(req, p) {
     }
   }
   if (p.startsWith('/devtools/browser/')) {
+    if (mainBrowser.state === 'stopped' || mainBrowser.stopping) return { kind: 'browser', upstream: null };
     await mainBrowser.ensure();
     return { kind: 'browser', upstream: await mainBrowser.pipe.connect() };
   }
@@ -57,7 +60,7 @@ async function resolveTarget(req, p) {
     const targetId = p.slice('/devtools/page/'.length);
     const pipe = await targetOwner(targetId);
     if (!pipe) return { refuse: 404 };
-    return { kind: 'page', upstream: await pipe.connect({ targetId }) };
+    return { kind: 'page', upstream: await pipe.connect({ targetId }), onMain: pipe === mainBrowser.pipe };
   }
   if (CONSOLE_SOCKETS.has(p)) {
     if (p === '/console/overlay' && INPUT_OVERLAY === 'off') return { refuse: 404 };
@@ -101,6 +104,6 @@ export async function handleUpgrade(req, socket, head) {
     if (target.kind === 'browser') new Mux(client, clientAddress(req), target.upstream);
     else if (target.kind === 'console') subscribe(client);
     else if (target.kind === 'overlay') subscribeOverlay(client);
-    else relay(client, target.upstream);
+    else relay(client, target.upstream, target.onMain);
   });
 }

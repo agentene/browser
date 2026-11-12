@@ -14,8 +14,10 @@ const upstreams = []; // what the stubbed pipe handed out
 let gateway;
 
 before(async () => {
-  // a stopped main browser takes seconds to start: 300 ms here, the window
-  // in which a client may give up
+  // a main browser still starting takes seconds to be up: 300 ms here, the
+  // window in which a client may give up (a stopped one is not started for
+  // a connection at all: the last test)
+  mainBrowser.state = 'starting';
   mainBrowser.ensure = () => new Promise((resolve) => setTimeout(resolve, 300));
   mainBrowser.pipe = {
     async connect() {
@@ -92,4 +94,20 @@ test('the input overlay\'s WebSocket is a 404 with CDP_INPUT_OVERLAY off (the de
   assert.equal(await upgradeStatus('/console/overlay', 'X-CDP-Console-Via: web\r\n'), 404);
   // the web UI port still reaches no CDP WebSocket
   assert.equal(await upgradeStatus('/devtools/browser/x', 'X-CDP-Console-Via: web\r\n'), 404);
+});
+
+test('a stopped main browser is not started for a browser connection', async () => {
+  const opened = upstreams.length;
+  let ensured = false;
+  const realEnsure = mainBrowser.ensure;
+  mainBrowser.ensure = () => { ensured = true; return realEnsure(); };
+  mainBrowser.state = 'stopped';
+  try {
+    assert.equal(await upgradeStatus('/devtools/browser/x'), 101);
+    assert.equal(ensured, false);
+    assert.equal(upstreams.length, opened);
+  } finally {
+    mainBrowser.state = 'starting';
+    mainBrowser.ensure = realEnsure;
+  }
 });

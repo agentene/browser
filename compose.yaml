@@ -164,13 +164,14 @@ services:
       # Page opened at startup, e.g. "https://example.com"
       CHROMIUM_START_URL: "${CHROMIUM_START_URL:-about:blank}"
       # The CDP gateway owns the main browser: true = started with the
-      # container; false = only on the first CDP client or from the CDP
-      # console ("Start browser"). Either way closing it (or a crash) keeps
+      # container; false = only when a CDP client uses the default context
+      # (isolated contexts never need it) or from the CDP console ("Start
+      # browser"). Either way closing it (or a crash) keeps
       # the container running, and the next client starts it again
       CHROMIUM_AUTOSTART: "${CHROMIUM_AUTOSTART:-true}"
-      # Minutes the main browser may sit idle
-      # (no CDP client, no isolated context, nobody watching the stream)
-      # before the gateway closes it again; 0 = never
+      # Minutes the main browser may sit idle (no CDP client using it,
+      # nobody watching the stream; isolated contexts do not count) before
+      # the gateway closes it again; 0 = never
       CHROMIUM_IDLE_TIMEOUT: "${CHROMIUM_IDLE_TIMEOUT:-0}"
       # Extra chromium flags, e.g. "--proxy-server=http://host:3128"
       CHROMIUM_EXTRA_ARGS: "${CHROMIUM_EXTRA_ARGS:-}"

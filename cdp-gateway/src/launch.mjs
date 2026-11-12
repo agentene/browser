@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process';
 import { CHROME_BIN } from './config.mjs';
 import { CdpPipe } from './pipe.mjs';
+import { rememberVersion } from './version.mjs';
 
 const HIDE_WEBDRIVER = 'AutomationControlled';
 
@@ -53,6 +54,7 @@ export function browserReady(proc, pipe, timeout, logPath) {
     proc.once('error', onError);
     pipe.call('Browser.getVersion', {}, { timeout }).then((version) => {
       pipe.version = version;
+      rememberVersion(version);
       resolve(version);
     }, (err) => {
       reject(new Error(`chromium did not answer on its DevTools pipe within ${timeout / 1000}s (${err.message}), see ${logPath}`));

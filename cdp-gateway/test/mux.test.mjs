@@ -9,7 +9,8 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { REFUSED_MESSAGE } from '../src/browser-exit.mjs';
 import { INTERNAL_ID_BASE } from '../src/config.mjs';
 import { contexts } from '../src/contexts.mjs';
-import { contextWindowId, Mux, openMuxes } from '../src/mux.mjs';
+import { contextWindowId, lastMainUse, mainClients, Mux, openMuxes } from '../src/mux.mjs';
+import { fromJsonVersion, rememberVersion } from '../src/version.mjs';
 import { wsConnection } from './fake-upstream.mjs';
 
 // The fake main browser: answers every command, fails disposals of unknown
@@ -37,7 +38,9 @@ before(async () => {
       const msg = JSON.parse(data.toString());
       received.push(msg);
       arrivals.push(['main', msg.method, msg.sessionId]);
-      if (msg.method === 'Target.disposeBrowserContext') {
+      if (msg.method === 'Test.hang') {
+        // never answered: a command in flight when the browser goes
+      } else if (msg.method === 'Target.disposeBrowserContext') {
         ws.send(JSON.stringify({ id: msg.id, error: { code: -32602, message: 'Failed to find context with id' } }));
       } else if (msg.method === 'Target.attachToTarget') {
         ws.send(JSON.stringify({ method: 'Target.attachedToTarget', params: { sessionId: 'S1', targetInfo: { targetId: msg.params.targetId, type: 'page' } } }));
@@ -730,4 +733,152 @@ test('W: a context window id is forgotten with its context', async () => {
     client.close();
     stub.restore();
   }
+});
+
+// --- the main browser exiting under a connection, or not there at all -----
+
+// A client with an isolated context and a main page session attached.
+async function contextClient(main) {
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', main, { openMain: () => wsConnection(mainUrl) });
+  await client.command({ id: 900, method: 'Target.attachToTarget', params: { targetId: 'MT1', flatten: true } });
+  const created = await client.command({ id: 901, method: 'Target.createBrowserContext', params: {} });
+  return { client, mux, alias: created.result.browserContextId };
+}
+
+test('M1: the main browser exiting leaves a connection with an isolated context open', async () => {
+  const stub = stubContexts();
+  const { client, mux, alias } = await contextClient(await wsConnection(mainUrl));
+  try {
+    const inFlight = client.command({ id: 902, method: 'Test.hang', params: {} });
+    const detached = client.next((m) => m.method === 'Target.detachedFromTarget' && m.params.sessionId === 'S1');
+    mux.main.close(); // the main browser goes
+    assert.deepEqual((await detached).params, { sessionId: 'S1', targetId: 'MT1' });
+    assert.match((await inFlight).error.message, /main browser is gone/);
+    assert.equal(mux.closed, false);
+    assert.equal(mux.main, null);
+    assert.equal(stub.made[0].destroyed, false, 'the context keeps running');
+    // the context still answers
+    const target = await client.command({ id: 903, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId: alias } });
+    assert.deepEqual(target.result, { targetId: 'CT1' });
+    // a main session is gone with it, and nothing starts the main browser for it
+    const stale = await client.command({ id: 904, sessionId: 'S1', method: 'Runtime.evaluate', params: { expression: '1' } });
+    assert.match(stale.error.message, /Session/);
+    assert.equal(mux.main, null);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('M1: without an isolated context the connection ends with the main browser', async () => {
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl));
+  const closed = once(client, 'close');
+  mux.main.close();
+  await closed;
+  assert.equal(mux.closed, true);
+});
+
+test('M2: a default-context command after the main browser went starts it again, setup first', async () => {
+  const stub = stubContexts();
+  const opened = [];
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', await wsConnection(mainUrl), {
+    openMain: async () => { opened.push(1); return wsConnection(mainUrl); },
+  });
+  try {
+    const auto = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
+    await client.command({ id: 910, method: 'Target.setAutoAttach', params: auto });
+    await client.command({ id: 911, method: 'Target.createBrowserContext', params: {} });
+    mux.main.close();
+    while (mux.main) await new Promise((resolve) => setTimeout(resolve, 5));
+    const from = received.length;
+    const reply = await client.command({ id: 912, method: 'Target.createTarget', params: { url: 'about:blank' } });
+    assert.deepEqual(reply, { id: 912, result: { echo: 'Target.createTarget' } });
+    assert.equal(opened.length, 1);
+    // the client's setup reaches the new main browser before its command
+    assert.deepEqual(received.slice(from).map((m) => m.method), ['Target.setAutoAttach', 'Target.createTarget']);
+    assert.deepEqual(received[from].params, auto);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('M3: without a main browser the handshake is answered and only a default-context use starts it', async () => {
+  rememberVersion({ protocolVersion: '1.3', product: 'Chrome/1.2.3.4', revision: '@abc', userAgent: 'Mozilla/5.0 Chrome/1.0.0.0', jsVersion: '1.2' });
+  const stub = stubContexts();
+  const opened = [];
+  const client = new FakeClient();
+  const mux = new Mux(client, 'test', null, {
+    openMain: async () => { opened.push(1); return wsConnection(mainUrl); },
+  });
+  try {
+    assert.equal((await client.command({ id: 920, method: 'Browser.getVersion', params: {} })).result.product, 'Chrome/1.2.3.4');
+    await client.command({ id: 921, method: 'Target.setAutoAttach', params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true } });
+    assert.equal((await client.command({ id: 922, method: 'Target.getTargetInfo', params: {} })).result.targetInfo.type, 'browser');
+    await client.command({ id: 923, method: 'Browser.setDownloadBehavior', params: { behavior: 'allowAndName', downloadPath: '/browser/downloads', eventsEnabled: true } });
+    // Playwright's isolated context, all of it in the context chromium
+    const alias = (await client.command({ id: 924, method: 'Target.createBrowserContext', params: {} })).result.browserContextId;
+    assert.deepEqual((await client.command({ id: 925, method: 'Target.createTarget', params: { url: 'about:blank', browserContextId: alias } })).result, { targetId: 'CT1' });
+    const list = await client.command({ id: 926, method: 'Target.getTargets', params: {} });
+    assert.deepEqual(list.result.targetInfos.map((t) => [t.targetId, t.browserContextId]), [['CT1', alias]]);
+    assert.equal(opened.length, 0, 'the main browser was never needed');
+    assert.equal(mainClients(), 0);
+    // the default context needs it
+    const from = received.length;
+    assert.deepEqual((await client.command({ id: 927, method: 'Target.createTarget', params: { url: 'about:blank' } })).result, { echo: 'Target.createTarget' });
+    assert.equal(opened.length, 1);
+    assert.deepEqual(received.slice(from).map((m) => m.method), ['Target.setAutoAttach', 'Browser.setDownloadBehavior', 'Target.createTarget']);
+    assert.ok(lastMainUse() > 0);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('M3: commands waiting for a main browser that cannot start fail instead of hanging', async () => {
+  const client = new FakeClient();
+  new Mux(client, 'test', null, { openMain: async () => { throw new Error('no chromium'); } });
+  try {
+    const [a, b] = await Promise.all([
+      client.command({ id: 930, method: 'Target.createTarget', params: { url: 'about:blank' } }),
+      client.command({ id: 931, method: 'Page.navigate', params: { url: 'about:blank' } }),
+    ]);
+    assert.match(a.error.message, /could not be started: no chromium/);
+    assert.match(b.error.message, /could not be started/);
+  } finally {
+    client.close();
+  }
+});
+
+test('M4: a client connection keeps the main browser busy only without an isolated context', async () => {
+  const stub = stubContexts();
+  const before = mainClients();
+  const client = new FakeClient();
+  new Mux(client, 'test', await wsConnection(mainUrl));
+  try {
+    assert.equal(mainClients(), before + 1);
+    await client.command({ id: 940, method: 'Target.createBrowserContext', params: {} });
+    assert.equal(mainClients(), before);
+  } finally {
+    client.close();
+    stub.restore();
+  }
+});
+
+test('version: the build-time /json/version as Browser.getVersion, headed unless headless', () => {
+  const json = {
+    Browser: 'HeadlessChrome/157.0.8103.78', 'Protocol-Version': '1.3',
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.0.0 Safari/537.36',
+    'V8-Version': '15.7.1', 'WebKit-Version': '537.36 (@deadbeef)',
+  };
+  assert.deepEqual(fromJsonVersion(json, false), {
+    protocolVersion: '1.3', product: 'Chrome/157.0.8103.78', revision: '@deadbeef',
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36',
+    jsVersion: '15.7.1',
+  });
+  assert.equal(fromJsonVersion(json, true).product, 'HeadlessChrome/157.0.8103.78');
+  assert.equal(fromJsonVersion({}), null);
 });

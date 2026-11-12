@@ -37,6 +37,8 @@ export const SCREEN_SIZE = env.CDP_GATEWAY_SCREEN_SIZE || '';
 // chromium's protocol description, captured from the binary at image build
 // (the browsers serve no /json/protocol over their pipe)
 export const PROTOCOL_FILE = env.CDP_GATEWAY_PROTOCOL_FILE || '/opt/chrome-for-testing/devtools-protocol.json';
+// its /json/version, captured the same way (version.mjs)
+export const VERSION_FILE = env.CDP_GATEWAY_VERSION_FILE || '/opt/chrome-for-testing/devtools-version.json';
 export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
 export const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
 export const CONTEXTS_HEADLESS = env.CDP_CONTEXTS_HEADLESS === '1';

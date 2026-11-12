@@ -107,12 +107,17 @@ RUN apt-get update && \
     # from this very binary: at runtime the browsers speak CDP on a pipe to
     # the CDP gateway only (no DevTools port, no HTTP endpoint), and the
     # gateway serves this copy (chrome-remote-interface and the like ask for it).
+    # Its /json/version too: what the gateway answers a client with while the
+    # main browser is stopped (a client connecting does not start it).
     { /opt/chrome-for-testing/chrome --headless --no-sandbox --disable-gpu \
         --user-data-dir=/tmp/cft-profile --remote-debugging-port=0 about:blank >/dev/null 2>&1 & } && \
     for _ in $(seq 1 150); do [ -s /tmp/cft-profile/DevToolsActivePort ] && break; sleep 0.1; done && \
     curl -fsS -o /opt/chrome-for-testing/devtools-protocol.json \
         "http://127.0.0.1:$(head -n1 /tmp/cft-profile/DevToolsActivePort)/json/protocol" && \
     grep -q '"domains"' /opt/chrome-for-testing/devtools-protocol.json && \
+    curl -fsS -o /opt/chrome-for-testing/devtools-version.json \
+        "http://127.0.0.1:$(head -n1 /tmp/cft-profile/DevToolsActivePort)/json/version" && \
+    grep -q '"User-Agent"' /opt/chrome-for-testing/devtools-version.json && \
     { kill "$!"; wait "$!" || true; } && \
     # its child processes may still be writing into the profile for a moment
     for _ in 1 2 3 4 5; do rm -rf /tmp/cft-profile && break; sleep 1; done && \

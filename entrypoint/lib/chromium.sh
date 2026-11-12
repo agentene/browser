@@ -372,7 +372,7 @@ chromium_launch() {
     : >/tmp/chromium.log
     give_to_run_user /tmp/chromium.log
     if [ "${CHROMIUM_AUTOSTART}" = "false" ]; then
-        log "chromium: on demand (CHROMIUM_AUTOSTART=false) — the CDP gateway starts it on the first CDP client or from the console"
+        log "chromium: on demand (CHROMIUM_AUTOSTART=false) — the CDP gateway starts it when a CDP client uses the default context or from the console"
     else
         log "chromium: started by the CDP gateway (headless=${CHROMIUM_HEADLESS}), CDP on its pipe to the gateway"
     fi
