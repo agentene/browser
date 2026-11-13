@@ -42,7 +42,8 @@ the Wayland (default) and X11 desktops (see `.github/workflows/ci.yaml`).
 | `Dockerfile` | single-stage Ubuntu image: Node.js, Chrome for Testing, nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, the Selkies release wheels |
 | `docker-entrypoint.sh` | PID-1 supervisor: Xvfb + picom (or labwc), PulseAudio, Selkies, Chromium (+ CDP gateway), nginx — a thin `main()` over the modules below |
 | `entrypoint/lib/` | supervisor modules, one per concern (`config.sh` holds the env knob reference + defaults, `nginx.sh` generates the nginx config) |
-| `entrypoint/helpers/` | scripts the services run (labwc helpers, window lock, screen follower, profile seeding) |
+| `entrypoint/helpers/` | scripts the services run (labwc helpers, window lock, screen follower, X11 desktop background, profile seeding) |
+| `entrypoint/assets/` | static files the services use (`desktop-background.png`, the desktop background picture) |
 | `compose.yaml` | base compose file |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | opt-in overlays: HTTPS, Intel/AMD GPU, NVIDIA GPU, host networking |
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |

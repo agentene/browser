@@ -8,6 +8,8 @@
 #      Xvfb            virtual X11 display (Selkies captures it)
 #      picom           compositing manager for that display (keeps popup
 #                       menu shadows visible)
+#      background      the desktop's background picture (swaybg on labwc,
+#                       a root-pixmap helper on Xvfb)
 #   2. PulseAudio      audio server (Selkies captures it via pcmflux)
 #   3. Selkies         HTML5 remote desktop on the unix socket
 #                       /tmp/agentene/selkies.sock
@@ -45,6 +47,7 @@
 #   gpu.sh              GPU device detection
 #   display-x11.sh      Xvfb + picom          (DISPLAY_BACKEND=x11)
 #   display-wayland.sh  labwc + helpers       (DISPLAY_BACKEND=wayland)
+#   desktop-background.sh  the desktop's background picture (both backends)
 #   audio.sh            PulseAudio
 #   selkies.sh          Selkies
 #   chromium.sh         chromium flags, profile, launch
@@ -80,6 +83,8 @@ ENTRYPOINT_HELPERS="${ENTRYPOINT_HOME}/helpers"
 . "${ENTRYPOINT_HOME}/lib/display-x11.sh"
 # shellcheck source=entrypoint/lib/display-wayland.sh
 . "${ENTRYPOINT_HOME}/lib/display-wayland.sh"
+# shellcheck source=entrypoint/lib/desktop-background.sh
+. "${ENTRYPOINT_HOME}/lib/desktop-background.sh"
 # shellcheck source=entrypoint/lib/audio.sh
 . "${ENTRYPOINT_HOME}/lib/audio.sh"
 # shellcheck source=entrypoint/lib/selkies.sh
@@ -109,6 +114,7 @@ main() {
             x11) display_x11_start ;;
             wayland) display_wayland_start ;;
         esac
+        desktop_background_start
         audio_start
         selkies_start
     fi

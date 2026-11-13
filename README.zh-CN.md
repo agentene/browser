@@ -214,7 +214,7 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 **隔离 context 不依附于主浏览器。** 每个隔离 context 都是独立的浏览器进程,和主浏览器一样是网关的子进程,因此主浏览器关闭(关窗口、**Stop**、空闲超时、崩溃)时,它们以及它们客户端的连接都会继续运行:这类客户端会收到其主浏览器页面已消失的通知(`Target.detachedFromTarget` / `Target.targetDestroyed`,与页面关闭时相同),发往主浏览器的未完成命令会失败,而隔离 context 照常工作。之后如果它再用到默认 context,网关会为它重新启动主浏览器。没有隔离 context 的客户端仍会像以前一样被断开。
 
-把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端在使用它,也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。持有隔离 context 的客户端只有在给主浏览器发命令时才算在使用它,所以只在隔离 context 里工作的 agent 不会让主浏览器一直开着。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。
+把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端在使用它,也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。持有隔离 context 的客户端只有在给主浏览器发命令时才算在使用它,所以只在隔离 context 里工作的 agent 不会让主浏览器一直开着。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。没有浏览器窗口时,串流显示桌面背景:镜像自带的图片(`entrypoint/assets/desktop-background.png`),按原尺寸居中显示在中性灰底上——Wayland 下由 `swaybg` 绘制,X11 下由一个设置 root pixmap 的小 helper 绘制;它是固定的,不是配置项。
 
 局限:
 
@@ -524,7 +524,7 @@ NGINX_LISTEN_ADDR=127.0.0.1   # 建议:CDP 与 Web UI 不暴露到网络
 * 容器启动 == 服务启动:入口脚本是一个极简 PID 1 监管器,**任一服务退出即退出**,配合 `--restart always` / `restart: always` 即为自动恢复。
 * compose 健康检查每 30 秒轮询 `http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT}/`(nginx 代理 Selkies):2xx、重定向(`SELKIES_SUBFOLDER`)或 401(开启了登录页)都视为健康,502(Selkies 未就绪)不算。`ENABLE_SELKIES=false` 时没有 Web 监听,改为探测 `http://127.0.0.1:${CDP_LISTEN_PORT}/json/version`。直接 `docker run` 没有健康检查(镜像本身未定义)。
 * 同时设置 `ENABLE_SELKIES=false` 和 `ENABLE_CDP=false` 是配置错误,会立即失败。
-* 日志在容器内 `/tmp/*.log`(`xvfb.log` 或 `labwc.log`、`picom.log`、`pulseaudio.log`、`chromium.log`、`cdp-gateway.log`、`nginx/*.log` 等);`docker compose logs` 显示入口脚本自身以及 Selkies、nginx 的输出。`nginx/access.log` 不记录 CDP 端口上的 `/json/*` 请求(CDP 客户端会轮询它们,常常每秒一次)。
+* 日志在容器内 `/tmp/*.log`(`xvfb.log` 或 `labwc.log`、`picom.log`、`desktop-background.log`、`pulseaudio.log`、`chromium.log`、`cdp-gateway.log`、`nginx/*.log` 等);`docker compose logs` 显示入口脚本自身以及 Selkies、nginx 的输出。`nginx/access.log` 不记录 CDP 端口上的 `/json/*` 请求(CDP 客户端会轮询它们,常常每秒一次)。
 
 ## 从源码构建
 

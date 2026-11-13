@@ -182,11 +182,13 @@ RUN apt-get update && \
 # default): labwc is
 # the headless Wayland compositor + window manager Selkies captures (it
 # maximizes the browser windows), wlr-randr sizes its output at startup and
-# wlrctl raises a window for the CDP console.
+# wlrctl raises a window for the CDP console; swaybg paints its desktop
+# background (entrypoint/lib/desktop-background.sh — on X11 a python3-xlib
+# helper does, no extra package).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 xvfb x11-xserver-utils picom python3-xlib \
-    labwc wlr-randr wlrctl pulseaudio \
+    labwc wlr-randr wlrctl swaybg pulseaudio \
     libx11-xcb1 libegl1 libgl1 libva2 libva-drm2 libvulkan1 \
     libwayland-server0 \
     mesa-va-drivers libgl1-mesa-dri intel-media-va-driver-non-free \
