@@ -36,12 +36,15 @@ export async function startGateway() {
   // RUN_USER=0 the nginx workers are nobody, not the gateway's root.
   await fs.rm(SOCKET_PATH, { force: true });
   server.listen(SOCKET_PATH, async () => {
+    // CHROMIUM_AUTOSTART=true: up right away — 'starting' before the socket
+    // is opened to anyone, so the entrypoint's /json/version wait (and an
+    // early client) waits for it instead of being answered for a stopped
+    // browser. A failed start is no reason to exit — the next client or the
+    // console's Start tries again.
+    if (MAIN_AUTOSTART) mainBrowser.ensure().catch(() => { /* logged by launch() */ });
     await fs.chmod(SOCKET_PATH, 0o666);
     const idle = IDLE_TIMEOUT_MS ? `, closed after ${IDLE_TIMEOUT_MS / 60_000} idle min` : '';
-    log(`listening on ${SOCKET_PATH} (main browser started ${MAIN_AUTOSTART ? 'now' : 'on demand'}${idle}, max ${MAX_CONTEXTS} contexts, data in ${CONTEXTS_DIR}; the browsers speak CDP on their pipes only)`);
-    // CHROMIUM_AUTOSTART=true: up right away. A failed start is no reason to
-    // exit — the next client or the console's Start tries again.
-    if (MAIN_AUTOSTART) mainBrowser.ensure().catch(() => { /* logged by launch() */ });
+    log(`listening on ${SOCKET_PATH} (main browser started ${MAIN_AUTOSTART ? 'now' : 'when a client uses it'}${idle}, max ${MAX_CONTEXTS} contexts, data in ${CONTEXTS_DIR}; the browsers speak CDP on their pipes only)`);
   });
 
   async function shutdown(signal) {

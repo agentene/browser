@@ -3,8 +3,8 @@
 // Always this process's child, launched from the command line the entrypoint
 // left in MAIN_FLAGS_FILE: right when the gateway starts with
 // CHROMIUM_AUTOSTART=true (server.mjs), otherwise on demand only. Either way
-// a stopped one is started again by the next CDP client (ensure() in
-// routes-json.mjs / upgrade.mjs) or the console. When it exits — window
+// a stopped one is started again by the next CDP client that uses the
+// default context (ensure() in mux.mjs / routes-json.mjs) or the console. When it exits — window
 // closed, Stop, a crash, a client's Browser.close — the gateway just marks it
 // stopped: the gateway, not the browser, is what the container supervises.
 // The gateway speaks CDP with it over its pipe (pipe.mjs), the only way in.

@@ -21,7 +21,7 @@ Understand this posture **before** exposing any port:
 | Surface | Default | Notes |
 | --- | --- | --- |
 | CDP endpoint (port 9222) | **no authentication** | Full browser control for anyone who can reach it. Publish to localhost/trusted networks only. |
-| Selkies web UI (port 80/443) | no authentication | Set `SELKIES_BASIC_AUTH_PASSWORD` (+ HTTPS) whenever untrusted parties can connect. |
+| Selkies web UI (port 80/443) | built-in setup/login (`ENABLE_AUTH=true`) | Create a login and use HTTPS whenever untrusted parties can connect. Skipping login or setting `ENABLE_AUTH=false` opens access. |
 | TLS | off (`ENABLE_HTTPS=false`); when on, self-signed and generated once unless you bring a pair | Bring your own certificate for anything public. |
 | Chromium sandbox | `--no-sandbox` | Standard for containerized Chromium; run the container on a host/VM you'd be comfortable exposing a browser to. |
 | Container user | PID 1 + nginx master: root (binds ports 80/443); desktop stack + nginx workers: `browser` (uid 1001) | `RUN_USER` picks another user, `RUN_USER=0` keeps everything on root. `--cap-drop=ALL` alone stops the container from starting; add back `CHOWN SETUID SETGID NET_BIND_SERVICE FOWNER DAC_OVERRIDE KILL` (the last three not with `RUN_USER=0`), see the README. |

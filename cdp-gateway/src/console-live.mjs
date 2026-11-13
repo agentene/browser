@@ -1,7 +1,7 @@
 // Console live state (WebSocket /console/ws), the console pages' only source
 // of state. A new subscriber gets a snapshot, then only what changed,
 // batched per tick as {ops: [...]}:
-//   {t:'snapshot', max, settings, browsers:[{name, ...fields, tabs, current, thumb}]}
+//   {t:'snapshot', max, settings, browsers:[{name, ...fields, tabs, current, thumb}], ai}
 //   {t:'settings', settings}               the server-side settings changed
 //                                          (all of them, as settingsView())
 //   {t:'browser', name, ...fields}         a new browser (all fields) or changed fields
@@ -9,6 +9,10 @@
 //   {t:'tabs', name, set:[tab], del:[id]}  new or changed tabs, closed tabs
 //   {t:'current', name, id}                another tab is in front
 //   {t:'thumb', name, id, jpeg}            a new thumbnail of the current tab (base64)
+//   {t:'ai', ai:[{c, name, id}]}           the tabs the CDP clients work in now
+//                                          (input-overlay.mjs' workingTabs: c numbers
+//                                          the client as the overlay does; empty
+//                                          with CDP_INPUT_OVERLAY=off)
 // Ticks list each browser's tabs over its pipe (targets.mjs), only while a
 // console is connected, and never start a stopped main browser. Thumbnails
 // come from a screencast of each browser's current tab (screencast.mjs).
@@ -19,11 +23,12 @@ import { onChange } from './changes.mjs';
 import { MAX_CONTEXTS } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
+import { unwatchInput, watchInput, workingTabs } from './input-overlay.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { Screencast } from './screencast.mjs';
 import { settingsView } from './settings.mjs';
 import { NO_TABS, browserTabs, releaseProbes } from './targets.mjs';
-import { log } from './util.mjs';
+import { MAX_BUFFERED, log } from './util.mjs';
 
 const TICK_MS = 1000;
 // At most one thumbnail per browser this often: the browser in front on
@@ -38,14 +43,9 @@ const memos = new Map(); // name -> the current-tab memo of targets.mjs' pickCur
 let tickTimer = null;
 let anyFront = false;
 let settingsSent = JSON.stringify(settingsView());
+let aiSent = '[]';
 let tickRunning = Promise.resolve();
 let tickQueued = null;
-
-// A console that reads slower than the thumbnails come (a stalled tab, a bad
-// link) would grow the gateway's send buffer without bound; skipping ops would
-// leave it with a wrong picture, so it is dropped instead — the pages
-// reconnect and start over from a snapshot.
-export const MAX_BUFFERED = 8 * 1024 * 1024;
 
 export function broadcast(ops, to = subscribers) {
   if (!ops.length) return;
@@ -89,6 +89,11 @@ async function tick() {
   if (JSON.stringify(settings) !== settingsSent) {
     settingsSent = JSON.stringify(settings);
     ops.push({ t: 'settings', settings });
+  }
+  const ai = workingTabs();
+  if (JSON.stringify(ai) !== aiSent) {
+    aiSent = JSON.stringify(ai);
+    ops.push({ t: 'ai', ai });
   }
   const names = browserNames();
   const { front, titles } = await desktopWindows(names);
@@ -157,6 +162,7 @@ function snapshot() {
     browsers: [...views].map(([name, v]) => ({
       name, ...v.fields, tabs: [...v.tabs.values()], current: v.current, thumb: v.thumb,
     })),
+    ai: JSON.parse(aiSent),
   };
 }
 
@@ -191,6 +197,7 @@ export async function subscribe(ws) {
   ws.on('close', () => {
     subscribers.delete(ws);
     if (subscribers.size) return;
+    if (tickTimer) unwatchInput(); // watched since the first subscriber came in
     clearInterval(tickTimer);
     tickTimer = null;
     unwatchFront();
@@ -211,6 +218,7 @@ export async function subscribe(ws) {
   subscribers.add(ws);
   if (!tickTimer) {
     watchFront();
+    watchInput();
     tickTimer = setInterval(runTick, TICK_MS);
     runTick(); // starts the screencasts
   }

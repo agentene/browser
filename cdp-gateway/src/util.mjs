@@ -7,6 +7,12 @@ export function log(...args) {
   console.log(new Date().toISOString(), '[cdp-gateway]', ...args);
 }
 
+// A page that reads slower than the gateway sends (a stalled tab, a bad
+// link) would grow the gateway's send buffer without bound; skipping ops would
+// leave it with a wrong picture, so it is dropped instead — the console pages
+// and the overlay reconnect and start over from a snapshot.
+export const MAX_BUFFERED = 8 * 1024 * 1024;
+
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Run a helper to completion; resolves with its exit code (an Error when it

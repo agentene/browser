@@ -5,10 +5,8 @@
 // nginx injects it into the Selkies entry page (sub_filter before </head>,
 // entrypoint/lib/nginx.sh) and proxies cdp-console/ — relative to the page,
 // so SELKIES_SUBFOLDER works — to /console/ on the gateway. Same origin as
-// Selkies on purpose: the browser resends the page's Basic Auth, which the
-// gateway checks against Selkies' master password (view-only users get 401
-// and never see the handle), and the built-in login's session cookie, which
-// nginx checks (ENABLE_AUTH). Its settings menu also carries the built-in
+// Selkies on purpose: nginx checks the built-in login's session cookie
+// (ENABLE_AUTH). Its settings menu also carries the built-in
 // login's controls (login, CDP API key, log out): __auth/ui.js, served by
 // the auth service next to the page.
 //
@@ -93,7 +91,7 @@
       :host(:not(.open)) .panel { box-shadow:none; }
       :host(.open) .panel { transform:none; }
       header {
-        display:flex; align-items:center; gap:8px; padding:10px 10px 10px 14px;
+        display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 10px 10px 14px;
         border-bottom:1px solid var(--line);
       }
       h2 { font-size:14px; font-weight:600; letter-spacing:-.01em; margin:0; }
@@ -230,20 +228,63 @@
         position:absolute; inset:0; overflow:auto; list-style:none; margin:0; padding:0;
         display:flex; flex-direction:column; gap:1px; scrollbar-width:thin; scrollbar-color:var(--line) transparent;
       }
-      .tabs li { min-width:0; flex:none; }
+      .tabs li { position:relative; min-width:0; flex:none; }
       .tabs button {
-        display:block; width:100%; text-align:left; font-weight:400; padding:3px 8px;
+        display:flex; align-items:center; gap:6px; width:100%; text-align:left; font-weight:400; padding:3px 8px;
         border:none; border-radius:6px; color:var(--muted);
-        overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
       }
+      .tabs li > button:first-child { min-width:0; }
+      .tabs button.tab-close { display:none; position:absolute; right:2px; top:50%; transform:translateY(-50%); width:24px; height:24px; padding:0; justify-content:center; font-size:18px; }
+      .tabs li:hover > .tab-close, .tabs li:focus-within > .tab-close { display:flex; }
+      .tabs li:hover > button:first-child, .tabs li:focus-within > button:first-child { background:var(--chip); color:var(--text); }
+      .tabs li:has(> .tab-close:not([hidden])):is(:hover, :focus-within) > button:first-child { padding-right:28px; }
+      @media (hover:none) {
+        .tabs button.tab-close { display:flex; }
+        .tabs li:has(> .tab-close:not([hidden])) > button:first-child { padding-right:28px; }
+      }
+      .tabs button.tab-close:hover { color:var(--danger); background:color-mix(in srgb, var(--danger) 10%, transparent); }
+      .tabs button.tab-close[hidden], .new-browser[hidden] { display:none; }
+      .new-browser { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; }
+      .tab-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .tabs button:hover { background:var(--chip); color:var(--text); }
       .tabs button:focus-visible { outline-offset:-2px; }
       .tabs button.current {
         background:var(--chip); color:var(--text); font-weight:500;
         box-shadow:inset 2px 0 0 var(--accent);
       }
+      /* the CDP clients working in a tab: their numbers in the input overlay's colors (overlay.js) */
+      .ai-marks { display:inline-flex; align-items:center; gap:3px; flex:none; }
+      .ai-marks:empty { display:none; }
+      .ai {
+        display:inline-flex; align-items:center; gap:4px; padding:0 6px; border-radius:999px;
+        background:var(--ai); color:#fff; font-size:10px; font-weight:600; line-height:16px; letter-spacing:.01em;
+        white-space:nowrap; font-variant-numeric:tabular-nums; box-shadow:0 1px 3px color-mix(in srgb, var(--ai) 45%, transparent);
+      }
+      .ai::before {
+        content:""; width:5px; height:5px; border-radius:50%; background:currentColor;
+        animation:live 1.2s ease-in-out infinite alternate;
+      }
+      @media (prefers-reduced-motion: reduce) { .ai::before { animation:none; } }
+      button.ai { border:none; cursor:pointer; font-family:inherit; }
+      button.ai:hover { filter:brightness(1.1); }
+      .tabs button.working { color:var(--text); }
       .empty { color:var(--muted); font-size:13px; padding:10px 14px 14px; }
       .settings-menu[hidden], .setting[hidden], .tabview[hidden], .empty[hidden], .chip[hidden], .actions [hidden] { display:none; }
+      /* the console's confirmations (ask()): over the panel only, the stream stays live and usable, never window.confirm() */
+      .ask {
+        position:absolute; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; padding:16px;
+        background:color-mix(in srgb, var(--bg) 55%, rgb(0 0 0 / 45%));
+      }
+      .ask-box {
+        width:min(340px, 100%); display:grid; gap:14px; padding:18px 18px 14px; background:var(--card); color:var(--text);
+        border:1px solid var(--line); border-radius:12px; box-shadow:0 1px 2px rgb(0 0 0 / 6%), 0 16px 40px rgb(0 0 0 / 28%);
+        font-size:13px; line-height:1.5;
+      }
+      .ask-box p { margin:0; overflow-wrap:anywhere; }
+      .ask-buttons { display:flex; justify-content:flex-end; gap:8px; }
+      .ask-buttons button { padding:4px 14px; }
+      button.danger-solid { background:var(--danger); border-color:var(--danger); color:#fff; }
+      button.danger-solid:hover { background:var(--danger); filter:brightness(1.08); }
     </style>
     <div class="handle"></div>
     <aside class="panel" role="dialog" inert>
@@ -251,6 +292,7 @@
       <header>
         <h2></h2><span class="summary"></span>
         <span class="spacer"></span>
+        <button class="settings-btn new-browser" type="button" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         <div class="settings">
           <button class="settings-btn" type="button" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
           <div class="settings-menu" role="dialog" hidden>
@@ -263,11 +305,15 @@
               <span><span class="raise-label"></span><span class="setting-hint raise-hint"></span></span>
               <input class="switch" type="checkbox" role="switch">
             </label>
+            <label class="setting overlay-row" hidden>
+              <span><span class="overlay-label"></span><span class="setting-hint overlay-hint"></span></span>
+              <input class="switch overlay-switch" type="checkbox" role="switch">
+            </label>
           </div>
         </div>
         <button class="close">×</button>
       </header>
-      <div class="error"></div>
+      <div role="alert" class="error"></div>
       <div class="body"></div>
     </aside>`;
   const $ = (sel) => root.querySelector(sel);
@@ -280,13 +326,18 @@
     en: {
       title: 'CDP Console',
       loading: 'loading…',
+      newBrowser: 'New browser',
+      browserLimit: 'Browser limit reached — delete an isolated browser to make room',
+      creatingBrowser: 'Creating…',
+      newBrowserHint: 'Open an independent browser with a copy of the main profile',
+      closeTab: (title) => `Close tab: ${title}`,
       mainBrowser: 'Main browser',
       startTitle: 'Start the main browser on the desktop',
       starting: 'Starting…',
       startBrowser: 'Start browser',
       stateStarting: 'starting',
       stateStopped: 'stopped',
-      notRunning: 'Not running. It starts on demand: with this button, or by itself when a CDP client connects.',
+      notRunning: 'Not running. It starts on demand: with this button.',
       frontTitle: 'This browser window is in front on the desktop',
       showing: 'Showing',
       showTitle: 'Bring this browser window to the front of the desktop',
@@ -297,9 +348,12 @@
       deleteTitle: 'Close the context and disconnect its client',
       deleteConfirm: (name) => `Delete ${name}? Its client gets disconnected.`,
       delete: 'Delete',
+      cancel: 'Cancel',
       shotTitle: 'Show this tab on the desktop',
       noTabs: 'No open tabs.',
       untitled: '(untitled)',
+      aiWorking: (c) => `AI #${c} is working in this tab`,
+      aiShow: (c) => `AI #${c} is working here: show its tab`,
       tabs: (n) => `${n} tab${n === 1 ? '' : 's'}`,
       mainMeta: 'The persistent profile every isolated context is cloned from.',
       contextMeta: (client, since, pid) => `client ${client} · since ${since} · pid ${pid}`,
@@ -311,17 +365,24 @@
       language: 'Language',
       raiseNew: 'New windows to the front',
       raiseNewHint: 'Off: windows that open later (e.g. a new isolated context) stay behind the one in front; Show brings one forward.',
+      showInput: 'Show AI input',
+      showInputHint: 'Draw the CDP clients\' pointer, clicks and keys over the desktop (this browser only).',
     },
     zh: {
       title: 'CDP 控制台',
       loading: '加载中…',
+      newBrowser: '新建浏览器',
+      browserLimit: '浏览器数量已达上限，请先删除一个独立浏览器',
+      creatingBrowser: '正在创建…',
+      newBrowserHint: '复制主浏览器配置，打开独立浏览器',
+      closeTab: (title) => `关闭标签页：${title}`,
       mainBrowser: '主浏览器',
       startTitle: '在桌面上启动主浏览器',
       starting: '启动中…',
       startBrowser: '启动浏览器',
       stateStarting: '启动中',
       stateStopped: '已停止',
-      notRunning: '未运行。按需启动：点击此按钮，或在有 CDP 客户端连接时自动启动。',
+      notRunning: '未运行。按需启动：点击此按钮。',
       frontTitle: '此浏览器窗口位于桌面最前',
       showing: '显示中',
       showTitle: '将此浏览器窗口切到桌面最前',
@@ -332,9 +393,12 @@
       deleteTitle: '关闭此上下文并断开其客户端',
       deleteConfirm: (name) => `删除 ${name}？它的客户端将断开连接。`,
       delete: '删除',
+      cancel: '取消',
       shotTitle: '在桌面上显示此标签页',
       noTabs: '没有打开的标签页。',
       untitled: '（无标题）',
+      aiWorking: (c) => `AI #${c} 正在此标签页中操作`,
+      aiShow: (c) => `AI #${c} 正在这里操作：显示它所在的标签页`,
       tabs: (n) => `${n} 个标签页`,
       mainMeta: '持久化的浏览器配置，每个隔离上下文都从它克隆。',
       contextMeta: (client, since, pid) => `客户端 ${client} · 创建于 ${since} · pid ${pid}`,
@@ -346,6 +410,8 @@
       language: '语言',
       raiseNew: '新窗口切到最前',
       raiseNewHint: '关闭后，之后新打开的窗口（如新的隔离上下文）留在当前窗口之后，可用“显示”切过去。',
+      showInput: '显示 AI 操作',
+      showInputHint: '在桌面画面上画出 CDP 客户端的指针、点击和按键（只对本浏览器生效）。',
     },
   };
   const LANG_KEY = 'cdp-console-lang';
@@ -370,6 +436,7 @@
     $('.resizer').title = t('resizeTitle');
     $('h2').textContent = t('title');
     $('.close').setAttribute('aria-label', t('close'));
+    renderNewBrowser();
     settingsBtn.title = t('settings');
     settingsBtn.setAttribute('aria-label', t('settings'));
     settingsMenu.setAttribute('aria-label', t('settings'));
@@ -378,6 +445,9 @@
     for (const b of settings.querySelectorAll('[data-lang]')) b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
     $('.raise-label').textContent = t('raiseNew');
     $('.raise-hint').textContent = t('raiseNewHint');
+    $('.overlay-label').textContent = t('showInput');
+    $('.overlay-hint').textContent = t('showInputHint');
+    window.AgenteneInputOverlay?.setLang(lang);
     window.AgenteneAuth?.setLang(lang);
     for (const v of views.values()) v.card.remove();
     views.clear();
@@ -388,13 +458,16 @@
   // Settings: the header's gear opens a menu with the console's language and
   // the desktop's "new windows to the front" switch (only with a desktop).
   const settings = $('.settings');
-  const settingsBtn = $('.settings-btn');
+  const settingsBtn = $('.settings .settings-btn');
   const settingsMenu = $('.settings-menu');
   function setMenu(open) {
     settingsMenu.hidden = !open;
     settingsBtn.setAttribute('aria-expanded', String(open));
   }
-  settingsBtn.addEventListener('click', () => setMenu(settingsMenu.hidden));
+  settingsBtn.addEventListener('click', () => {
+    if (settingsMenu.hidden) renderOverlay();
+    setMenu(settingsMenu.hidden);
+  });
   document.addEventListener('pointerdown', (e) => {
     if (!settingsMenu.hidden && !e.composedPath().includes(settings)) setMenu(false);
   });
@@ -419,6 +492,49 @@
 
   // --- open / close ----------------------------------------------------------
   // The live state streams in only while the panel is open.
+  // A confirmation of the console's own, never window.confirm(): that one is
+  // modal for the whole page and blocks its main thread — the Selkies stream on this page would freeze while it
+  // is up. This one covers the panel only: the stream keeps
+  // playing and stays usable next to it.
+  // Resolves true on confirm.
+  let asking = null; // the open confirmation's done(), if any
+  function ask(message, okLabel) {
+    asking?.(false);
+    return new Promise((resolve) => {
+      const behind = [...panel.children].filter((n) => !n.inert);
+      const back = root.activeElement;
+      const cancel = el('button', { type: 'button' }, t('cancel'));
+      const ok = el('button', { type: 'button', class: 'danger-solid' }, okLabel);
+      const layer = el('div', { class: 'ask' },
+        el('div', { class: 'ask-box', role: 'alertdialog', 'aria-modal': 'true', 'aria-label': message },
+          el('p', {}, message), el('div', { class: 'ask-buttons' }, cancel, ok)));
+      const done = (yes) => {
+        if (asking !== done) return;
+        asking = null;
+        layer.remove();
+        for (const n of behind) n.inert = false;
+        if (back?.isConnected) back.focus();
+        resolve(yes);
+      };
+      asking = done;
+      cancel.onclick = () => done(false);
+      ok.onclick = () => done(true);
+      layer.addEventListener('pointerdown', (e) => { if (e.target === layer) done(false); });
+      layer.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation(); // closes the confirmation only, not the panel
+          done(false);
+        } else if (e.key === 'Tab') {
+          e.preventDefault(); // the focus stays on its two buttons
+          (e.target === ok ? cancel : ok).focus();
+        }
+      });
+      for (const n of behind) n.inert = true;
+      panel.append(layer);
+      cancel.focus();
+    });
+  }
+
   function setOpen(open) {
     host.classList.toggle('open', open);
     panel.inert = !open;
@@ -427,6 +543,7 @@
     } else {
       disconnect();
       setMenu(false);
+      asking?.(false);
       if (root.activeElement) root.activeElement.blur(); // hand the keyboard back to the remote desktop
     }
   }
@@ -482,11 +599,20 @@
   // --- rendering (mirrors dashboard.html) ------------------------------------
   // what the gateway pushed over the WebSocket: name -> { ...fields, tabs: Map, current, thumb }
   const browsers = new Map();
+  // the tabs the CDP clients work in: [{c, name, id}], c numbering them as
+  // the input overlay does — and in its colors (overlay.js' COLORS)
+  let working = [];
+  const AI_COLORS = ['#7c5cff', '#0ea5e9', '#f43f7a', '#10b981', '#f59e0b', '#ef5a3c'];
+  const aiColor = (c) => AI_COLORS[(c - 1) % AI_COLORS.length];
   const views = new Map(); // name -> the card's DOM parts, see liveCard()
   let max = 0;
+  let actionsEnabled = false;
+  let creatingBrowser = false;
+  const closingTabs = new Set();
   let serverSettings = {}; // the server-side settings on offer (settings.mjs): {section: {key: value}}
 
   function renderSummary() {
+    renderNewBrowser();
     const n = [...browsers.values()].filter((b) => !b.main).length;
     $('.summary').textContent = views.size ? t('summary', n, max) : '';
   }
@@ -510,6 +636,59 @@
       renderRaiseNew();
     });
   });
+
+  // The input overlay's switch (overlay.js, when nginx injected it): the
+  // viewer's own choice, kept in this browser by the overlay itself.
+  const overlayRow = $('.overlay-row');
+  const overlayBox = $('.overlay-switch');
+  function renderOverlay() {
+    const overlay = window.AgenteneInputOverlay;
+    overlayRow.hidden = !overlay;
+    overlayBox.checked = !!overlay?.enabled();
+  }
+  overlayBox.addEventListener('change', () => window.AgenteneInputOverlay?.setEnabled(overlayBox.checked));
+  window.addEventListener('agentene-input-overlay', () => {
+    window.AgenteneInputOverlay.setLang(lang);
+    renderOverlay();
+  });
+  renderOverlay();
+
+  function renderNewBrowser() {
+    const button = $('.new-browser');
+    button.hidden = !actionsEnabled;
+    const atLimit = views.size > 0 && [...browsers.values()].filter((b) => !b.main).length >= max;
+    button.disabled = creatingBrowser || atLimit;
+    button.setAttribute('aria-busy', String(creatingBrowser));
+    button.title = t(atLimit ? 'browserLimit' : 'newBrowserHint');
+    button.setAttribute('aria-label', t(creatingBrowser ? 'creatingBrowser' : 'newBrowser'));
+    if (creatingBrowser) button.title = t('creatingBrowser');
+  }
+
+  $('.new-browser').addEventListener('click', async () => {
+    if (creatingBrowser) return;
+    creatingBrowser = true;
+    renderNewBrowser();
+    showError('');
+    try { await call('POST', '/browsers'); }
+    catch (err) { showError(err); }
+    finally { creatingBrowser = false; renderNewBrowser(); }
+  });
+
+  async function closeTab(name, id, button) {
+    const key = `${name}/${id}`;
+    if (closingTabs.has(key)) return;
+    closingTabs.add(key);
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    showError('');
+    try { await call('DELETE', `/${encodeURIComponent(name)}/tabs/${encodeURIComponent(id)}`); }
+    catch (err) { showError(err); }
+    finally {
+      closingTabs.delete(key);
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+  }
 
   // Switch the browser to a tab and raise its window; highlighted right
   // away, the gateway's next 'current' confirms it.
@@ -555,6 +734,8 @@
     const base = `/${encodeURIComponent(name)}`;
     const v = { items: new Map(), src: '', shownCurrent: null };
     v.chip = el('span', { class: 'chip' });
+    // the clients working in this browser: a click shows their tab
+    v.ai = el('span', { class: 'ai-marks' });
     // the browser in front on the desktop shows "Showing" where its Show button was
     v.frontChip = el('span', { class: 'chip front', title: t('frontTitle') }, t('showing'));
     v.show = el('button', { title: t('showTitle'),
@@ -562,16 +743,16 @@
     // the buttons wrap as one group, right-aligned, when the card gets narrow
     const actions = el('span', { class: 'actions' }, v.frontChip, v.show);
     const head = el('div', { class: 'card-head' },
-      el('span', { class: 'name', title: isMain ? t('mainBrowser') : name }, isMain ? t('mainBrowser') : name), v.chip,
+      el('span', { class: 'name', title: isMain ? t('mainBrowser') : name }, isMain ? t('mainBrowser') : name), v.chip, v.ai,
       actions);
     if (isMain) {
       actions.append(el('button', { class: 'danger', title: t('stopTitle'),
-        onclick: () => confirm(t('stopConfirm'))
+        onclick: async () => await ask(t('stopConfirm'), t('stop'))
           && call('POST', `${base}/stop`).catch(showError) }, t('stop')));
     }
     if (!isMain) {
       actions.append(el('button', { class: 'danger', title: t('deleteTitle'),
-        onclick: () => confirm(t('deleteConfirm', name))
+        onclick: async () => await ask(t('deleteConfirm', name), t('delete'))
           && call('DELETE', base).catch(showError) }, t('delete')));
     }
     v.meta = el('div', { class: 'meta' });
@@ -608,22 +789,44 @@
     v.empty.hidden = !!n;
     for (const [id, li] of v.items) {
       if (context.tabs.has(id)) continue;
+      if (li.contains(root.activeElement)) {
+        (li.nextElementSibling?.firstChild ?? li.previousElementSibling?.firstChild ?? $('.new-browser')).focus();
+      }
       li.remove();
       v.items.delete(id);
     }
     for (const tab of context.tabs.values()) {
       let li = v.items.get(tab.id);
       if (!li) {
-        li = el('li', {}, el('button', { type: 'button', onclick: () => focusTab(context.name, tab.id) }));
+        li = el('li', {}, el('button', { type: 'button', onclick: () => focusTab(context.name, tab.id) },
+          el('span', { class: 'tab-title' }), el('span', { class: 'ai-marks' })),
+          el('button', { type: 'button', class: 'tab-close',
+            onclick: (event) => closeTab(context.name, tab.id, event.currentTarget) }, '×'));
         v.items.set(tab.id, li);
         v.list.append(li);
       }
       const button = li.firstChild;
+      const [label, marks] = button.children;
       const title = tab.title || t('untitled');
-      if (button.textContent !== title) button.textContent = title;
-      button.title = tab.url;
+      const close = li.lastChild;
+      close.hidden = !actionsEnabled;
+      close.disabled = closingTabs.has(`${context.name}/${tab.id}`);
+      close.setAttribute('aria-label', t('closeTab', title));
+      if (label.textContent !== title) label.textContent = title;
+      const here = working.filter((w) => w.name === context.name && w.id === tab.id).map((w) => w.c);
+      fillMarks(marks, here, (c) => el('span', { class: 'ai', style: `--ai:${aiColor(c)}` }, `AI #${c}`));
+      button.classList.toggle('working', here.length > 0);
+      button.title = [tab.url, ...here.map((c) => t('aiWorking', c))].join('\n');
       button.classList.toggle('current', tab.id === context.current);
     }
+    const mine = working.filter((w) => w.name === context.name && context.tabs.has(w.id));
+    fillMarks(v.ai, mine.map((w) => w.c), (c) => el('button', {
+      type: 'button', class: 'ai', style: `--ai:${aiColor(c)}`, title: t('aiShow', c),
+      onclick: () => {
+        const w = working.find((x) => x.c === c && x.name === context.name);
+        if (w) focusTab(context.name, w.id);
+      },
+    }, `AI #${c}`));
     const current = context.tabs.get(context.current);
     v.title.textContent = current ? current.title || t('untitled') : '';
     v.title.title = current?.url ?? '';
@@ -642,6 +845,14 @@
         v.list.scrollTop = li.offsetTop - 3;
       }
     }
+  }
+
+  // A set of AI marks, rebuilt only when its numbers change.
+  function fillMarks(box, cs, make) {
+    const key = cs.join(',');
+    if (box.dataset.cs === key) return;
+    box.dataset.cs = key;
+    box.replaceChildren(...cs.map(make));
   }
 
   function update(name) {
@@ -674,11 +885,17 @@
       views.clear();
       body.replaceChildren();
       for (const b of op.browsers) browsers.set(b.name, { ...b, tabs: new Map(b.tabs.map((t) => [t.id, t])) });
+      working = op.ai ?? [];
       return [...browsers.keys()];
     }
     if (op.t === 'settings') {
       serverSettings = op.settings;
       return [];
+    }
+    if (op.t === 'ai') {
+      const touched = new Set([...working, ...op.ai].map((w) => w.name));
+      working = op.ai;
+      return [...touched].filter((name) => browsers.has(name));
     }
     if (op.t === 'gone') {
       browsers.delete(op.name);
@@ -751,10 +968,14 @@
     }
   });
 
+  call('GET', '/browsers').then((data) => {
+    actionsEnabled = data.enabled;
+    renderNewBrowser();
+    browsers.forEach((b, name) => update(name));
+  }).catch(showError);
+
   setLang(lang, false);
 
-  // Running at all means the gateway let this user in: it serves this script
-  // uncached, behind the same master password as the console (a view-only
-  // login gets 401 and the Selkies page stays untouched).
+  // nginx protects this script with the same login as the console.
   document.body.appendChild(host);
 })();

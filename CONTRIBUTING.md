@@ -20,9 +20,8 @@ docker run --rm -i -e HADOLINT_CONFIG=/.hadolint.yaml \
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 node --check update-chrome-node.mjs
-for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js; do node --check "$f"; done
+for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
-node --check entrypoint/helpers/password-hash.mjs
 python3 -m py_compile entrypoint/helpers/*.py
 docker build --check .                        # Dockerfile lint (BuildKit)
 

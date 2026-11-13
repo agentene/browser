@@ -19,18 +19,32 @@
 // Target.disposeBrowserContext(alias) or the client
 // disconnecting destroys the context.
 //
+// The isolated context does not hang off the main browser: when the main
+// browser exits (its window closed, Stop, idle, a crash) a connection that
+// holds one goes on — the client is told its main pages are gone, the way
+// chromium tells a target's end, and its context keeps running. Without a
+// context the connection ends with the main browser, as it would with
+// chromium's own. A connection to a stopped main browser starts without it
+// (upgrade.mjs). Either way the main browser is started (and
+// the client's target setup replayed there) only when the client uses it:
+// what a client asks the browser itself while it is down (Browser.getVersion,
+// Target.setAutoAttach, ...) the gateway answers (answerWithoutMain).
+//
 // Its upstreams are connections on the browsers' DevTools pipes (pipe.mjs):
 // a browser-target session each, which behaves like a WebSocket of its own.
 // Every client command is checked (client-frame.mjs) and goes upstream as
 // the command the check read; an upstream message the gateway has no
 // business with goes to the client as it came, unparsed (needsParse).
 
+import { randomBytes } from 'node:crypto';
 import WebSocket from 'ws';
 import { guardFrame } from './client-frame.mjs';
 import { INTERNAL_ID_BASE } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { forward } from './flow.mjs';
+import { mainBrowser } from './main-browser.mjs';
 import { log } from './util.mjs';
+import { knownVersion } from './version.mjs';
 
 const muxes = new Set();
 
@@ -51,6 +65,11 @@ const MERGED = new Set(['Target.getTargets', 'Target.getBrowserContexts']);
 // they come: a disposal it may answer itself, and the session id of a
 // client's browser-target session (clientBrowserSessions).
 const READ_MAIN_REPLIES = new Set(['Target.disposeBrowserContext', 'Target.attachToBrowserTarget']);
+
+// The main chromium's events the gateway keeps track of (trackMainMessage):
+// the client's main targets and sessions, whose end it tells the client when
+// the main browser exits under a connection that goes on (mainGone).
+const MAIN_TRACKED = /^\{"method":"Target\.(attachedToTarget|detachedFromTarget|targetCreated|targetDestroyed)"/;
 
 // Context chromium replies the gateway reads: the window id it rewrites.
 const READ_CONTEXT_REPLIES = new Set(['Browser.getWindowForTarget']);
@@ -82,14 +101,38 @@ function strippedAlias(msg) {
   return { ...msg, params };
 }
 
-// open client connections, for idle.mjs
+// open client connections
 export function openMuxes() {
   return muxes.size;
 }
 
+// For idle.mjs: the connections that keep the main browser in use — those
+// on it without an isolated context (the main browser is all they have) —,
+// and when a client last sent it a command (one with an isolated context
+// keeps it in use only that way).
+export function mainClients() {
+  let n = 0;
+  for (const mux of muxes) if (mux.main && !mux.context && !mux.attaching) n++;
+  return n;
+}
+
+export function lastMainUse() {
+  let last = 0;
+  for (const mux of muxes) last = Math.max(last, mux.mainUsedAt);
+  return last;
+}
+
+// The main browser's connection for a client: started if it is not running.
+async function connectMain() {
+  await mainBrowser.ensure();
+  return mainBrowser.pipe.connect();
+}
+
 export class Mux {
-  // main: an open connection on the main browser's pipe (pipe.connect())
-  constructor(client, clientAddr, main) {
+  // main: an open connection on the main browser's pipe (pipe.connect()),
+  // or null to start without one; openMain: how to get one when the client
+  // needs the main browser (tests stand in for it)
+  constructor(client, clientAddr, main, { openMain = connectMain } = {}) {
     this.client = client;
     this.clientAddr = clientAddr;
     this.context = null;
@@ -117,14 +160,28 @@ export class Mux {
     this.clientBrowserSessions = new Set();
     this.autoAttach = null; // last Target.setAutoAttach params from the client
     this.discover = null; // last Target.setDiscoverTargets params
+    this.downloadBehavior = null; // last Browser.setDownloadBehavior for the main default context
     this.nextInternalId = INTERNAL_ID_BASE;
     this.internal = new Map();
     this.closed = false;
+    // The main browser's side: its connection (null while there is none),
+    // the startup a command waits for (startMain), the commands waiting, the
+    // client's commands in flight there (answered when it exits), and what
+    // the client has of it (trackMainMessage).
+    this.main = null;
+    this.openMain = openMain;
+    this.mainOpening = null;
+    this.mainQueue = [];
+    this.mainInFlight = new Map(); // client command id -> the command
+    this.mainSessions = new Map(); // main sessionId -> { targetId, parent: the session it was attached on }
+    this.mainTargets = new Set();
+    this.mainUsedAt = 0; // last client command sent there (lastMainUse)
+    this.closingBrowser = false; // the client closed the browser (CDP_ALLOW_BROWSER_CLOSE)
+    // the browser target's id while there is no main browser to ask
+    this.browserTargetId = randomBytes(16).toString('hex').toUpperCase();
     muxes.add(this);
 
-    this.main = main;
-    main.on('message', (data) => this.fromUpstream('main', data));
-    main.on('close', () => this.close('main browser connection closed'));
+    if (main) this.adoptMain(main);
 
     client.on('message', (data) => this.fromClient(data));
     client.on('close', () => this.close('client disconnected'));
@@ -136,7 +193,25 @@ export class Mux {
   // the client as text (a Buffer would go as binary), flow-controlled
   // against the other side (flow.mjs).
   sendMain(msg) {
-    if (this.main.readyState === WebSocket.OPEN) forward(this.main, msg, {}, [this.client]);
+    if (this.main?.readyState === WebSocket.OPEN) forward(this.main, msg, {}, [this.client]);
+  }
+
+  // A client command for the main chromium; without one, answered here or
+  // held until it is up (startMain).
+  toMain(msg) {
+    if (!this.main) {
+      if (!this.answerWithoutMain(msg)) {
+        this.mainQueue.push(msg);
+        this.startMain();
+      }
+      return;
+    }
+    this.mainUsedAt = Date.now();
+    if (msg.id !== undefined) {
+      this.mainInFlight.set(msg.id, msg);
+      if (READ_MAIN_REPLIES.has(msg.method)) this.pending.set(msg.id, { origin: 'main', msg });
+    }
+    this.sendMain(msg);
   }
 
   sendContext(msg) {
@@ -169,15 +244,18 @@ export class Mux {
   // Disposing a context that does not exist (any more) succeeds — it is gone
   // either way, and Playwright's context.close() must not fail on it;
   // anything else fails right away instead of hanging.
-  answerGone(msg) {
+  answerGone(msg, message = 'isolated CDP context is gone') {
     if (msg.id === undefined) return;
     if (msg.method === 'Target.disposeBrowserContext') this.reply(msg, {});
-    else this.replyError(msg, 'isolated CDP context is gone');
+    else this.replyError(msg, message);
   }
 
   toClient(data) {
     if (this.client.readyState !== WebSocket.OPEN) return;
-    forward(this.client, data, { binary: false }, this.contextWs ? [this.main, this.contextWs] : [this.main]);
+    const sources = [];
+    if (this.main) sources.push(this.main);
+    if (this.contextWs) sources.push(this.contextWs);
+    forward(this.client, data, { binary: false }, sources);
   }
 
   sendClient(msg) {
@@ -252,8 +330,7 @@ export class Mux {
         } else {
           // the main browser's, or one gone with its context chromium: an
           // unknown id is answered as disposed (see fromUpstream)
-          if (msg.id !== undefined) this.pending.set(msg.id, { origin: 'main', msg });
-          this.sendMain(msg);
+          this.toMain(msg);
         }
         return;
       case 'Target.setAutoAttach':
@@ -264,9 +341,14 @@ export class Mux {
         this.discover = params;
         if (this.context) this.internalSend('context', method, params).catch(() => {});
         break;
-      case 'Target.attachToBrowserTarget':
-        // its reply names the session (fromUpstream); it goes to main below
-        if (msg.id !== undefined) this.pending.set(msg.id, { origin: 'main', msg });
+      case 'Browser.setDownloadBehavior':
+        // the main default context's, replayed on a main browser started later
+        if (params.browserContextId === undefined) this.downloadBehavior = params;
+        break;
+      case 'Browser.close':
+        // only here when CDP_ALLOW_BROWSER_CLOSE lets it through: the client
+        // means the browser to go, and its connection with it (mainGone)
+        this.closingBrowser = true;
         break;
       default:
         break;
@@ -286,7 +368,7 @@ export class Mux {
       this.mergedTargets(msg, params);
       return;
     }
-    this.sendMain(msg);
+    this.toMain(msg);
   }
 
   // A command on a session: the context chromium's, the main chromium's, or
@@ -306,10 +388,13 @@ export class Mux {
       this.mergedTargets(msg, params);
     } else if (this.sessionTarget.has(sessionId)) {
       this.toContext(params.browserContextId === this.alias ? strippedAlias(msg) : msg);
+    } else if (!this.main) {
+      // a main chromium session, gone with it (answerWithoutMain)
+      this.toMain(msg);
     } else if (this.context && params.browserContextId === this.alias) {
       this.viaContextBrowserSession(msg, true);
     } else if (this.routesContext(params)) this.viaContextBrowserSession(msg);
-    else this.sendMain(msg);
+    else this.toMain(msg);
   }
 
   // Browser-level params naming a target or session of the context chromium.
@@ -336,7 +421,9 @@ export class Mux {
   // known here.) The main chromium's part of the answer goes out unchanged,
   // like every other main reply.
   async mergedTargets(msg, params) {
-    const asks = [this.internalSend('main', msg.method, params)];
+    // without a main browser its part is empty: nothing starts it for a list
+    const mainPart = msg.method === 'Target.getTargets' ? { targetInfos: [] } : { browserContextIds: [] };
+    const asks = [this.main ? this.internalSend('main', msg.method, params) : Promise.resolve(mainPart)];
     if (msg.method === 'Target.getTargets') {
       asks.push(this.internalSend('context', msg.method, params));
     }
@@ -549,8 +636,164 @@ export class Mux {
       }
       if (this.browserSessionOf.has(msg.sessionId)) msg.sessionId = this.browserSessionOf.get(msg.sessionId);
       this.trackContextMessage(msg);
+    } else {
+      this.trackMainMessage(msg);
     }
     this.sendClient(msg);
+  }
+
+  trackMainMessage(msg) {
+    const p = msg.params;
+    switch (msg.method) {
+      case 'Target.attachedToTarget':
+        this.mainSessions.set(p.sessionId, { targetId: p.targetInfo?.targetId, parent: msg.sessionId });
+        break;
+      case 'Target.detachedFromTarget':
+        this.mainSessions.delete(p.sessionId);
+        // and the sessions attached on it (an iframe's, a worker's)
+        for (const [sessionId, s] of this.mainSessions) if (s.parent === p.sessionId) this.mainSessions.delete(sessionId);
+        break;
+      case 'Target.targetCreated':
+        this.mainTargets.add(p.targetInfo?.targetId);
+        break;
+      case 'Target.targetDestroyed':
+        this.mainTargets.delete(p.targetId);
+        break;
+      default:
+        break;
+    }
+  }
+
+  // --- the main browser, when it is not there ---------------------------------
+  adoptMain(main) {
+    this.main = main;
+    main.on('message', (data) => { if (this.main === main) this.fromUpstream('main', data); });
+    main.on('close', () => { if (this.main === main) this.mainGone(); });
+  }
+
+  // A client command while there is no main browser that the gateway answers
+  // itself, so that it does not start one; false for anything that needs it.
+  // A session or target of the main chromium is gone with it (a new one has
+  // others); what a client asks the browser on connecting is answered as an
+  // idle browser would, and its setup is replayed once one starts.
+  answerWithoutMain(msg) {
+    if (msg.id === undefined) return true; // no command without an id
+    const params = paramsOf(msg);
+    if (msg.sessionId) {
+      this.replyError(msg, 'Session with given id not found.');
+      return true;
+    }
+    if (params.targetId !== undefined || params.sessionId !== undefined) {
+      this.replyError(msg, 'No target with given id found');
+      return true;
+    }
+    switch (msg.method) {
+      case 'Browser.getVersion': {
+        const version = knownVersion();
+        if (!version) return false;
+        this.reply(msg, version);
+        return true;
+      }
+      case 'Target.setAutoAttach':
+      case 'Target.setDiscoverTargets':
+        // remembered by fromClient, replayed on a main browser started later
+        this.reply(msg, {});
+        return true;
+      case 'Browser.setDownloadBehavior':
+        if (params.browserContextId !== undefined) return false;
+        this.reply(msg, {});
+        return true;
+      case 'Target.getTargetInfo':
+        this.reply(msg, { targetInfo: { targetId: this.browserTargetId, type: 'browser', title: '', url: '', attached: true, canAccessOpener: false } });
+        return true;
+      case 'Target.getTargets':
+        this.reply(msg, { targetInfos: [] });
+        return true;
+      case 'Target.getBrowserContexts':
+        this.reply(msg, { browserContextIds: [] });
+        return true;
+      case 'Target.disposeBrowserContext':
+        this.answerGone(msg);
+        return true;
+      case 'Browser.close':
+        // (CDP_ALLOW_BROWSER_CLOSE) no browser to close: the connection goes
+        this.reply(msg, {});
+        this.close('client sent Browser.close');
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  // Starts the main browser (if it is not running) and connects to it, for
+  // the commands waiting in mainQueue; the client's target setup goes first,
+  // so it finds the main browser's pages the way it would have on connecting.
+  startMain() {
+    if (this.mainOpening || this.closed) return;
+    this.mainOpening = (async () => {
+      const main = await this.openMain();
+      if (this.closed) {
+        main.close();
+        return;
+      }
+      log(`mux ${this.clientAddr}: connected to the main browser for the client's command`);
+      this.adoptMain(main);
+      const setup = [
+        ['Target.setDiscoverTargets', this.discover],
+        ['Target.setAutoAttach', this.autoAttach],
+        ['Browser.setDownloadBehavior', this.downloadBehavior],
+      ];
+      for (const [method, params] of setup) {
+        if (params) this.internalSend('main', method, params).catch((err) => log(`mux ${this.clientAddr}: ${err.message}`));
+      }
+    })().then(() => this.flushMain(), (err) => {
+      log(`mux ${this.clientAddr}: main browser: ${err.message}`);
+      this.flushMain(err);
+    }).finally(() => { this.mainOpening = null; });
+  }
+
+  flushMain(err) {
+    const queued = this.mainQueue;
+    this.mainQueue = [];
+    for (const msg of queued) {
+      if (err || !this.main) this.answerGone(msg, `the main browser could not be started${err ? `: ${err.message}` : ''}`);
+      else this.toMain(msg);
+    }
+  }
+
+  // The main browser exited. A connection without an isolated context ends
+  // with it, as on chromium's own; one with a context goes on: the client's
+  // main pages are gone (told the way chromium tells it), its commands in
+  // flight there answered, and a later command for the main browser starts
+  // it again (toMain).
+  mainGone() {
+    if (this.closed) return;
+    if (this.closingBrowser || (!this.context && !this.attaching)) {
+      this.close('main browser connection closed');
+      return;
+    }
+    this.main = null;
+    log(`mux ${this.clientAddr}: the main browser is gone; the client keeps its isolated context`);
+    for (const [sessionId, { targetId, parent }] of this.mainSessions) {
+      this.sendClient({ method: 'Target.detachedFromTarget', sessionId: parent, params: { sessionId, targetId } });
+    }
+    for (const targetId of this.mainTargets) {
+      this.sendClient({ method: 'Target.targetDestroyed', params: { targetId } });
+    }
+    this.mainSessions.clear();
+    this.mainTargets.clear();
+    for (const msg of this.mainInFlight.values()) this.answerGone(msg, 'the main browser is gone');
+    this.mainInFlight.clear();
+    for (const [id, p] of this.pending) if (p.origin === 'main') this.pending.delete(id);
+    for (const [id, p] of this.internal) {
+      if (p.target !== 'main') continue;
+      this.internal.delete(id);
+      p.reject(new Error(`${p.method}: the main browser is gone`));
+    }
+    // the client's browser-target sessions were the main chromium's: their
+    // stand-ins in the context chromium go with them
+    for (const clientSession of [...this.browserSessions.keys()]) this.retireBrowserSession(clientSession);
+    this.clientBrowserSessions.clear();
   }
 
   // Whether an upstream frame needs the gateway: a reply to its own command,
@@ -566,6 +809,7 @@ export class Mux {
     if (reply) {
       const id = Number(reply[1]);
       if (this.internal.get(id)?.target === origin) return true;
+      if (origin === 'main') this.mainInFlight.delete(id);
       const pending = this.pending.get(id);
       if (pending?.origin === origin) {
         if (pending.msg.id !== id || READ_MAIN_REPLIES.has(pending.msg.method)) return true;
@@ -573,8 +817,8 @@ export class Mux {
         this.pending.delete(id);
       }
     }
-    return origin === 'context'
-      && (this.browserSessionOf.size > 0 || CONTEXT_MARKERS.some((marker) => data.includes(marker)));
+    if (origin === 'main') return MAIN_TRACKED.test(head);
+    return this.browserSessionOf.size > 0 || CONTEXT_MARKERS.some((marker) => data.includes(marker));
   }
 
   trackContextMessage(msg) {
@@ -649,7 +893,7 @@ export class Mux {
     this.closed = true;
     muxes.delete(this);
     this.context?.destroy(reason);
-    this.main.close();
+    this.main?.close();
     if (this.client.readyState === WebSocket.OPEN) this.client.close();
   }
 }

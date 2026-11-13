@@ -9,6 +9,7 @@ import { PROTOCOL_FILE } from './config.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { HttpError, publicHost, send } from './respond.mjs';
 import { listEntry, targetInfos, versionEntry } from './targets.mjs';
+import { knownVersion } from './version.mjs';
 
 const TEXT = 'text/plain; charset=UTF-8';
 
@@ -40,7 +41,7 @@ export async function jsonRoute(req, res, url) {
       send(res, 405, `Using unsafe HTTP verb ${req.method} to invoke /json/new. This action supports only PUT verb.`, TEXT);
       return true;
     }
-    // what a CDP client connects with starts a stopped main browser
+    // a tab in the default context: a stopped main browser starts for it
     await mainBrowser.ensure();
     const { targetId } = await mainBrowser.pipe.call('Target.createTarget', { url: newTabUrl(url.search) });
     const { targetInfo } = await mainBrowser.pipe.call('Target.getTargetInfo', { targetId });
@@ -48,6 +49,13 @@ export async function jsonRoute(req, res, url) {
     return true;
   }
   if (p === '/json/version') {
+    // a stopped main browser stays stopped (the browser WebSocket does not
+    // need it either, upgrade.mjs); one starting is waited for
+    const version = (mainBrowser.state === 'stopped' || mainBrowser.stopping) && knownVersion();
+    if (version) {
+      send(res, 200, versionEntry(version, host, mainBrowser.browserId || 'gateway'));
+      return true;
+    }
     await mainBrowser.ensure();
     send(res, 200, versionEntry(mainBrowser.version, host, mainBrowser.browserId));
     return true;

@@ -18,6 +18,7 @@ export function intEnv(name, fallback, source = env) {
 // The gateway's own unix socket (nginx proxies the CDP port here): no TCP
 // port a page in the browser could open (pipe.mjs)
 export const SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
+export const CONSOLE_ACTIONS = env.CDP_CONSOLE_ACTIONS !== 'false';
 export const MAX_CONTEXTS = intEnv('CDP_CONTEXTS_MAX', 4);
 export const CONTEXTS_DIR = env.CDP_CONTEXTS_DIR || '/browser/contexts';
 export const MAIN_PROFILE = env.CHROMIUM_USER_DATA_DIR || '/browser/user-data';
@@ -36,6 +37,8 @@ export const SCREEN_SIZE = env.CDP_GATEWAY_SCREEN_SIZE || '';
 // chromium's protocol description, captured from the binary at image build
 // (the browsers serve no /json/protocol over their pipe)
 export const PROTOCOL_FILE = env.CDP_GATEWAY_PROTOCOL_FILE || '/opt/chrome-for-testing/devtools-protocol.json';
+// its /json/version, captured the same way (version.mjs)
+export const VERSION_FILE = env.CDP_GATEWAY_VERSION_FILE || '/opt/chrome-for-testing/devtools-version.json';
 export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
 export const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
 export const CONTEXTS_HEADLESS = env.CDP_CONTEXTS_HEADLESS === '1';
@@ -44,16 +47,17 @@ export const CONTEXTS_HEADLESS = env.CDP_CONTEXTS_HEADLESS === '1';
 export const RAISE_SWITCH = env.CDP_GATEWAY_RAISE_SWITCH || '';
 // the console's persisted settings (settings.mjs)
 export const SETTINGS_FILE = env.CDP_GATEWAY_SETTINGS_FILE || '/browser/settings/settings.json';
-// A salted scrypt hash of Selkies' master password: console requests that
-// came in through the web port (nginx marks them, see console-auth.mjs) must
-// carry the password. Empty = no login.
-export const WEB_PASSWORD_HASH = env.CDP_CONSOLE_WEB_PASSWORD_HASH || '';
 // CDP_ALLOW_ORIGINS: the web page origins that may use the CDP API, like
 // chromium's --remote-allow-origins (cdp-origin.mjs); parsed there.
 export const ALLOW_ORIGINS_RAW = env.CDP_ALLOW_ORIGINS || '';
 // CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close / Browser.crash
 // reaches the shared browser (browser-exit.mjs)
 export const ALLOW_BROWSER_CLOSE = env.CDP_ALLOW_BROWSER_CLOSE === 'true';
+// CDP_INPUT_OVERLAY: what the Selkies page's overlay of the clients' input
+// shows (input-overlay.mjs) — text: the pointer, keys and the text typed;
+// keys: the same with only a count of the characters typed; off: no overlay.
+// The entrypoint passes off whenever there is no Selkies page to show it on.
+export const INPUT_OVERLAY = ['text', 'keys'].includes(env.CDP_INPUT_OVERLAY) ? env.CDP_INPUT_OVERLAY : 'off';
 
 // CDP_FILE_DIRS: the directories CDP clients may name local files in
 // (file-access.mjs), colon-separated; * = any (null here).

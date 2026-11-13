@@ -34,7 +34,6 @@
 #                                (e.g. /desk -> http://host:port/desk/); empty
 #                                = the site root. Selkies' native setting; nginx
 #                                additionally redirects / and /desk to /desk/
-#   SELKIES_BASIC_AUTH_PASSWORD  set it to enable the login screen
 #   SELKIES_ENABLE_RESIZE=true   browser-driven resize of the virtual display;
 #                                false = fixed at SCREEN_GEOMETRY
 #   SELKIES_EXTRA_ARGS=""        extra selkies CLI flags (word-split)
@@ -72,11 +71,13 @@
 #   CHROMIUM_START_URL=about:blank  page the main browser opens at startup
 #   CHROMIUM_AUTOSTART=true      the CDP gateway owns the main browser and
 #                                starts it with the container; false = only
-#                                on the first CDP client (/json/version, a
-#                                browser WebSocket) or from the CDP console
-#                                ("Start"), so an idle container runs no
-#                                chromium at all. Either way closing (or a
-#                                crash of) the main browser leaves the
+#                                when a CDP client uses the default context
+#                                (/json/new, a page opened there — connecting
+#                                and isolated contexts do not need it) or from
+#                                the CDP console ("Start"), so an idle
+#                                container runs no main browser at all.
+#                                Either way closing (or a crash of) the
+#                                main browser leaves the
 #                                container running; the next client or
 #                                "Start" brings it back
 #   CHROMIUM_IDLE_TIMEOUT=0      minutes the main browser may sit idle before
@@ -135,6 +136,20 @@
 #                                Browser.crash* are refused. true: passed
 #                                through — the browser exits (the container
 #                                keeps running; the next client restarts it)
+#   CDP_CONSOLE_ACTIONS=true     the console's / sidebar's New browser (+)
+#                                and per-tab close (×) buttons; false =
+#                                hidden, and their API routes refused
+#   CDP_INPUT_OVERLAY=text       what the Selkies page draws over the stream of
+#                                the CDP clients' input, which never moves the
+#                                desktop's own pointer: text = their pointer,
+#                                clicks, wheel, key combos and the text typed
+#                                (a password / one-time-code / card field, or
+#                                a focus inside a frame, shows as ••••); keys
+#                                = the same with only a count of the
+#                                characters typed; off = no overlay. Needs
+#                                Selkies and CDP both on; seen by the sidebar's
+#                                users (the built-in login), each can
+#                                hide it in the sidebar's settings
 #   CDP_FILE_DIRS=/browser/downloads  directories (colon-separated) CDP
 #                                clients may name local files in: file
 #                                inputs, drops, PWA launches, unpacked
@@ -427,12 +442,27 @@ config_cdp_gateway() {
             esac
         done
     fi
+    # Console browser creation and individual tab closing.
+    CDP_CONSOLE_ACTIONS="${CDP_CONSOLE_ACTIONS:-true}"
+    case "${CDP_CONSOLE_ACTIONS}" in
+        true|false) ;;
+        *) die "CDP_CONSOLE_ACTIONS='${CDP_CONSOLE_ACTIONS}' must be true or false" ;;
+    esac
     # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
     # needs the web UI to sit in and the gateway to talk to.
     CDP_CONSOLE_PANEL_ACTIVE=false
     if [ "${ENABLE_SELKIES}" = "true" ] && [ "${ENABLE_CDP}" = "true" ]; then
         CDP_CONSOLE_PANEL_ACTIVE=true
     fi
+    # The CDP clients' input drawn over the Selkies stream (the gateway's
+    # input-overlay.mjs, cdp-gateway/overlay.js), next to the sidebar: off
+    # without it.
+    CDP_INPUT_OVERLAY="${CDP_INPUT_OVERLAY:-text}"
+    case "${CDP_INPUT_OVERLAY}" in
+        text|keys|off) : ;;
+        *) die "CDP_INPUT_OVERLAY='${CDP_INPUT_OVERLAY}' must be text, keys or off" ;;
+    esac
+    [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] || CDP_INPUT_OVERLAY=off
 }
 
 config_auth() {

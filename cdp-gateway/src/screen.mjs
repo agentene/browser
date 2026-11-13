@@ -8,18 +8,22 @@
 import { SCREEN_SIZE, VIEWER_SOCKET, WAYLAND } from './config.mjs';
 import { connectionsTo, log, output, run } from './util.mjs';
 
-export async function restoreScreen() {
-  if (!SCREEN_SIZE || !VIEWER_SOCKET || connectionsTo(VIEWER_SOCKET) > 0) return;
-  let current;
-  let resize;
+// The desktop's size now: { current: 'WxH' (undefined when unreadable),
+// output: the Wayland output's name }.
+export async function readScreen() {
   if (WAYLAND) {
     const text = await output('wlr-randr', []);
-    current = /(\d+x\d+) px[^\n]*\(current\)/.exec(text)?.[1];
-    resize = ['wlr-randr', ['--output', text.split(' ')[0], '--custom-mode', SCREEN_SIZE]];
-  } else {
-    current = /current (\d+) x (\d+)/.exec(await output('xrandr', ['--current']))?.slice(1).join('x');
-    resize = ['selkies', ['resize', SCREEN_SIZE]];
+    return { current: /(\d+x\d+) px[^\n]*\(current\)/.exec(text)?.[1], output: text.split(' ')[0] };
   }
+  return { current: /current (\d+) x (\d+)/.exec(await output('xrandr', ['--current']))?.slice(1).join('x') };
+}
+
+export async function restoreScreen() {
+  if (!SCREEN_SIZE || !VIEWER_SOCKET || connectionsTo(VIEWER_SOCKET) > 0) return;
+  const { current, output: name } = await readScreen();
+  const resize = WAYLAND
+    ? ['wlr-randr', ['--output', name, '--custom-mode', SCREEN_SIZE]]
+    : ['selkies', ['resize', SCREEN_SIZE]];
   if (!current || current === SCREEN_SIZE) return;
   const code = await run(...resize);
   log(`no viewer: desktop ${current} -> ${SCREEN_SIZE}${code === 0 ? '' : ` failed (${code})`}`);

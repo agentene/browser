@@ -190,20 +190,31 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 * 「Show」把对应浏览器窗口提到 Selkies 画面最前;
 * 「Delete」强制关闭隔离 context 并断开它的客户端。
 
+顶部的 **+** 图标按钮（新建浏览器）会复制主浏览器配置，打开带有空白标签页的独立浏览器。它与 CDP 创建的 context 共用 `CDP_CONTEXTS_MAX` 上限，关闭控制台不会结束它；删除其卡片会停止浏览器并清理副本。鼠标悬停或键盘聚焦标签行时，行内右侧才显示 **×** 按钮，标签行宽度保持不变（触屏设备始终显示），平时标题使用完整行宽。按钮仅关闭对应标签（包括自动化正在使用的标签）。关闭最后一个标签可能结束该浏览器。侧边栏提供相同操作；`CDP_CONSOLE_ACTIONS=false` 会隐藏这两个入口并禁用对应 API。
+
 每个隔离 context 有自己的浏览器边框颜色,与控制台卡片颜色一致,方便在桌面上区分窗口。控制台页面的状态只通过 `/console/ws` WebSocket 获取:连上时先收到一份全量快照,之后只收变化;页面上的操作则是 `/console/api/` 下的普通 HTTP 请求,所有写操作(`POST`/`PATCH`/`DELETE`)都必须带 `X-CDP-Console: 1` 请求头,跨站表单无法发送它。控制台(以及下面的侧边栏)支持英文和简体中文:默认跟随浏览器语言,可在设置菜单(标题栏的齿轮按钮)里切换(按浏览器记住)。
 
 桌面上新打开的浏览器窗口(例如新隔离 context 的窗口)默认会切到最前,和一般窗口管理器的行为一样。在同一个设置菜单里关闭 *新窗口切到最前*,之后新窗口就会开在当前最前窗口的后面,自动化任务不会抢走你正在看的窗口;「Show」仍然可以把任意窗口切到最前。开关只影响之后新打开的窗口,并保存在服务端:控制台的设置存放在 `/browser` 挂载下的 `/browser/settings/settings.json`(按分组组织的 JSON 对象,例如 `{"desktop": {"raiseNewWindows": false}}`),容器重启或重建后依然保留;这些设置没有对应的环境变量,控制台通过 `GET` / `PATCH /console/api/settings` 读取和修改。语言设置因人而异,仍保存在各自的浏览器里。浏览器以有头模式运行时才显示这个开关。Wayland 下由 labwc 在新窗口映射时、画出第一帧之前把它放到底层;X11 下由屏幕跟随进程代替缺失的窗口管理器(Chromium 改为请求它激活窗口,而不是自己置顶),因此不存在事后再切回去的过程。
 
-同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API 和 WebSocket(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。设置了 Selkies 登录密码时,两者都要求**主密码**(WebSocket 还只接受同源页面的连接):用只读密码登录的用户看不到拉手。只要 Selkies 和 CDP 端点同时启用,侧边栏就会出现。
+同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,并把它的 API 和 WebSocket(页面旁的 `cdp-console/`,因此 `SELKIES_SUBFOLDER` 下也能用)代理到网关。两者都跟随内置登录;WebSocket 还只接受同源页面的连接。只要 Selkies 和 CDP 端点同时启用,侧边栏就会出现。
 
-**主浏览器归网关所有。** 容器监管的常驻服务是网关而不是浏览器:主浏览器由网关作为子进程启动,因此关闭浏览器(关掉它的窗口、点卡片上的 **Stop**、`CDP_ALLOW_BROWSER_CLOSE=true` 时客户端的 `Browser.close`)或浏览器崩溃都不会让容器退出,只会断开它的 CDP 客户端。默认(`CHROMIUM_AUTOSTART=true`)网关随容器一起启动主浏览器;设置 `CHROMIUM_AUTOSTART=false` 后,容器启动时不启动主浏览器,闲置的容器里完全没有 Chromium 进程。无论哪种,已停止的主浏览器都会在以下时机再次启动:
+**看到 AI Agent 在做什么。** CDP 输入(`Input.dispatchMouseEvent`、`Input.dispatchKeyEvent`、`Input.insertText` 等)直接送进页面:串流里能看到页面的反应(悬停样式、点击效果、输入的文字),却看不到指针移动和按键,原生弹出物也跟着桌面自己的指针走(tooltip 出现在桌面指针停留的位置,而不是 Agent 指向的位置)。因此 Selkies 页面会在串流上叠加画出 CDP 客户端的输入(`CDP_INPUT_OVERLAY`,默认开启):每个 CDP 连接一个彩色指针(`AI #1`、`AI #2`……),每次点击一个圆环(右键为虚线、双击标 `×2`),滚轮显示箭头,左下角一行显示它按下的组合键(`Ctrl+A`、`Enter`)和输入的文字。网关本来就会经手每条发往浏览器的客户端命令,所以客户端和页面都不需要任何改动,也不会往页面里注入任何东西;网关根据窗口位置和页面缩放把视口的 CSS 像素换算到桌面坐标,并把每个标记延迟约一个串流延迟再画,让它和画面同步。
+* 在密码、一次性验证码、银行卡字段里(或焦点在 frame 内、无法判断是哪个字段时)输入的文字显示为 `••••` 加字数。`CDP_INPUT_OVERLAY=keys` 对所有文字都只显示字数;`off` 关闭叠加层(不注入脚本,网关也不做任何监听)。
+* 串流看不到的指针输入(后台标签页、不在最前的窗口、无界面的 context)不画指针,改为显示一个徽标说明 Agent 正在哪里操作;它的按键和输入照常显示,卡片上会标出所在标签页:标签页标题,所在浏览器窗口不在前台时加上浏览器名(主浏览器、`context-1` 等),两个标签页同名时再加上网站域名,如 `AI #2 (context-1 › Pull requests)`。
+* CDP 控制台(侧边栏和 `/console/`)会在 Agent 正在操作的标签页上加同样编号、同样颜色的 `AI #2` 标记:标签页列表里的那一行和浏览器卡片标题上都有,点卡片上的标记即可切到那个标签页;Agent 最后一次输入后一分钟内保留。
+* 只有侧边栏的用户能看到(内置登录;叠加层的 WebSocket 是同源的 `cdp-console/overlay`),每位观看者都可以在侧边栏设置里用 *显示 AI 操作* 隐藏它(按浏览器记住)。没人观看时没有任何开销;有人观看时,网关对每个要画的页面每秒最多查询一次它在桌面上的位置。
+* 局限:客户端仿真了视口(`Emulation.setDeviceMetricsOverride`,例如 Playwright 在自己新建的页面上用 `viewport` 选项)时指针变为虚线,位置是近似的;用脚本完成的点击(通过 `Runtime.evaluate` 执行 `element.click()`)不是输入,不会显示。
 
-* 有 CDP 客户端连接时(`/json/version`、`/json/new`、浏览器级 WebSocket)。客户端无需改动,第一次连接只是多等浏览器启动的一两秒;
+**主浏览器归网关所有。** 容器监管的常驻服务是网关而不是浏览器:主浏览器由网关作为子进程启动,因此关闭浏览器(关掉它的窗口、点卡片上的 **Stop**、`CDP_ALLOW_BROWSER_CLOSE=true` 时客户端的 `Browser.close`)或浏览器崩溃都不会让容器退出,只会断开它上面没有隔离 context 的 CDP 客户端。默认(`CHROMIUM_AUTOSTART=true`)网关随容器一起启动主浏览器;设置 `CHROMIUM_AUTOSTART=false` 后,容器启动时不启动主浏览器,闲置的容器里完全没有 Chromium 进程。无论哪种,已停止的主浏览器都会在以下时机再次启动:
+
+* 有 CDP 客户端用到默认 context 时(`/json/new`、`browser.contexts()[0].newPage()`、任何发往主浏览器页面的命令)。仅仅连接不会启动它:主浏览器停止期间,网关自己应答客户端的握手(`/json/version`、`Browser.getVersion`、`Target.setAutoAttach` 等),等浏览器起来后再把这些设置重放过去,所以客户端无需改动 —— 第一条需要它的命令只是多等浏览器启动的一两秒。只在隔离 context 里工作的客户端(`browser.newContext()`、playwright-cli)完全不会让它运行。需要注意:在它停止时连接的客户端,在自己打开页面之前看不到任何页面(`(await browser.pages())[0]` 为空 —— 请写成 `pages()[0] ?? newPage()`);
 * 在 `/console/` 或 Selkies 侧边栏里点主浏览器卡片上的 **Start browser**。
 
-**Stop** 的关闭方式与关窗口相同,cookie 和会话会先保存到 profile。列表类请求(`/json/list`)和控制台都不会启动它,所以 `ENABLE_SELKIES=false` 时 compose 的 healthcheck 改为探测 `/json/list`。隔离 context 无需额外处理:它的客户端经由主浏览器连接,会顺带把主浏览器启动起来。
+**Stop** 的关闭方式与关窗口相同,cookie 和会话会先保存到 profile。列表类请求(`/json/list`)和控制台都不会启动它,所以 `ENABLE_SELKIES=false` 时 compose 的 healthcheck 改为探测 `/json/list`。
 
-把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端连接、没有隔离 context、也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。
+**隔离 context 不依附于主浏览器。** 每个隔离 context 都是独立的浏览器进程,和主浏览器一样是网关的子进程,因此主浏览器关闭(关窗口、**Stop**、空闲超时、崩溃)时,它们以及它们客户端的连接都会继续运行:这类客户端会收到其主浏览器页面已消失的通知(`Target.detachedFromTarget` / `Target.targetDestroyed`,与页面关闭时相同),发往主浏览器的未完成命令会失败,而隔离 context 照常工作。之后如果它再用到默认 context,网关会为它重新启动主浏览器。没有隔离 context 的客户端仍会像以前一样被断开。
+
+把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端在使用它,也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。持有隔离 context 的客户端只有在给主浏览器发命令时才算在使用它,所以只在隔离 context 里工作的 agent 不会让主浏览器一直开着。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。
 
 局限:
 
@@ -250,7 +261,9 @@ location /desk/ {
 * **修改。** 控制台的设置菜单(`/console/` 及 Selkies 页面侧边栏里的齿轮)里有 *访问控制* 一组:**登录 → 修改…**(当前密码、新用户名 + 密码;用户名和两个密码框都留空即关闭登录 —— 之前跳过的也可以在这里设置登录)、**CDP API Key → 修改…**(当前密码,然后手动输入或 *随机生成*、*复制*;留空即移除)以及 **退出登录**。修改登录账号会让其他所有会话退出。没有控制台时(`ENABLE_CDP=false`),同样的控件在账号页 `<web UI>/__auth/` 上。
 * **存放位置。** `/browser` 挂载下的 `/browser/settings/auth.json`(权限 0600):密码以加盐 scrypt 哈希保存,API Key 以 SHA-256 哈希保存(无法再次查看 —— 设置时请复制),外加会话密钥。容器重启或重建后依然保留,没有对应的环境变量。**忘记密码?** 删除该文件(`docker compose exec browser rm /browser/settings/auth.json`,或宿主机上的 `./browser/settings/auth.json`):下次访问会重新显示初始化表单,无需重启(表单需要容器最近一次启动时日志里的设置码)。文件存在但无法解析时,web UI 和 CDP API 会保持锁定,直到修复或删除它。
 
-`ENABLE_AUTH=false` 关闭以上全部功能:没有初始化表单、没有登录、没有 API Key —— web UI 与 CDP 端点像旧版本一样开放。Selkies 自带的 Basic Auth(`SELKIES_BASIC_AUTH_PASSWORD`)与内置登录相互独立,仍然可用(两者都开启时都会生效)。`PORT_FORWARDS` 监听端口不受登录保护。
+`ENABLE_AUTH=false` 关闭以上全部功能:没有初始化表单、没有登录、没有 API Key —— web UI 与 CDP 端点像旧版本一样开放。`PORT_FORWARDS` 监听端口不受登录保护。
+
+内置登录是唯一的访问控制:Selkies 自带的 Basic Auth 和 master token 始终关闭(自 0.1.7 起)。`SELKIES_BASIC_AUTH_PASSWORD`、`SELKIES_ENABLE_BASIC_AUTH`、`SELKIES_MASTER_TOKEN` 以及 `SELKIES_EXTRA_ARGS` 里的 `--enable-basic-auth` / `--master-token` 都会被忽略 —— 原先依赖 Selkies 密码的部署,升级后会改为显示初始化表单。
 
 ## 配置
 
@@ -262,7 +275,7 @@ location /desk/ {
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `CHROME_VERSION` | `157.0.8103.50` | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) 版本(默认钉 Stable 通道;CfT known-good 列表中的任意版本均可) |
+| `CHROME_VERSION` | `157.0.8103.78` | [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) 版本(默认钉 Stable 通道;CfT known-good 列表中的任意版本均可) |
 | `NODE_VERSION` | `26` | Node.js 主版本(由 [`update-chrome-node.mjs`](#版本联动脚本) 保持同步) |
 | `SELKIES_VERSION` | `2.2.1` | Selkies 上游 release;其 wheel 及 pixelflux/pcmflux 依赖 wheel 从 GitHub release 下载,摄像头/手柄 interposer 由同一 tag 的源码编译(见 `Dockerfile`) |
 | `TZ` | `UTC` | 容器时区,以 `ENV TZ` 暴露(运行时可覆盖) |
@@ -302,10 +315,8 @@ docker compose build --build-arg CHROME_VERSION=<version>
 
 | 变量                          | 默认值    | 说明                                                      |
 | ----------------------------- | --------- | --------------------------------------------------------- |
-| `SELKIES_BASIC_AUTH_PASSWORD` | *(空)*    | 设置即启用登录页;空 = 无登录                              |
-| `SELKIES_BASIC_AUTH_USER`     | `ubuntu`  | 登录用户名                                                |
 | `SELKIES_ENCODER`             | `h264enc` | selkies 原生设置(原样透传):`h264enc` \| `h265enc` \| `vp8enc` \| `vp9enc` \| `av1enc` \| `h264enc-striped` \| `jpeg` |
-| `SELKIES_EXTRA_ARGS`          | *(空)*    | 追加到 `selkies` 的额外 CLI 参数                          |
+| `SELKIES_EXTRA_ARGS`          | *(空)*    | 追加到 `selkies` 的额外 CLI 参数(无论其中写了什么,Selkies 自带的鉴权都保持关闭 —— 见 [登录与 CDP API Key](#登录与-cdp-api-key)) |
 | `SELKIES_ENABLE_RESIZE`       | `true`    | 由浏览器驱动调整分辨率:虚拟显示器跟随观看端浏览器窗口大小(X11 下最大 8192x4096);`false` = 不论谁在观看,显示器都保持 `SCREEN_GEOMETRY` |
 | `SELKIES_VIDEO_STREAMING_MODE` | `false` | Turbo 模式:`true` = 像普通视频编码器一样逐帧编码,静止桌面也不例外(有人观看时 CPU 恒定占用,1080p 下约单核 2.5%);`false` = 只编码有变化的帧,静止画面几乎不占 CPU。看视频或玩游戏时可在侧边栏实时打开 |
 | `SELKIES_VIDEO_ON_START` | `true` | 会话开始时即推送视频;`false` = 需在侧边栏手动打开 |
@@ -326,8 +337,8 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_HEADLESS`         | `0`                                                                                                 | `0` = 有头,显示在桌面上(Xvfb 或 labwc,串流可见);`1` = 无头                                                                                                                                  |
 | `CHROMIUM_LANG`             | `en-US`                                                                                             | 浏览器 UI 语言 + `Accept-Language`(如 `zh-CN`)                                                                                                                                    |
 | `CHROMIUM_START_URL`        | `about:blank`                                                                                       | 启动时打开的页面                                                                                                                                                                  |
-| `CHROMIUM_AUTOSTART`        | `true`                                                                                              | 由 CDP 网关随容器启动主浏览器;`false` = 只在首个 CDP 客户端连接或在 CDP 控制台点 *Start browser* 时才启动。无论哪种,关闭它(或崩溃)都不会让容器退出,下一个客户端会再把它启动起来([详情](#cdp-网关带登录态的隔离-context)) |
-| `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 主浏览器空闲(无 CDP 客户端、无隔离 context、无人观看串流)多少分钟后自动关闭;`0` = 不自动关闭 |
+| `CHROMIUM_AUTOSTART`        | `true`                                                                                              | 由 CDP 网关随容器启动主浏览器;`false` = 只在 CDP 客户端用到默认 context(隔离 context 不需要它)或在 CDP 控制台点 *Start browser* 时才启动。无论哪种,关闭它(或崩溃)都不会让容器退出,下一个客户端会再把它启动起来([详情](#cdp-网关带登录态的隔离-context)) |
+| `CHROMIUM_IDLE_TIMEOUT`     | `0`                                                                                                 | 主浏览器空闲(没有 CDP 客户端在使用它、无人观看串流;隔离 context 不算)多少分钟后自动关闭;`0` = 不自动关闭 |
 | `CHROMIUM_EXTRA_ARGS`       | *(空)*                                                                                              | 额外 chromium 参数,如 `--proxy-server=http://host:3128`                                                                                                                           |
 | `CHROMIUM_GPU`              | `auto`                                                                                              | `auto` = 有直通 GPU(见 [GPU 直通](#gpu-直通可选))就用硬件渲染,否则 SwiftShader 软件渲染 —— WebGL 始终可用;`off` = 强制软件渲染;`strict` = 永不允许 SwiftShader(无 GPU 则无 WebGL) |
 | `CHROMIUM_SANDBOX`          | `auto`                                                                                              | Chromium 自身的沙箱(主浏览器和 context 浏览器):`auto` = 浏览器以非特权用户运行(`RUN_USER` 不为 `0`,即默认情况)**且**容器允许创建 user namespace 时开启,否则使用 `--no-sandbox`;`off` = 始终 `--no-sandbox`。见[权限降级(`RUN_USER`)](#权限降级run_user) |
@@ -341,6 +352,8 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDP_CONTEXTS_MAX`          | `4`                         | 同时存在的隔离 context 上限(每个都是完整浏览器);超出后新建 context 返回 CDP 错误                                                        |
 | `CDP_ALLOW_ORIGINS`         | *(空)*                      | 允许使用 CDP API 的网页 origin,逗号分隔(`*` = 任意),与 Chromium 的 `--remote-allow-origins` 相同;空 = 都不允许 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |
+| `CDP_CONSOLE_ACTIONS`       | `true`                      | 允许在控制台和侧边栏新建独立浏览器、关闭单个标签页 |
+| `CDP_INPUT_OVERLAY`         | `text`                      | Selkies 页面在串流上叠加画出的 CDP 客户端输入(见上文“看到 AI Agent 在做什么”):`text` = 指针、点击、滚轮、组合键和输入的文字(密码 / 一次性验证码 / 银行卡字段及 frame 内显示为 `••••`);`keys` = 同上,但文字只显示字数;`off` = 不显示。需要 Selkies 和 CDP 同时启用 |
 | `CDP_ALLOW_BROWSER_CLOSE`   | `false`                     | 客户端的 `Browser.close`(Puppeteer 的 `browser.close()`)是否关闭共享的浏览器(容器不会退出,下一个客户端会再把它启动起来);`false` = 只关闭该客户端自己的连接(及其隔离 context),`Browser.crash*` 一律拒绝 |
 | `CDP_FILE_DIRS`             | `/browser/downloads`        | CDP 客户端可以指定本地文件的目录(冒号分隔):按路径读取文件的命令(`DOM.setFileInputFiles`、拖放、PWA 启动、`Extensions.loadUnpacked`)读取其他位置的文件一律拒绝(先解析符号链接),不在其中的下载目录会被改到第一个目录。第一个目录同时也是浏览器的下载目录(托管策略 `DownloadDirectory`;启动时创建并交给 `RUN_USER`)。没有这项限制,CDP 客户端可以读取浏览器用户能读的任何文件(登录的 `auth.json`),并往它能写的目录里写入新文件。`*` = 不检查,也不设策略 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |
 
@@ -581,7 +594,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 ## 安全注意事项
 
 * **在设置 [CDP API Key](#登录与-cdp-api-key) 之前,CDP 端点是开放的。** 没有 key 时,一次 TCP 连接即获得完整的浏览器控制权。即使设置了 key,也请只把 `9222` 发布到 localhost 或可信网络(或放在 TLS 后面:key 在请求头里传输,纯 HTTP 下是明文)。使用 [host 网络](#host-网络compose)时没有端口映射可以限制它,请设置 `NGINX_LISTEN_ADDR=127.0.0.1`。
-* **CDP 网关的隔离 context 继承你真实的登录态。** 每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 跟随[内置登录](#登录与-cdp-api-key)(跳过登录或 `ENABLE_AUTH=false` 时开放)。web UI 端口上的侧边栏副本(`cdp-console/`)同样跟随内置登录,设置了 `SELKIES_BASIC_AUTH_PASSWORD` 时还需要 Selkies 主密码。
+* **CDP 网关的隔离 context 继承你真实的登录态。** 每个隔离客户端一开始就登录着主浏览器登录过的所有网站。这正是该功能的目的,也是风险所在:只把 CDP 端点交给你愿意托付这些账号的自动化程序。`/console/` 控制台及其 API 跟随[内置登录](#登录与-cdp-api-key)(跳过登录或 `ENABLE_AUTH=false` 时开放)。web UI 端口上的侧边栏副本(`cdp-console/`)同样跟随内置登录。
 * **首次启动后请立即设置登录。** 初始化表单需要容器日志里的设置码,看不到日志的访问者无法占用这个浏览器;但在设置 key 之前 CDP API 仍是开放的。跳过登录意味着任何能访问 web UI 的人都能使用它 —— 而且借助 DNS rebinding(某个网站把自己的域名指向这个容器),该网络里任何用户打开的网页也能使用它:把 `ALLOWED_HOSTS` 设为你访问它所用的主机名即可堵住(IP 地址和 `localhost` 始终可用)。CDP API 本身不受影响(网页能发出的请求它都会拒绝:带 `Origin` 的一律拒,`Sec-Fetch-Site` 不是 `none` 的也拒,DNS rebinding 后的同源 GET 同样包括在内)。web UI 离开可信网络时请同时启用 HTTPS(纯 HTTP 会以明文传输密码和会话 cookie)。
 * **网页无法访问 CDP API。** 带 `Origin` 请求头的请求除非 `CDP_ALLOW_ORIGINS` 列出了该 origin,否则一律拒绝;`Sec-Fetch-Site` 不是 `none` 的请求(DNS rebinding 后的同源 GET 也在内)则无条件拒绝。nginx 后面没有任何东西在网页能打开的 TCP 端口上(unix socket,以及用 DevTools 管道代替 DevTools 端口),所以网页 —— 任何浏览器里的,包括容器自己的浏览器 —— 只能经由 nginx 访问这些服务。
 * **CDP 客户端只能接触 `CDP_FILE_DIRS` 里的本地文件。** 浏览器以容器用户的身份运行,否则 CDP 客户端可以借它读取该用户能读的任何文件 —— 其中包括 `/browser/settings/auth.json`(给登录会话签名的密钥) —— 还能往它能写的目录里写入新文件(在完成初始化之前写入一个新的 `auth.json` 就能占用登录)。防线有:浏览器里禁止 `file://` URL(`CHROMIUM_ALLOW_FILE_URLS=false`);网关把 CDP 命令里出现的所有路径(文件输入框、拖放、下载目录等)限制在 `CDP_FILE_DIRS` 之内;没有任何 CDP 通道能绕过网关(没有 DevTools 端口,`Target.exposeDevToolsProtocol` 被拒绝)。DevTools 窗口是这样一条通道,除非设置 `CHROMIUM_ALLOW_DEVTOOLS=false`:CDP 客户端不应接触这些文件时请设置它。只有在每个 CDP 客户端都可以读取这些文件时才放宽其他各项。即使会话被盗用,修改登录或 API Key 也需要当前密码。

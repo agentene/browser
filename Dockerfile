@@ -74,7 +74,7 @@ RUN apt-get update && \
 # The browser is Google's Chrome for Testing (CfT) build of the Stable
 # channel, downloaded straight from the official CfT bucket. Override with any version in the CfT known-good
 # feed: --build-arg CHROME_VERSION=<version>.
-ARG CHROME_VERSION=157.0.8103.50
+ARG CHROME_VERSION=157.0.8103.78
 # The image is linux/amd64 only (the CfT linux64 build, x86_64 wheels).
 # The apt packages: the shared libraries chrome links against, the font set
 # (emoji, CJK, Thai, Cyrillic, ...) pages are expected to render with, and
@@ -107,12 +107,17 @@ RUN apt-get update && \
     # from this very binary: at runtime the browsers speak CDP on a pipe to
     # the CDP gateway only (no DevTools port, no HTTP endpoint), and the
     # gateway serves this copy (chrome-remote-interface and the like ask for it).
+    # Its /json/version too: what the gateway answers a client with while the
+    # main browser is stopped (a client connecting does not start it).
     { /opt/chrome-for-testing/chrome --headless --no-sandbox --disable-gpu \
         --user-data-dir=/tmp/cft-profile --remote-debugging-port=0 about:blank >/dev/null 2>&1 & } && \
     for _ in $(seq 1 150); do [ -s /tmp/cft-profile/DevToolsActivePort ] && break; sleep 0.1; done && \
     curl -fsS -o /opt/chrome-for-testing/devtools-protocol.json \
         "http://127.0.0.1:$(head -n1 /tmp/cft-profile/DevToolsActivePort)/json/protocol" && \
     grep -q '"domains"' /opt/chrome-for-testing/devtools-protocol.json && \
+    curl -fsS -o /opt/chrome-for-testing/devtools-version.json \
+        "http://127.0.0.1:$(head -n1 /tmp/cft-profile/DevToolsActivePort)/json/version" && \
+    grep -q '"User-Agent"' /opt/chrome-for-testing/devtools-version.json && \
     { kill "$!"; wait "$!" || true; } && \
     # its child processes may still be writing into the profile for a moment
     for _ in 1 2 3 4 5; do rm -rf /tmp/cft-profile && break; sleep 1; done && \
@@ -275,7 +280,7 @@ EXPOSE 80 443 9222
 COPY cdp-gateway/package.json cdp-gateway/package-lock.json /usr/local/lib/cdp-gateway/
 RUN npm ci --omit=dev --no-audit --no-fund --prefix /usr/local/lib/cdp-gateway && \
     rm -rf ~/.npm/
-COPY cdp-gateway/gateway.mjs cdp-gateway/dashboard.html cdp-gateway/panel.js cdp-gateway/raise-window.py cdp-gateway/front-window.py /usr/local/lib/cdp-gateway/
+COPY cdp-gateway/gateway.mjs cdp-gateway/dashboard.html cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/raise-window.py cdp-gateway/front-window.py /usr/local/lib/cdp-gateway/
 COPY cdp-gateway/src/ /usr/local/lib/cdp-gateway/src/
 
 # Built-in login + CDP API key (ENABLE_AUTH=true, entrypoint/lib/auth.sh): a
