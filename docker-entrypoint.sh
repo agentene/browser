@@ -8,8 +8,7 @@
 #      Xvfb            virtual X11 display (Selkies captures it)
 #      picom           compositing manager for that display (keeps popup
 #                       menu shadows visible)
-#      background      the desktop's background picture (swaybg on labwc,
-#                       a root-pixmap helper on Xvfb)
+#      background      the desktop's background picture (small surfaces on labwc, a native image-window helper on Xvfb)
 #   2. PulseAudio      audio server (Selkies captures it via pcmflux)
 #   3. Selkies         HTML5 remote desktop on the unix socket
 #                       /tmp/agentene/selkies.sock

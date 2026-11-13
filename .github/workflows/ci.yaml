@@ -758,13 +758,13 @@ jobs:
           docker exec x11-smoke sh -c '! pgrep -x labwc'
           echo "X11 smoke test OK"
 
-      - name: Smoke test — 4K desktop background and fractional scale (64 MiB shm)
+      - name: Smoke test — bounded desktop background buffers, resizing and input
         run: |
           set -euo pipefail
           for backend in wayland x11; do
             name="background-${backend}-smoke"
             docker run -d --name "$name" --shm-size=64m \
-              -e DISPLAY_BACKEND="$backend" -e ENABLE_CDP=false -e ENABLE_AUTH=false \
+              -e DISPLAY_BACKEND="$backend" -e ENABLE_CDP=false -e ENABLE_AUTH=false -e WAYLAND_DEBUG=client \
               localhost/ci:${{ env.IMAGE_NAME }}
             trap 'docker logs "$name" || true; docker cp "$name":/tmp/desktop-background.log /tmp/background-smoke.log && cat /tmp/background-smoke.log; docker rm -f "$name" >/dev/null' EXIT
             for _ in $(seq 1 60); do
@@ -772,6 +772,10 @@ jobs:
                 http://selkies/ >/dev/null 2>&1 && break
               sleep 1
             done
+            if [ "$backend" = wayland ]; then
+              # Read back real pixels as well as protocol buffer sizes. This capture tool is installed only in the disposable test container.
+              docker exec -e DEBIAN_FRONTEND=noninteractive "$name" sh -c 'apt-get update >/dev/null && apt-get install -y --no-install-recommends grim >/dev/null'
+            fi
             docker exec -i "$name" python3 - < .github/tests/desktop-background.py
             docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
               http://selkies/ >/dev/null

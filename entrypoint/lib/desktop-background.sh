@@ -9,12 +9,8 @@
 # on the eyes; its transparent parts show the gray too — the X11 helper
 # holds the same color), at every screen size.
 #
-#   wayland  swaybg, a layer-shell background client of labwc; it follows
-#            output resizes itself. Built with patches/swaybg-memfd.patch:
-#            its buffers use memfd, not Docker's limited /dev/shm (4K and
-#            fractional output scales used to SIGBUS the stock client).
-#   x11      x11-desktop-background.py, which sets the root pixmap picom
-#            paints and redraws it on every RandR resize
+#   wayland  swaybg, patched to stretch one solid-color pixel over the output and center a small image subsurface. Its memfd buffers are bounded by the image size, including at fractional output scales.
+#   x11      x11-desktop-background, a native Cairo/Xlib helper: a tiled 1x1 root color and an image-sized, input-transparent window kept below every browser. Resizing only moves the image; it never reallocates a screen-sized pixmap.
 #
 # Cosmetic, so a background that fails to start only warns and is dropped
 # from the supervised services; once running it is supervised like every
@@ -31,7 +27,7 @@ desktop_background_start() {
             ;;
         x11)
             start_service /tmp/desktop-background.log \
-                "${DROP[@]}" python3 -u "${ENTRYPOINT_HELPERS}/x11-desktop-background.py" \
+                "${DROP[@]}" x11-desktop-background \
                 "${image}"
             ;;
     esac

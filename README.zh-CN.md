@@ -214,9 +214,9 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 **隔离 context 不依附于主浏览器。** 每个隔离 context 都是独立的浏览器进程,和主浏览器一样是网关的子进程,因此主浏览器关闭(关窗口、**Stop**、空闲超时、崩溃)时,它们以及它们客户端的连接都会继续运行:这类客户端会收到其主浏览器页面已消失的通知(`Target.detachedFromTarget` / `Target.targetDestroyed`,与页面关闭时相同),发往主浏览器的未完成命令会失败,而隔离 context 照常工作。之后如果它再用到默认 context,网关会为它重新启动主浏览器。没有隔离 context 的客户端仍会像以前一样被断开。
 
-把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端在使用它,也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。持有隔离 context 的客户端只有在给主浏览器发命令时才算在使用它,所以只在隔离 context 里工作的 agent 不会让主浏览器一直开着。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。没有浏览器窗口时,串流显示桌面背景:镜像自带的图片(`entrypoint/assets/desktop-background.png`),按原尺寸居中显示在中性灰底上——Wayland 下由 `swaybg` 绘制,X11 下由一个设置 root pixmap 的小 helper 绘制;它是固定的,不是配置项。
+把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端在使用它,也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。持有隔离 context 的客户端只有在给主浏览器发命令时才算在使用它,所以只在隔离 context 里工作的 agent 不会让主浏览器一直开着。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。没有浏览器窗口时,串流显示桌面背景:镜像自带的图片(`entrypoint/assets/desktop-background.png`),按原尺寸居中显示在中性灰底上——Wayland 下由 `swaybg` 绘制,X11 下由原生 Cairo/Xlib helper 绘制;它是固定的,不是配置项。
 
-Wayland 背景程序从 `Dockerfile` 固定的上游源码构建,并应用 [`patches/swaybg-memfd.patch`](patches/swaybg-memfd.patch)。缓冲区使用匿名内存,不再占用 Docker 容量有限的 `/dev/shm`:默认 64 MiB 共享内存挂载下也能切换 4K 和小数显示缩放。X11 使用 X server 管理的 root pixmap,尺寸变化时替换并释放旧 pixmap。桌面、浏览器及编码器本身仍需要足够的内存。
+背景的像素存储由图片尺寸决定,4K 和小数输出缩放也不再需要整屏背景位图。Wayland 将一个纯色像素铺满输出,再叠加图片大小的子表面;固定版本的 `swaybg` 应用 [`patches/swaybg-center-surfaces.patch`](patches/swaybg-center-surfaces.patch),并保留带分配检查的 [`memfd` 缓冲区](patches/swaybg-memfd.patch)。X11 使用平铺的 1×1 root pixmap 和图片大小的窗口,鼠标输入可穿透,窗口始终位于浏览器下方;原生 helper 无需常驻 Python PNG 解码器。调整分辨率只重新定位或裁剪图片,不会分配整屏背景位图。背景可在 Docker 默认的 64 MiB `/dev/shm` 下工作;桌面、浏览器和编码器仍需要各自的内存。
 
 局限:
 
