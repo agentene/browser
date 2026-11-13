@@ -263,6 +263,8 @@ location /desk/ {
 
 `ENABLE_AUTH=false` 关闭以上全部功能:没有初始化表单、没有登录、没有 API Key —— web UI 与 CDP 端点像旧版本一样开放。`PORT_FORWARDS` 监听端口不受登录保护。
 
+内置登录是唯一的访问控制:Selkies 自带的 Basic Auth 和 master token 始终关闭(自 0.1.7 起)。`SELKIES_BASIC_AUTH_PASSWORD`、`SELKIES_ENABLE_BASIC_AUTH`、`SELKIES_MASTER_TOKEN` 以及 `SELKIES_EXTRA_ARGS` 里的 `--enable-basic-auth` / `--master-token` 都会被忽略 —— 原先依赖 Selkies 密码的部署,升级后会改为显示初始化表单。
+
 ## 配置
 
 全部通过环境变量配置;使用 Compose 时写入 `.env`(模板见 [.env.example](.env.example))。未在 `compose.yaml` 里显式列出的变量也会经 `env_file` 直通进容器 —— 包括 Selkies 原生设置,如 `SELKIES_FRAMERATE=30`、`SELKIES_TURN_URL=...`。
@@ -314,7 +316,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | 变量                          | 默认值    | 说明                                                      |
 | ----------------------------- | --------- | --------------------------------------------------------- |
 | `SELKIES_ENCODER`             | `h264enc` | selkies 原生设置(原样透传):`h264enc` \| `h265enc` \| `vp8enc` \| `vp9enc` \| `av1enc` \| `h264enc-striped` \| `jpeg` |
-| `SELKIES_EXTRA_ARGS`          | *(空)*    | 追加到 `selkies` 的额外 CLI 参数                          |
+| `SELKIES_EXTRA_ARGS`          | *(空)*    | 追加到 `selkies` 的额外 CLI 参数(无论其中写了什么,Selkies 自带的鉴权都保持关闭 —— 见 [登录与 CDP API Key](#登录与-cdp-api-key)) |
 | `SELKIES_ENABLE_RESIZE`       | `true`    | 由浏览器驱动调整分辨率:虚拟显示器跟随观看端浏览器窗口大小(X11 下最大 8192x4096);`false` = 不论谁在观看,显示器都保持 `SCREEN_GEOMETRY` |
 | `SELKIES_VIDEO_STREAMING_MODE` | `false` | Turbo 模式:`true` = 像普通视频编码器一样逐帧编码,静止桌面也不例外(有人观看时 CPU 恒定占用,1080p 下约单核 2.5%);`false` = 只编码有变化的帧,静止画面几乎不占 CPU。看视频或玩游戏时可在侧边栏实时打开 |
 | `SELKIES_VIDEO_ON_START` | `true` | 会话开始时即推送视频;`false` = 需在侧边栏手动打开 |

@@ -136,7 +136,9 @@
 #                                Browser.crash* are refused. true: passed
 #                                through — the browser exits (the container
 #                                keeps running; the next client restarts it)
-#   CDP_CONSOLE_ACTIONS=true    allow console/sidebar browser creation and tab closing
+#   CDP_CONSOLE_ACTIONS=true     the console's / sidebar's New browser (+)
+#                                and per-tab close (×) buttons; false =
+#                                hidden, and their API routes refused
 #   CDP_INPUT_OVERLAY=text       what the Selkies page draws over the stream of
 #                                the CDP clients' input, which never moves the
 #                                desktop's own pointer: text = their pointer,

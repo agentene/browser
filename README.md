@@ -263,6 +263,8 @@ With `ENABLE_AUTH=true` (the default) a small built-in auth service sits behind 
 
 `ENABLE_AUTH=false` turns all of it off: no setup form, no login, no API key — the web UI and the CDP endpoint are open as in earlier versions. `PORT_FORWARDS` listeners are not covered by the login.
 
+The built-in login is the only gate: Selkies' own Basic Auth and master token stay disabled (since 0.1.7). `SELKIES_BASIC_AUTH_PASSWORD`, `SELKIES_ENABLE_BASIC_AUTH`, `SELKIES_MASTER_TOKEN` and `--enable-basic-auth` / `--master-token` in `SELKIES_EXTRA_ARGS` are ignored — a deployment that relied on the Selkies password now gets the setup form instead.
+
 ## Configuration
 
 Everything is configured via environment variables; with Compose, put them in `.env` (see [.env.example](.env.example)). Variables not explicitly listed in `compose.yaml` still reach the container through the `env_file` pass-through — that includes native Selkies settings such as `SELKIES_FRAMERATE=30` or `SELKIES_TURN_URL=...`.
@@ -314,7 +316,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | Variable                      | Default   | Description                                               |
 | ----------------------------- | --------- | --------------------------------------------------------- |
 | `SELKIES_ENCODER`             | `h264enc` | native selkies setting (passed through as-is): `h264enc` \| `h265enc` \| `vp8enc` \| `vp9enc` \| `av1enc` \| `h264enc-striped` \| `jpeg` |
-| `SELKIES_EXTRA_ARGS`          | *(empty)* | extra CLI flags appended to `selkies`                     |
+| `SELKIES_EXTRA_ARGS`          | *(empty)* | extra CLI flags appended to `selkies` (Selkies' own auth stays off whatever they say — see [Login and CDP API key](#login-and-cdp-api-key)) |
 | `SELKIES_ENABLE_RESIZE`       | `true`    | browser-driven resize: the virtual display follows the viewer's browser window size (on X11 up to 8192x4096); `false` = the display stays at `SCREEN_GEOMETRY` whoever watches |
 | `SELKIES_VIDEO_STREAMING_MODE` | `false` | Turbo: `true` = encode every frame like a plain video encoder, a still desktop included (constant CPU while a viewer watches, ~2.5% of a core at 1080p); `false` = encode only frames that changed, so a still screen costs next to nothing. The side menu toggles it live for video or games |
 | `SELKIES_VIDEO_ON_START` | `true` | video stream starts with the session; `false` = off until the side menu toggle |
