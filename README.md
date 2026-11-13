@@ -216,6 +216,8 @@ The same console also sits **next to the live desktop**: move the pointer to the
 
 Set `CHROMIUM_IDLE_TIMEOUT` to a number of minutes to have the gateway close the main browser again once it has been idle that long: no CDP client using it and nobody watching the Selkies stream (someone may be using the browser by hand). A client with an isolated context uses the main browser only while it sends it commands, so an agent working in isolated contexts does not keep it running. It is closed the same way as with **Stop**, and the next client or *Start browser* brings it back. The desktop stack (Xvfb or labwc, PulseAudio, Selkies) keeps running; without a viewer it costs little. With no browser window open the stream shows the desktop background: the picture that ships with the image (`entrypoint/assets/desktop-background.png`), centered at its own size on a neutral gray — drawn by `swaybg` on Wayland and by a small root-pixmap helper on X11; it is fixed, not a setting.
 
+The Wayland background client is built from the pinned upstream source in `Dockerfile` with [`patches/swaybg-memfd.patch`](patches/swaybg-memfd.patch). Its buffers use anonymous memory rather than Docker's limited `/dev/shm`: 4K resizes and fractional display scales work with the default 64 MiB shared-memory mount. X11 uses server-owned root pixmaps, replacing and freeing them on resize. This does not remove the memory requirements of the desktop, browser or encoder.
+
 Limits:
 
 * Each isolated context is a whole browser process, typically a few hundred MB of RAM. `CDP_CONTEXTS_MAX` caps how many run at once; past the cap, creating a context fails with a clear CDP error.

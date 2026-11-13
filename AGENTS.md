@@ -17,10 +17,11 @@ runtime smoke tests.
 
 | Path | Role |
 | --- | --- |
-| `Dockerfile` | Single-stage ubuntu:26.04 image: Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
+| `Dockerfile` | ubuntu:26.04 runtime image (separate interposer and patched swaybg build stages): Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
 | `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages labwc (or Xvfb → picom) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
 | `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `settings` (the CDP console's persisted settings, `/browser/settings/settings.json` — no env knobs; applied at start), `auth` (the built-in login + CDP API key service, `ENABLE_AUTH`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `desktop-background` (the fixed background picture, both backends), `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
 | `entrypoint/helpers/` | Standalone scripts the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, the X11 desktop background, the new-windows-to-the-front switch, chromium prefs seeding) — formerly heredocs in the entrypoint |
+| `patches/` | Build-time dependency fixes (`swaybg-memfd.patch`: Wayland background buffers avoid Docker’s limited `/dev/shm`; upstream archive + checksum pinned in `Dockerfile`) |
 | `entrypoint/assets/` | Static files the services use, installed with the modules (`desktop-background.png`: the desktop background picture — replace the file to change it) |
 | `.shellcheckrc` | Lets shellcheck follow the module `source` statements |
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
@@ -53,7 +54,7 @@ for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
 npm test --prefix auth-server                                  # auth server unit tests (no deps)
-python3 -m py_compile entrypoint/helpers/*.py
+python3 -m py_compile entrypoint/helpers/*.py .github/tests/*.py
 docker build --check .
 ```
 
@@ -75,9 +76,7 @@ curl -sf http://127.0.0.1:8080/ | grep -qi '<html'
 docker rm -f web-smoke
 ```
 
-CI additionally smoke-tests the CDP gateway (an isolated context is created,
-driven and disposed with raw CDP), the default Wayland desktop and the X11
-one (`DISPLAY_BACKEND=x11`) — see the `verify` job in `ci.yaml`.
+CI additionally smoke-tests the CDP gateway (an isolated context is created, driven and disposed with raw CDP), the default Wayland desktop and the X11 one (`DISPLAY_BACKEND=x11`), plus repeated 4K background resizes and fractional Wayland scales with 64 MiB `/dev/shm` (`.github/tests/desktop-background.py`) — see the `verify` job in `ci.yaml`.
 
 When a smoke test fails: container logs live in `/tmp/*.log` (`xvfb.log`,
 `labwc.log`, `picom.log`, `chromium.log`, `pulseaudio.log`,

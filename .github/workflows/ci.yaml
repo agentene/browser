@@ -82,6 +82,7 @@ jobs:
           for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
           for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
           python3 -m py_compile entrypoint/helpers/*.py
+          python3 -m py_compile .github/tests/*.py
 
       - name: CDP gateway unit tests
         run: |
@@ -756,6 +757,28 @@ jobs:
           docker exec x11-smoke pgrep -x Xvfb >/dev/null
           docker exec x11-smoke sh -c '! pgrep -x labwc'
           echo "X11 smoke test OK"
+
+      - name: Smoke test — 4K desktop background and fractional scale (64 MiB shm)
+        run: |
+          set -euo pipefail
+          for backend in wayland x11; do
+            name="background-${backend}-smoke"
+            docker run -d --name "$name" --shm-size=64m \
+              -e DISPLAY_BACKEND="$backend" -e ENABLE_CDP=false -e ENABLE_AUTH=false \
+              localhost/ci:${{ env.IMAGE_NAME }}
+            trap 'docker logs "$name" || true; docker cp "$name":/tmp/desktop-background.log /tmp/background-smoke.log && cat /tmp/background-smoke.log; docker rm -f "$name" >/dev/null' EXIT
+            for _ in $(seq 1 60); do
+              docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
+                http://selkies/ >/dev/null 2>&1 && break
+              sleep 1
+            done
+            docker exec -i "$name" python3 - < .github/tests/desktop-background.py
+            docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
+              http://selkies/ >/dev/null
+            [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$name")" = 'true 0' ]
+            docker rm -f "$name" >/dev/null
+            trap - EXIT
+          done
 
   release-tag:
     # Two kinds of release, told apart by what a merge to main changed:

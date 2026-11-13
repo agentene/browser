@@ -216,6 +216,8 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 把 `CHROMIUM_IDLE_TIMEOUT` 设为分钟数后,主浏览器空闲满这么久时网关会再次关闭它。空闲指:没有 CDP 客户端在使用它,也没有人在看 Selkies 串流(可能有人正在手动使用浏览器)。持有隔离 context 的客户端只有在给主浏览器发命令时才算在使用它,所以只在隔离 context 里工作的 agent 不会让主浏览器一直开着。关闭方式与 **Stop** 相同,下一个客户端或 *Start browser* 会再把它启动起来。桌面组件(Xvfb 或 labwc、PulseAudio、Selkies)仍然常驻,没有人观看时开销很小。没有浏览器窗口时,串流显示桌面背景:镜像自带的图片(`entrypoint/assets/desktop-background.png`),按原尺寸居中显示在中性灰底上——Wayland 下由 `swaybg` 绘制,X11 下由一个设置 root pixmap 的小 helper 绘制;它是固定的,不是配置项。
 
+Wayland 背景程序从 `Dockerfile` 固定的上游源码构建,并应用 [`patches/swaybg-memfd.patch`](patches/swaybg-memfd.patch)。缓冲区使用匿名内存,不再占用 Docker 容量有限的 `/dev/shm`:默认 64 MiB 共享内存挂载下也能切换 4K 和小数显示缩放。X11 使用 X server 管理的 root pixmap,尺寸变化时替换并释放旧 pixmap。桌面、浏览器及编码器本身仍需要足够的内存。
+
 局限:
 
 * 每个隔离 context 是一个完整的浏览器进程,通常占几百 MB 内存。`CDP_CONTEXTS_MAX` 限制同时运行的数量;超出上限时,新建 context 会返回明确的 CDP 错误。

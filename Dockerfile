@@ -34,6 +34,28 @@ RUN apt-get update && \
     # for everything else in the image
     cp -L /src/addons/fake-udev/libudev.so.1 /out/libudev.so.1
 
+# === BUILD the Wayland background client ===
+# swaybg's POSIX shm_open buffers share Docker's 64 MiB /dev/shm. A 4K
+# resize (old + new buffers), especially at fractional output scales, can
+# exhaust it and SIGBUS the background, taking the supervised desktop down.
+# Use anonymous memfds instead, with allocation failures checked before
+# painting. Keep the upstream release and archive checksum pinned here.
+FROM ubuntu:26.04 AS swaybg-build
+ARG DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates gcc libc6-dev \
+        libcairo2-dev libwayland-dev meson ninja-build pkg-config wayland-protocols patch && \
+    curl -fsSL --retry 3 -o /tmp/swaybg.tar.gz \
+        https://github.com/swaywm/swaybg/archive/refs/tags/v1.2.1.tar.gz && \
+    echo '45c4a1a3b83c86ddc321a6136402b708f195a022d0ccee4641b23d14c3a3c25e  /tmp/swaybg.tar.gz' | sha256sum -c - && \
+    mkdir /src && tar -xzf /tmp/swaybg.tar.gz -C /src --strip-components=1
+COPY patches/swaybg-memfd.patch /tmp/swaybg-memfd.patch
+# The shipped asset is PNG; Cairo reads it without GDK's extra loaders.
+RUN patch --batch --fuzz=0 -d /src -p1 < /tmp/swaybg-memfd.patch && \
+    meson setup /src/build /src --buildtype=release -Dgdk-pixbuf=disabled -Dman-pages=disabled && \
+    meson compile -C /src/build
+
 FROM ubuntu:26.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -182,18 +204,21 @@ RUN apt-get update && \
 # default): labwc is
 # the headless Wayland compositor + window manager Selkies captures (it
 # maximizes the browser windows), wlr-randr sizes its output at startup and
-# wlrctl raises a window for the CDP console; swaybg paints its desktop
+# wlrctl raises a window for the CDP console; the patched swaybg above paints its desktop
 # background (entrypoint/lib/desktop-background.sh — on X11 a python3-xlib
 # helper does, no extra package).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 xvfb x11-xserver-utils picom python3-xlib \
-    labwc wlr-randr wlrctl swaybg pulseaudio \
+    labwc wlr-randr wlrctl pulseaudio \
     libx11-xcb1 libegl1 libgl1 libva2 libva-drm2 libvulkan1 \
-    libwayland-server0 \
+    libwayland-client0 libwayland-server0 \
     mesa-va-drivers libgl1-mesa-dri intel-media-va-driver-non-free \
     mesa-vulkan-drivers mesa-utils vainfo vulkan-tools && \
     rm -rf /var/lib/apt/lists/*
+
+COPY --from=swaybg-build /src/build/swaybg /usr/local/bin/swaybg
+COPY --from=swaybg-build /src/LICENSE /usr/local/share/licenses/swaybg/LICENSE
 
 # The NVIDIA Vulkan ICD manifest (nvidia_icd.json) arrives with the toolkit
 # injection — CDI mounts it at /etc/vulkan/icd.d, the legacy hook at

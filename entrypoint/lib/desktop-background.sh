@@ -10,7 +10,9 @@
 # holds the same color), at every screen size.
 #
 #   wayland  swaybg, a layer-shell background client of labwc; it follows
-#            output resizes itself
+#            output resizes itself. Built with patches/swaybg-memfd.patch:
+#            its buffers use memfd, not Docker's limited /dev/shm (4K and
+#            fractional output scales used to SIGBUS the stock client).
 #   x11      x11-desktop-background.py, which sets the root pixmap picom
 #            paints and redraws it on every RandR resize
 #
