@@ -5,7 +5,8 @@
 # e.g. SELKIES_ENCODER (selkies' own default: h264enc).
 
 selkies_start() {
-    local extra_args=()
+    local extra_args=() resize_lock=""
+    [ "${SELKIES_RESIZE_LOCKED}" = "true" ] && resize_lock="|locked"
     selkies_backend_args
     selkies_media_defaults
     [ -n "${SELKIES_EXTRA_ARGS:-}" ] && read -r -a extra_args <<< "${SELKIES_EXTRA_ARGS}"
@@ -21,7 +22,7 @@ selkies_start() {
         "${DROP[@]}" selkies \
         --unix-socket="${SELKIES_SOCKET}" \
         --subfolder="${SELKIES_SUBFOLDER}" \
-        --enable-resize="${SELKIES_ENABLE_RESIZE:-true}" \
+        --enable-resize="${SELKIES_ENABLE_RESIZE}${resize_lock}" \
         "${SELKIES_BACKEND_ARGS[@]}" \
         "${extra_args[@]}" \
         --enable-basic-auth=false \
@@ -57,7 +58,7 @@ selkies_media_defaults() {
     export SELKIES_VIDEO_STREAMING_MODE="${SELKIES_VIDEO_STREAMING_MODE:-false}"
     export SELKIES_VIDEO_ON_START="${SELKIES_VIDEO_ON_START:-true}"
     export SELKIES_AUDIO_ENABLED="${SELKIES_AUDIO_ENABLED:-true}"
-    export SELKIES_AUDIO_ON_START="${SELKIES_AUDIO_ON_START:-false}"
+    export SELKIES_AUDIO_ON_START
     export SELKIES_MICROPHONE_ENABLED="${SELKIES_MICROPHONE_ENABLED:-true}"
     export SELKIES_MICROPHONE_ON_START="${SELKIES_MICROPHONE_ON_START:-false}"
     export SELKIES_WEBCAM_ENABLED="${SELKIES_WEBCAM_ENABLED:-true}"
@@ -95,7 +96,7 @@ selkies_backend_args() {
     # own default (1024x768) when a stream starts; pin it to the
     # SCREEN_GEOMETRY labwc was started at instead, like the fixed Xvfb
     # screen (an explicit SELKIES_MANUAL_* setting still wins).
-    if [ "${SELKIES_ENABLE_RESIZE:-true}" != "true" ] \
+    if [ "${SELKIES_ENABLE_RESIZE}" != "true" ] \
         && [ -z "${SELKIES_MANUAL_WIDTH:-}${SELKIES_MANUAL_HEIGHT:-}${SELKIES_MANUAL_RESOLUTION:-}" ]; then
         SELKIES_BACKEND_ARGS+=(--manual-resolution=true
             --manual-width="${SCREEN_WIDTH}"

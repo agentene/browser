@@ -50,15 +50,13 @@ let contexts;
 let mainBrowser;
 
 before(async () => {
+  fs.writeFileSync(path.join(tmp, 'settings.json'), JSON.stringify({ contexts: { maxRunning: 2, overflow: 'hibernate', maxHibernated: 2 } }));
   Object.assign(process.env, {
     CHROME_BIN: fakeChrome,
     CDP_CONTEXTS_DIR: path.join(tmp, 'contexts'),
     CHROMIUM_USER_DATA_DIR: path.join(tmp, 'main'),
     CDP_GATEWAY_FLAGS_FILE: path.join(tmp, 'flags'),
     CDP_GATEWAY_SETTINGS_FILE: path.join(tmp, 'settings.json'),
-    CDP_CONTEXTS_MAX: '2',
-    CDP_CONTEXTS_OVERFLOW: 'hibernate',
-    CDP_CONTEXTS_HIBERNATED_MAX: '2',
   });
   ({ contexts } = await import('../src/contexts.mjs'));
   ({ mainBrowser } = await import('../src/main-browser.mjs'));
@@ -286,7 +284,7 @@ test('reject restores the original capacity error; a zero sleep limit deletes th
       import { contexts } from ${JSON.stringify(new URL('../src/contexts.mjs', import.meta.url).href)};
       try {
         const a = await contexts.create('a');
-        if (process.env.CDP_CONTEXTS_OVERFLOW === 'reject') {
+        if (${JSON.stringify(mode)} === 'reject') {
           await assert.rejects(contexts.create('b'), /CDP context limit reached/);
           assert.equal(a.state, 'running');
         } else {
@@ -297,8 +295,10 @@ test('reject restores the original capacity error; a zero sleep limit deletes th
         }
       } finally { await Promise.all(contexts.values().map(c => c.destroy('test'))); }
     `;
+    const settingsFile = path.join(tmp, `settings-${mode}.json`);
+    fs.writeFileSync(settingsFile, JSON.stringify({ contexts: { maxRunning: 1, overflow: mode, maxHibernated: 0 } }));
     execFileSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env,
-      CDP_CONTEXTS_DIR: path.join(tmp, mode), CDP_CONTEXTS_MAX: '1', CDP_CONTEXTS_OVERFLOW: mode, CDP_CONTEXTS_HIBERNATED_MAX: '0',
+      CDP_CONTEXTS_DIR: path.join(tmp, mode), CDP_GATEWAY_SETTINGS_FILE: settingsFile,
     }, timeout: 15000 });
   }
 });

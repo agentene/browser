@@ -14,7 +14,7 @@ import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { notifyChange } from './changes.mjs';
-import { MAIN_FLAGS_FILE, MAIN_LOG, MAIN_PROFILE, readFlags } from './config.mjs';
+import { MAIN_FLAGS_FILE, MAIN_LOG, MAIN_PROFILE, START_URL, readFlags } from './config.mjs';
 import { browserReady, launchChromium } from './launch.mjs';
 import { killGroup, log } from './util.mjs';
 
@@ -76,7 +76,7 @@ class MainBrowser {
       });
       logFile.write(`--- ${new Date().toISOString()} main browser started by the CDP gateway ---\n`);
       let pipe;
-      ({ proc, pipe } = launchChromium(readFlags(MAIN_FLAGS_FILE), logFile, 'main browser'));
+      ({ proc, pipe } = launchChromium([...readFlags(MAIN_FLAGS_FILE), START_URL], logFile, 'main browser'));
       this.proc = proc;
       this.pipe = pipe;
       // a failed spawn is an 'error' event and no 'exit' (unhandled, it would

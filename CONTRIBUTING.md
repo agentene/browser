@@ -20,7 +20,7 @@ docker run --rm -i -e HADOLINT_CONFIG=/.hadolint.yaml \
 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 node --check update-chrome-node.mjs
-for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
+for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 python3 -m py_compile entrypoint/helpers/*.py .github/tests/*.py
 docker build --check .                        # Dockerfile lint (BuildKit)
@@ -47,7 +47,7 @@ CI's `verify` job additionally smoke-tests the web UI, the CDP gateway and the W
 | `compose.yaml` | base compose file |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | opt-in overlays: HTTPS, Intel/AMD GPU, NVIDIA GPU, host networking |
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |
-| `.env.example` | documented runtime configuration template (commonly changed knobs only) |
+| `.env.example` | documented deployment configuration template (runtime preferences live in web Settings) |
 | `update-chrome-node.mjs` | version-sync helper (Chrome for Testing ↔ Node) |
 | `VERSION` | the project version `X.Y.Z` (semver, bumped by hand); code releases are git-tagged `v<VERSION>` (e.g. `v0.1.0`), daily Chrome bumps publish image tag `<VERSION>-<chrome-version>` (e.g. `0.1.0-150.0.7871.100`) without a git tag |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests → release-tag (code: git tag `v<VERSION>`; Chrome bump: tagless) → publish |
@@ -56,7 +56,7 @@ CI's `verify` job additionally smoke-tests the web UI, the CDP gateway and the W
 
 ## Guidelines
 
-* **Keep behavior configurable.** New features should come with an environment knob, a default that is safe for the majority, and an entry in `compose.yaml` and both READMEs (plus `.env.example` if most users will want to change it).
+* **Keep behavior configurable.** Runtime preferences belong in the shared web-settings schema and both console UIs, with safe defaults and matching bilingual docs. Deployment knobs belong in the environment, `compose.yaml` and both READMEs (plus `.env.example` when commonly changed); migrated preferences must never gain an environment fallback.
 * **One PR per concern**, with a short rationale. For behavioral changes, explain how you verified it.
 * **Scripts must pass their linters** (`shellcheck` for bash — the entrypoint, its modules and helpers; `node --check` for JS; `py_compile` for the Python helpers). The Dockerfile must stay `hadolint`-clean and `docker build --check`-clean.
 * **Docs stay in sync**: `README.md` and `README.zh-CN.md` mirror each other; update both.

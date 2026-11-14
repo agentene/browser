@@ -79,7 +79,7 @@ jobs:
       - name: syntax check (node scripts, entrypoint python helpers)
         run: |
           node --check update-chrome-node.mjs
-          for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
+          for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js; do node --check "$f"; done
           for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
           python3 -m py_compile entrypoint/helpers/*.py
           python3 -m py_compile .github/tests/*.py
@@ -128,11 +128,13 @@ jobs:
             if [ "$backend" = headless ]; then headless=1; selkies=false; display_backend=wayland; fi
             # Built-in extension workers generate Playwright setup traffic at
             # arbitrary times, changing LRU order even when test tabs are idle.
+            settings_dir="$(mktemp -d)"
+            printf '%s\n' '{"browser":{"autostart":false},"contexts":{"maxRunning":2,"maxHibernated":2}}' > "$settings_dir/settings.json"
             docker run -d --name hibernation-smoke --shm-size=1g \
-              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" -e CHROMIUM_AUTOSTART=false \
-              -e CHROMIUM_HEADLESS="$headless" -e DISPLAY_BACKEND="$display_backend" \
+              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" \
+              -e DISPLAY_BACKEND="$display_backend" \
               -e CHROMIUM_EXTRA_ARGS=--disable-component-extensions-with-background-pages \
-              -e CDP_CONTEXTS_MAX=2 -e CDP_CONTEXTS_HIBERNATED_MAX=2 \
+              -v "$settings_dir:/browser/settings" \
               -v "$PWD/.github/tests:/tests:ro" -v "$deps/node_modules:/test-deps/node_modules:ro" \
               localhost/ci:${{ env.IMAGE_NAME }}
             for _ in $(seq 1 60); do
@@ -161,9 +163,11 @@ jobs:
             if [ "$backend" = headless ]; then headless=1; selkies=false; display_backend=wayland; fi
             # Keep the default extension environment; raw CDP does not emulate
             # focus, so this can observe each window's actual selected tab.
-            docker run -d --name native-restore-smoke --shm-size=1g \
-              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" -e CHROMIUM_AUTOSTART=false \
-              -e CHROMIUM_HEADLESS="$headless" -e DISPLAY_BACKEND="$display_backend" \
+            settings_dir="$(mktemp -d)"
+            printf '%s\n' '{"browser":{"autostart":false}}' > "$settings_dir/settings.json"
+            docker run -d --name native-restore-smoke --shm-size=1g -v "$settings_dir:/browser/settings" \
+              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" \
+              -e DISPLAY_BACKEND="$display_backend" \
               -v "$PWD/.github/tests:/tests:ro" localhost/ci:${{ env.IMAGE_NAME }}
             for _ in $(seq 1 60); do
               docker exec native-restore-smoke curl -sf http://127.0.0.1:9222/json/list >/dev/null && break
@@ -585,6 +589,9 @@ jobs:
           if docker logs restart-smoke 2>&1 | grep -F '[entrypoint] ERROR'; then exit 1; fi
           echo "RUN_USER restart smoke test OK"
 
+      - name: Smoke test — persisted web settings and service modes
+        run: python3 .github/tests/settings.py localhost/ci:${{ env.IMAGE_NAME }}
+
       - name: Smoke test — console restarts the whole container
         run: python3 .github/tests/console-restart.py localhost/ci:${{ env.IMAGE_NAME }}
 
@@ -649,13 +656,15 @@ jobs:
           console.log('chromium sandbox smoke test OK');
           EOF
 
-      - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
+      - name: Smoke test — main browser on demand (web setting)
         run: |
           set -euo pipefail
           # CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close stands in for
           # the browser closing itself (its last window)
-          docker run -d --name ondemand-smoke -p 9226:9222 \
-            -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 -e AUTH_SETUP_CODE=ci-setup-code \
+          settings_dir="$(mktemp -d)"
+          printf '%s\n' '{"browser":{"autostart":false,"idleTimeout":1}}' > "$settings_dir/settings.json"
+          docker run -d --name ondemand-smoke -p 9226:9222 -v "$settings_dir:/browser/settings" \
+            -e AUTH_SETUP_CODE=ci-setup-code \
             -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec ondemand-smoke cat /tmp/cdp-gateway.log || true; docker logs ondemand-smoke || true; docker rm -f ondemand-smoke >/dev/null' EXIT
@@ -739,7 +748,7 @@ jobs:
           }
           ws.close();
           EOF
-          # CHROMIUM_IDLE_TIMEOUT=1: no client, no context, no viewer -> closed
+          # Saved idle timeout = 1 minute: no client, no context, no viewer -> closed
           # again within about a minute
           [ "$(state)" = running ]
           for i in $(seq 1 100); do [ "$(state)" = stopped ] && break; sleep 1; done
@@ -747,7 +756,7 @@ jobs:
           docker exec ondemand-smoke grep -q 'idle for 1 min' /tmp/cdp-gateway.log
           echo "on-demand main browser smoke test OK"
 
-      - name: Smoke test — main browser closed with CHROMIUM_AUTOSTART=true
+      - name: Smoke test — main browser closed with autostart enabled
         run: |
           set -euo pipefail
           docker run -d --name autostart-smoke -p 9227:9222 -e ENABLE_SELKIES=false \

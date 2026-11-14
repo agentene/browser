@@ -504,6 +504,8 @@
   }
 
   // --- the connection -------------------------------------------------------
+  let serverMode = 'off';
+  let modeEpoch = 0;
   let ws = null;
   let retry = 0;
   let retryTimer = 0;
@@ -520,9 +522,17 @@
       } catch {
         return;
       }
-      if (!Array.isArray(msg.ops)) return;
+      if (msg.t === 'hello') {
+        serverMode = msg.mode;
+        modeEpoch++;
+        clearDrawing();
+        host.style.display = enabled && serverMode !== 'off' ? '' : 'none';
+        return;
+      }
+      if (serverMode === 'off' || !Array.isArray(msg.ops)) return;
+      const epoch = modeEpoch;
       setTimeout(() => {
-        if (ws === sock) for (const op of msg.ops) apply(op);
+        if (ws === sock && epoch === modeEpoch) for (const op of msg.ops) apply(op);
       }, DELAY_MS);
     };
     sock.onclose = () => {
@@ -537,6 +547,10 @@
     const sock = ws;
     ws = null;
     sock?.close();
+    modeEpoch++;
+    clearDrawing();
+  }
+  function clearDrawing() {
     for (const c of [...pointers.keys(), ...shownBadges.keys()]) forget(c);
     lines.replaceChildren();
     lastLine = null;
@@ -545,7 +559,7 @@
   function setEnabled(on) {
     enabled = !!on;
     try { localStorage.setItem(ON_KEY, enabled ? '1' : '0'); } catch { /* storage blocked */ }
-    host.style.display = enabled ? '' : 'none';
+    host.style.display = enabled && serverMode !== 'off' ? '' : 'none';
     if (enabled) connect();
     else disconnect();
   }
@@ -571,7 +585,7 @@
 
   function start() {
     document.body.append(host);
-    host.style.display = enabled ? '' : 'none';
+    host.style.display = enabled && serverMode !== 'off' ? '' : 'none';
     connect();
   }
   if (document.body) start();

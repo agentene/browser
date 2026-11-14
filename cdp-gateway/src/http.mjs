@@ -1,5 +1,6 @@
 // HTTP requests (WebSocket upgrades: upgrade.mjs).
 
+import { BROWSER_ENABLED } from './config.mjs';
 import { log } from './util.mjs';
 import { HttpError, requestPath, send, viaWeb } from './respond.mjs';
 import { consoleRoute } from './routes-console.mjs';
@@ -12,7 +13,7 @@ export async function handleHttp(req, res, restart) {
   }
   const url = new URL(req.url, 'http://gateway');
   try {
-    if (viaWeb(req) ? await consoleRoute(req, res, url, restart) : await jsonRoute(req, res, url) || await consoleRoute(req, res, url, restart)) return;
+    if (viaWeb(req) ? await consoleRoute(req, res, url, restart) : (BROWSER_ENABLED && await jsonRoute(req, res, url)) || await consoleRoute(req, res, url, restart)) return;
     send(res, 404, { error: `not found: ${url.pathname}` });
   } catch (err) {
     log(`HTTP ${req.method} ${url.pathname}: ${err.message}`);

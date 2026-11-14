@@ -28,7 +28,9 @@ test('restart is requested only after the accepted response finishes', async () 
   assert.deepEqual(res.body, { ok: true });
   assert.equal(called, 0);
   res.emit('finish');
+  await new Promise((resolve) => setImmediate(resolve));
   res.emit('finish');
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(called, 1);
 });
 

@@ -16,15 +16,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { notifyChange } from './changes.mjs';
 import { pipeOf } from './browsers.mjs';
-import { CONSOLE_ACTIONS, CONSOLE_RESTART, ROOT } from './config.mjs';
+import { BROWSER_ENABLED, CONSOLE_ACTIONS, CONSOLE_RESTART, ROOT } from './config.mjs';
 import { consoleDenied } from './console-auth.mjs';
 import { contexts } from './contexts.mjs';
 import { focus } from './desktop.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { HttpError, readJson, send } from './respond.mjs';
-import { settingsView, updateSettings } from './settings.mjs';
+import { closeSettings, settingsView, updateSettings } from './settings.mjs';
 
 const FILES = {
+  '/console/settings-ui.js': ['settings-ui.js', 'text/javascript; charset=UTF-8'],
   '/console/': ['dashboard.html', 'text/html; charset=UTF-8'],
   '/console/panel.js': ['panel.js', 'text/javascript; charset=UTF-8'],
   '/console/overlay.js': ['overlay.js', 'text/javascript; charset=UTF-8'],
@@ -56,7 +57,7 @@ export async function consoleRoute(req, res, url, restart) {
     else if (!restart) send(res, 503, { error: 'container restart is unavailable' });
     else {
       // Finish the response before shutdown closes the public connection.
-      res.once('finish', restart);
+      res.once('finish', () => closeSettings().then(restart));
       send(res, 202, { ok: true });
     }
     return true;
@@ -68,11 +69,16 @@ export async function consoleRoute(req, res, url, restart) {
       try {
         send(res, 200, await updateSettings(await readJson(req)));
       } catch (err) {
-        send(res, err.status ?? 500, { error: err.message });
+        send(res, err.status ?? 500, { error: err.message, ...err.details });
       }
     } else {
       send(res, 405, { error: 'GET or PATCH' });
     }
+    return true;
+  }
+  if (!BROWSER_ENABLED && p.startsWith('/console/api/')) {
+    if (p === '/console/api/browsers' && req.method === 'GET') send(res, 200, { enabled: false });
+    else send(res, 403, { error: 'browser service is disabled' });
     return true;
   }
   if (p === '/console/api/browsers') {

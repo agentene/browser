@@ -111,7 +111,7 @@ def smoke(image, user):
             request(api + "/restart", "DELETE", headers=write, status=405)
         # Session cookies protect the console even if the CDP API needs a key.
         request(web + "/__auth/api/apikey", "PUT", {"currentPassword": "smoke-password", "apiKey": "restart-smoke-api-key"})
-        request(panel + "/settings", "PATCH", {"desktop": {"raiseNewWindows": False}}, write)
+        request(panel + "/settings", "PATCH", {"revision": request(panel + "/settings")["revision"], "patch": {"desktop": {"raiseNewWindows": False}}}, write)
         request(console + "/browsers", "POST", headers=write, status=201)
         # Docker begins monitoring restart policy after a successful 10s run.
         time.sleep(max(0, 10 - (time.monotonic() - started)))
@@ -126,7 +126,7 @@ def smoke(image, user):
 
         wait_for(restarted)
         wait_for(lambda: request(web + "/__auth/api/state").get("authorized"))
-        assert request(console + "/settings") == {"desktop": {"raiseNewWindows": False}}
+        assert request(console + "/settings")["values"]["desktop"]["raiseNewWindows"] is False
         assert request(panel + "/restart") == {"enabled": True}
         assert b"<html" in request(web + "/")
         assert b"settings-page" in request(cdp + "/console/")

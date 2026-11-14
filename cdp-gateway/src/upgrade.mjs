@@ -14,7 +14,7 @@ import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { targetAddress } from './browsers.mjs';
 import { cdpOriginDenied } from './cdp-origin.mjs';
-import { INPUT_OVERLAY, WS_OPTIONS } from './config.mjs';
+import { BROWSER_ENABLED, OVERLAY_AVAILABLE, WS_OPTIONS } from './config.mjs';
 import { consoleDenied, consoleOriginDenied } from './console-auth.mjs';
 import { subscribe } from './console-live.mjs';
 import { subscribeOverlay } from './input-overlay.mjs';
@@ -51,6 +51,7 @@ async function resolveTarget(req, p) {
       return { refuse: denied[0] };
     }
   }
+  if (!BROWSER_ENABLED && p.startsWith('/devtools/')) return { refuse: 404 };
   if (p.startsWith('/devtools/browser/')) {
     if (mainBrowser.state === 'stopped' || mainBrowser.stopping) return { kind: 'browser', upstream: null };
     await mainBrowser.ensure();
@@ -70,7 +71,7 @@ async function resolveTarget(req, p) {
     } catch (err) { if (context) context.relays--; throw err; }
   }
   if (CONSOLE_SOCKETS.has(p)) {
-    if (p === '/console/overlay' && INPUT_OVERLAY === 'off') return { refuse: 404 };
+    if (p === '/console/overlay' && !OVERLAY_AVAILABLE) return { refuse: 404 };
     const denied = (await consoleDenied(req)) ?? consoleOriginDenied(req);
     if (denied) return { refuse: denied[0] };
     return { kind: p === '/console/ws' ? 'console' : 'overlay' };

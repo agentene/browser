@@ -1,11 +1,12 @@
 // The browsers the gateway knows, by name: 'main' and the contexts'
 // 'context-N' (the names the console and its API use).
 
+import { BROWSER_ENABLED } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { mainBrowser } from './main-browser.mjs';
 
 export function browserNames() {
-  return ['main', ...contexts.names()];
+  return BROWSER_ENABLED ? ['main', ...contexts.names()] : [];
 }
 
 // A browser's DevTools pipe (pipe.mjs), null for one not running or unknown.

@@ -245,10 +245,6 @@
         <span class="lang-label"></span>
         <span class="seg" role="group"><button type="button" data-lang="en" lang="en">English</button><button type="button" data-lang="zh" lang="zh-CN">中文</button></span>
       </div>
-      <label class="setting raise-row" hidden>
-        <span><span class="raise-label"></span><span class="setting-hint raise-hint"></span></span>
-        <input class="switch" type="checkbox" role="switch">
-      </label>
     </div>
   </fieldset>
   <footer class="settings-footer">
@@ -256,6 +252,7 @@
     <div class="settings-buttons"><button class="settings-save primary" type="submit"></button><button class="settings-cancel" type="button"></button></div>
   </footer>
 </form>
+<script src="settings-ui.js"></script>
 <script>
   const cards = document.getElementById('cards');
   const $ = (sel) => document.querySelector(sel);
@@ -416,8 +413,7 @@
     $('.settings-restart').title = t('restartHint');
     $('.lang-label').textContent = t('language');
     renderLanguageChoice();
-    $('.raise-label').textContent = t('raiseNew');
-    $('.raise-hint').textContent = t('raiseNewHint');
+    settingsEditor.render();
     window.AgenteneAuth?.setLang(lang);
     renderSummary();
     for (const v of views.values()) v.card.remove();
@@ -433,6 +429,23 @@
   let settingsDraft = null;
   const settingsDirty = new Set();
   let settingsBusy = false;
+  let settingsOnlyOpened = false;
+  const settingsEditor = window.AgenteneSettings.mount({ container: settingsContent, getLang: () => lang, onDirty: renderSave });
+  function renderSave() {
+    const localChange = settingsDraft && (settingsDraft.language !== lang || settingsDirty.has('overlay'));
+    $('.settings-save').disabled = settingsBusy || !settingsEditor.ready() || !(settingsEditor.dirty() || localChange);
+  }
+  function receiveSettings(view) {
+    const first = !settingsEditor.ready();
+    serverSettings = view;
+    if (first && settingsDraft) settingsEditor.open(view); else settingsEditor.update(view);
+    max = view.effective?.contexts.maxRunning ?? max;
+    overflow = view.effective?.contexts.overflow ?? overflow;
+    if (view.capabilities?.browser === false && !settingsOnlyOpened) {
+      settingsOnlyOpened = true;
+      setSettings(true);
+    }
+  }
   let connectionError = false;
   let restarting = false;
   let restartAccepted = false;
@@ -449,7 +462,8 @@
   function setSettings(open) {
     if (settingsBusy) return;
     settingsDirty.clear();
-    settingsDraft = open ? { language: lang, raiseNewWindows: serverSettings.desktop?.raiseNewWindows } : null;
+    settingsDraft = open ? { language: lang } : null;
+    if (open) settingsEditor.open(serverSettings); else settingsEditor.close();
     settingsPage.hidden = !open;
     cards.hidden = open;
     document.body.classList.toggle('configuring', open);
@@ -457,7 +471,7 @@
     showError(null);
     $('.settings-status').textContent = '';
     renderLanguageChoice();
-    renderRaiseNew();
+    settingsEditor.update(serverSettings);
     if (open) $('.settings-title').focus();
     else settingsBtn.focus();
   }
@@ -473,6 +487,7 @@
     for (const b of settingsPage.querySelectorAll('.settings-footer button')) b.disabled = busy;
     settingsBtn.disabled = busy;
     renderRestart();
+    renderSave();
   }
 
   settingsBtn.addEventListener('click', () => setSettings(settingsPage.hidden));
@@ -487,27 +502,30 @@
     if (!settingsDraft || settingsBusy) return;
     settingsDraft.language = b.dataset.lang;
     renderLanguageChoice();
+    renderSave();
   });
 
   settingsPage.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!settingsDraft || settingsBusy) return;
     const draft = settingsDraft;
+    let savedOk = false;
     setSettingsBusy(true);
     showError(null);
     $('.settings-status').textContent = t('savingSettings');
     try {
-      if (settingsDirty.has('raiseNewWindows') && draft.raiseNewWindows !== serverSettings.desktop?.raiseNewWindows) {
-        serverSettings = await call('PATCH', 'api/settings', { desktop: { raiseNewWindows: draft.raiseNewWindows } });
-      }
+      const view = await settingsEditor.save((body) => call('PATCH', 'api/settings', body), ask);
+      if (!view) return;
+      receiveSettings(view);
+      if (Object.keys(view.errors).length) throw new Error(lang === 'zh' ? '配置已保存，但部分设置未生效，请查看下方详情。' : 'Settings saved, but some changes could not be applied. See the details below.');
       setLang(draft.language, true);
-      setSettingsBusy(false);
-      setSettings(false);
+      settingsDirty.clear();
+      savedOk = true;
     } catch (err) {
       showError(err);
     } finally {
       setSettingsBusy(false);
-      $('.settings-status').textContent = '';
+      $('.settings-status').textContent = savedOk ? (lang === 'zh' ? '配置已保存。' : 'Settings saved.') : '';
     }
   });
 
@@ -545,21 +563,6 @@
       $('.settings-status').textContent = '';
       showError(err);
     }
-  });
-
-  // Server pushes refresh the saved state, never a field the user edited.
-  const raiseRow = $('.raise-row');
-  const raiseBox = $('.raise-row .switch');
-  function renderRaiseNew() {
-    const on = serverSettings.desktop?.raiseNewWindows;
-    raiseRow.hidden = on === undefined; // no desktop
-    if (settingsDraft && !settingsDirty.has('raiseNewWindows')) settingsDraft.raiseNewWindows = on;
-    raiseBox.checked = !!(settingsDraft ? settingsDraft.raiseNewWindows : on);
-  }
-  raiseBox.addEventListener('change', () => {
-    if (!settingsDraft || settingsBusy) return;
-    settingsDraft.raiseNewWindows = raiseBox.checked;
-    settingsDirty.add('raiseNewWindows');
   });
 
   // The built-in login's rows in the settings page (login, CDP API key, log out) and
@@ -635,7 +638,7 @@
     const headers = { 'X-CDP-Console': '1', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) };
     const res = await fetch(path, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { ...data, status: res.status });
     return data;
   }
 
@@ -889,7 +892,7 @@
     if (op.t === 'snapshot') {
       max = op.max;
       overflow = op.overflow ?? 'reject';
-      serverSettings = op.settings ?? {};
+      receiveSettings(op.settings ?? {});
       browsers.clear();
       views.clear();
       cards.replaceChildren();
@@ -898,7 +901,7 @@
       return [...browsers.keys()];
     }
     if (op.t === 'settings') {
-      serverSettings = op.settings;
+      receiveSettings(op.settings);
       return [];
     }
     if (op.t === 'ai') {
@@ -968,7 +971,7 @@
       connected = true;
       touched.forEach(update);
       renderSummary();
-      renderRaiseNew();
+      settingsEditor.update(serverSettings);
       if (restarting && restartDisconnected && snapshot) {
         restartReady = true;
         finishRestart();

@@ -352,7 +352,7 @@ export class ContextRegistry {
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
     const eligible = (c) => c !== exclude && c.state === 'running' && !c.destroyed && !c.blockedReason;
     while (this.running >= MAX_CONTEXTS) {
-      if (CONTEXTS_OVERFLOW === 'reject') throw new Error(`CDP context limit reached (${MAX_CONTEXTS}); close another isolated session or raise CDP_CONTEXTS_MAX`);
+      if (CONTEXTS_OVERFLOW === 'reject') throw new Error(`CDP context limit reached (${MAX_CONTEXTS}); close another isolated session or increase the running-browser limit in web Settings`);
       const candidates = this.values().filter(eligible);
       // Query the browser itself: console-owned contexts may have no client session, and its target cache may be incomplete. A failed query cannot establish that a browser is empty.
       const tabs = await Promise.allSettled(candidates.map((c) => pageInfos(c.pipe)));

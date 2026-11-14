@@ -14,10 +14,10 @@
 #                       /tmp/agentene/selkies.sock
 #   4. Chromium        Chrome for Testing, launched by the CDP gateway as its
 #                       own child (at start, or on demand with
-#                       CHROMIUM_AUTOSTART=false); it speaks CDP on a pipe to
+#                       browser autostart disabled in web Settings); it speaks CDP on a pipe to
 #                       the gateway only, no DevTools port
 #      CDP gateway     the gateway in front of it (always on with the CDP
-#                       endpoint, on /tmp/agentene/cdp-gateway.sock); the
+#                       endpoint, settings-only without it, on its unix socket); the
 #                       supervised service — the browser may exit and be
 #                       started again without the container
 #      auth service    the built-in login + CDP API key nginx checks every
@@ -120,8 +120,8 @@ main() {
 
     if [ "${ENABLE_CDP}" = "true" ]; then
         chromium_start
-        cdp_gateway_start
     fi
+    cdp_gateway_start
 
     if [ "${ENABLE_AUTH}" = "true" ]; then
         auth_start

@@ -1,16 +1,37 @@
 # shellcheck shell=bash
 # settings.sh — the settings the CDP console persists.
 #
-# The console's settings menu changes them at runtime; the CDP gateway
-# (cdp-gateway/src/settings.mjs, the file's owner) applies a change and saves
-# it to SETTINGS_FILE, a JSON object by section on the /browser mount, so it
-# outlives the container:
-#   { "desktop": { "raiseNewWindows": true } }
-# They are no environment knobs on purpose: the console is their one place.
-# The ones the desktop needs before the gateway runs are applied here at
-# start. (The console's language is per viewer and stays in the browser.)
+# The web console owns /browser/settings/settings.json. Shared validation and
+# defaults live in cdp-gateway/src/settings-schema.mjs. Live policies apply in
+# the gateway; display/browser startup preferences are adapted here before
+# any service starts. No preference has an environment fallback.
 #
-# Sets: SETTINGS_FILE.
+# Sets SETTINGS_FILE and internal startup adapters: CHROMIUM_AUTOSTART,
+# CHROMIUM_IDLE_TIMEOUT, CHROMIUM_START_URL, CHROMIUM_LANG, CHROMIUM_HEADLESS,
+# CHROMIUM_GPU, CDP_CONTEXTS_MAX, CDP_CONTEXTS_OVERFLOW,
+# CDP_CONTEXTS_HIBERNATED_MAX, CDP_INPUT_OVERLAY, SCREEN_GEOMETRY,
+# SELKIES_ENABLE_RESIZE, SELKIES_RESIZE_LOCKED, SELKIES_AUDIO_ON_START,
+# DESKTOP_RAISE_NEW_WINDOWS.
+
+# Read persisted preferences before config_load derives display sizes or flags.
+# These globals are internal adapters, not environment configuration knobs.
+settings_load() {
+    SETTINGS_FILE=/browser/settings/settings.json
+    local knob assignment snapshot
+    for knob in CHROMIUM_AUTOSTART CHROMIUM_IDLE_TIMEOUT CHROMIUM_START_URL CHROMIUM_LANG CHROMIUM_HEADLESS CHROMIUM_GPU CDP_CONTEXTS_MAX CDP_CONTEXTS_OVERFLOW CDP_CONTEXTS_HIBERNATED_MAX CDP_INPUT_OVERLAY SCREEN_GEOMETRY SELKIES_ENABLE_RESIZE SELKIES_AUDIO_ON_START; do
+        if [ "${!knob+x}" ]; then
+            log "WARNING: ${knob} is ignored; configure it in the web settings page"
+        fi
+        unset "${knob}"
+    done
+    snapshot="$(mktemp /tmp/browser-settings.XXXXXX)" || die "cannot create settings snapshot"
+    node /usr/local/lib/cdp-gateway/src/settings-startup.mjs "${SETTINGS_FILE}" > "${snapshot}" \
+        || die "cannot load browser settings"
+    while IFS= read -r -d '' assignment; do
+        printf -v "${assignment%%=*}" '%s' "${assignment#*=}"
+    done < "${snapshot}"
+    rm -f "${snapshot}"
+}
 
 settings_init() {
     SETTINGS_FILE=/browser/settings/settings.json
@@ -22,18 +43,13 @@ settings_init() {
     fi
 }
 
-# settings_get <section.key> <default>: one saved setting, <default> if unset.
-settings_get() {
-    python3 "${ENTRYPOINT_HELPERS}/settings-get.py" "${SETTINGS_FILE}" "$1" "$2"
-}
-
 # desktop.raiseNewWindows: whether a window that opens on the desktop comes
 # to the front (true, the default) or stays behind the one in front. Handed
 # to the desktop about to start; labwc / the X11 screen follower apply it
 # (desktop-raise-new-windows.sh).
 settings_apply_desktop() {
     local raise
-    raise="$(settings_get desktop.raiseNewWindows true)"
+    raise="${DESKTOP_RAISE_NEW_WINDOWS}"
     case "${raise}" in
         true | false) : ;;
         *)

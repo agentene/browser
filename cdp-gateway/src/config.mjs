@@ -1,7 +1,9 @@
-// Settings: the environment entrypoint/lib/cdp-gateway.sh starts the gateway
-// with, and the gateway's own constants. Read once, at import time.
+// Deployment constants and persisted startup preferences. Live policy exports
+// are updated only after a successful settings write; consumers use live bindings.
 
 import { readFileSync } from 'node:fs';
+import { SCHEMA, resolve } from './settings-schema.mjs';
+import { readSettings } from './settings-file.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,11 +22,15 @@ export function intEnv(name, fallback, source = env) {
 export const SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
 export const CONSOLE_ACTIONS = env.CDP_CONSOLE_ACTIONS !== 'false';
 export const CONSOLE_RESTART = env.CDP_CONSOLE_RESTART !== 'false';
-export const MAX_CONTEXTS = intEnv('CDP_CONTEXTS_MAX', 4);
-if (MAX_CONTEXTS < 1) throw new Error('CDP_CONTEXTS_MAX must be positive');
-export const CONTEXTS_OVERFLOW = env.CDP_CONTEXTS_OVERFLOW || 'hibernate';
-if (!['hibernate', 'reject'].includes(CONTEXTS_OVERFLOW)) throw new Error('CDP_CONTEXTS_OVERFLOW must be hibernate or reject');
-export const HIBERNATED_MAX = intEnv('CDP_CONTEXTS_HIBERNATED_MAX', 16);
+export const SETTINGS_FILE = env.CDP_GATEWAY_SETTINGS_FILE || '/browser/settings/settings.json';
+export const STARTUP_SAVED = readSettings(SETTINGS_FILE, (message) => process.stderr.write(`settings: ${message}\n`));
+export const STARTUP_SETTINGS = resolve(SCHEMA, STARTUP_SAVED);
+export const BROWSER_ENABLED = env.CDP_GATEWAY_BROWSER_ENABLED !== 'false';
+export const DESKTOP_ENABLED = env.CDP_GATEWAY_DESKTOP_ENABLED === 'true' || !!env.CDP_GATEWAY_RAISE_SWITCH;
+export const OVERLAY_AVAILABLE = BROWSER_ENABLED && DESKTOP_ENABLED;
+export let MAX_CONTEXTS = STARTUP_SETTINGS.contexts.maxRunning;
+export let CONTEXTS_OVERFLOW = STARTUP_SETTINGS.contexts.overflow;
+export let HIBERNATED_MAX = STARTUP_SETTINGS.contexts.maxHibernated;
 export const CONTEXTS_DIR = env.CDP_CONTEXTS_DIR || '/browser/contexts';
 export const MAIN_PROFILE = env.CHROMIUM_USER_DATA_DIR || '/browser/user-data';
 export const CHROME_BIN = env.CHROME_BIN;
@@ -33,8 +39,9 @@ export const MAIN_FLAGS_FILE = env.CDP_GATEWAY_MAIN_FLAGS_FILE || '/tmp/cdp-gate
 export const MAIN_LOG = '/tmp/chromium.log';
 // The gateway always owns the main browser (main-browser.mjs);
 // CHROMIUM_AUTOSTART=true starts it with the gateway, false on demand only.
-export const MAIN_AUTOSTART = env.CHROMIUM_AUTOSTART !== 'false';
-export const IDLE_TIMEOUT_MS = intEnv('CHROMIUM_IDLE_TIMEOUT', 0) * 60_000;
+export const MAIN_AUTOSTART = STARTUP_SETTINGS.browser.autostart;
+export let IDLE_TIMEOUT_MS = STARTUP_SETTINGS.browser.idleTimeout * 60_000;
+export let START_URL = STARTUP_SETTINGS.browser.startUrl;
 // Selkies' unix socket: an open connection there is someone watching
 export const VIEWER_SOCKET = env.CDP_GATEWAY_VIEWER_SOCKET || '';
 // SCREEN_GEOMETRY as WxH: the desktop size while nobody watches (screen.mjs)
@@ -51,7 +58,6 @@ export const CONTEXTS_HEADLESS = env.CDP_CONTEXTS_HEADLESS === '1';
 // the front" to the desktop; empty when the browsers have no desktop
 export const RAISE_SWITCH = env.CDP_GATEWAY_RAISE_SWITCH || '';
 // the console's persisted settings (settings.mjs)
-export const SETTINGS_FILE = env.CDP_GATEWAY_SETTINGS_FILE || '/browser/settings/settings.json';
 // CDP_ALLOW_ORIGINS: the web page origins that may use the CDP API, like
 // chromium's --remote-allow-origins (cdp-origin.mjs); parsed there.
 export const ALLOW_ORIGINS_RAW = env.CDP_ALLOW_ORIGINS || '';
@@ -62,7 +68,17 @@ export const ALLOW_BROWSER_CLOSE = env.CDP_ALLOW_BROWSER_CLOSE === 'true';
 // shows (input-overlay.mjs) — text: the pointer, keys and the text typed;
 // keys: the same with only a count of the characters typed; off: no overlay.
 // The entrypoint passes off whenever there is no Selkies page to show it on.
-export const INPUT_OVERLAY = ['text', 'keys'].includes(env.CDP_INPUT_OVERLAY) ? env.CDP_INPUT_OVERLAY : 'off';
+export let INPUT_OVERLAY = OVERLAY_AVAILABLE ? STARTUP_SETTINGS.overlay.mode : 'off';
+
+// Live ES module bindings keep every consumer on the same applied policy.
+export function applyRuntimeSettings(values) {
+  MAX_CONTEXTS = values.contexts.maxRunning;
+  CONTEXTS_OVERFLOW = values.contexts.overflow;
+  HIBERNATED_MAX = values.contexts.maxHibernated;
+  IDLE_TIMEOUT_MS = values.browser.idleTimeout * 60_000;
+  START_URL = values.browser.startUrl;
+  INPUT_OVERLAY = OVERLAY_AVAILABLE ? values.overlay.mode : 'off';
+}
 
 // CDP_FILE_DIRS: the directories CDP clients may name local files in
 // (file-access.mjs), colon-separated; * = any (null here).

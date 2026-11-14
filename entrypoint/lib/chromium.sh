@@ -368,11 +368,11 @@ chromium_launch() {
     CHROMIUM_MAIN_FLAGS_FILE=/tmp/cdp-gateway-main-flags
     # NUL-separated, read by the gateway; the log file is pre-created for
     # the (possibly dropped) gateway, which appends a run per start
-    printf '%s\0' "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
+    printf '%s\0' "${CHROMIUM_FLAGS[@]}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
     : >/tmp/chromium.log
     give_to_run_user /tmp/chromium.log
     if [ "${CHROMIUM_AUTOSTART}" = "false" ]; then
-        log "chromium: on demand (CHROMIUM_AUTOSTART=false) — the CDP gateway starts it when a CDP client uses the default context or from the console"
+        log "chromium: on demand (saved autostart setting disabled) — the CDP gateway starts it when a CDP client uses the default context or from the console"
     else
         log "chromium: started by the CDP gateway (headless=${CHROMIUM_HEADLESS}), CDP on its pipe to the gateway"
     fi

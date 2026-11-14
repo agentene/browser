@@ -19,7 +19,7 @@ runtime smoke tests.
 | --- | --- |
 | `Dockerfile` | ubuntu:26.04 runtime image (separate interposer and native background build stages): Node.js, pinned Chrome for Testing (Stable, downloaded straight from the CfT bucket — no Playwright involved), nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, pinned Selkies wheels. **Source of truth for pinned versions.** |
 | `docker-entrypoint.sh` | PID-1 supervisor, kept thin: passthrough mode, sources the modules below, runs the stages labwc (or Xvfb → picom) → PulseAudio → Selkies → Chromium (+ CDP gateway) → nginx, then supervises |
-| `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_ENABLE_RESIZE`/`SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `settings` (the CDP console's persisted settings, `/browser/settings/settings.json` — no env knobs; applied at start), `auth` (the built-in login + CDP API key service, `ENABLE_AUTH`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `desktop-background` (the fixed background picture, both backends), `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
+| `entrypoint/lib/*.sh` | The supervisor's modules, one per concern (installed to `/usr/local/lib/docker-entrypoint/lib`): `common` (log/die/helpers), `config` (**the env knob reference + defaults/validation**; a few module-local knobs — `SELKIES_EXTRA_ARGS`, `RUN_USER`, `CHROME_BIN` — are defaulted in their own module; settings the image fixes on purpose (data/TLS paths, X11 tuning, …) are constants there, not knobs), `privileges` (RUN_USER → `DROP`), `settings` (the CDP console's persisted settings, `/browser/settings/settings.json` — shared schema, live application and pending restarts; no preference env knobs), `auth` (the built-in login + CDP API key service, `ENABLE_AUTH`), `supervisor` (`start_service`, traps, wait loop), `gpu`, `display-x11`, `display-wayland`, `desktop-background` (the fixed background picture, both backends), `selkies`, `chromium`, `cdp-gateway`, `tls`, `nginx` (**generates `/tmp/nginx/nginx.conf` at every container start**). Function definitions only — no side effects at source time |
 | `entrypoint/helpers/` | Standalone helpers the services run (labwc cursor theme + startup hook, window lock, X11 screen follower, the native X11 background in `x11-desktop-background.c`, the new-windows-to-the-front switch, chromium prefs seeding). The C helper is compiled with warnings as errors in the Dockerfile; scripts are installed directly |
 | `patches/` | Build-time swaybg fixes (`swaybg-memfd.patch`: checked anonymous buffers; `swaybg-center-surfaces.patch`: a solid color and image-sized subsurface instead of a full-screen bitmap; upstream archive + checksum pinned in `Dockerfile`) |
 | `entrypoint/assets/` | Static files the services use, installed with the modules (`desktop-background.png`: the desktop background picture — replace the file to change it) |
@@ -27,7 +27,7 @@ runtime smoke tests.
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | The commonly changed runtime knobs, documented (the full reference is the READMEs' Configuration section + `entrypoint/lib/config.sh`) |
-| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies and CDP are both on), `overlay.js` (the CDP clients' input — pointer, clicks, keys, typed text — drawn over the Selkies stream, injected next to the sidebar; fed by `src/input-overlay.mjs`, `CDP_INPUT_OVERLAY`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X browser windows, topmost first, with their titles — the console's front marker and current tab) |
+| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies is on (settings-only without CDP)), `overlay.js` (the CDP clients' input — pointer, clicks, keys, typed text — drawn over the Selkies stream, injected next to the sidebar; fed by `src/input-overlay.mjs`, `CDP_INPUT_OVERLAY`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X browser windows, topmost first, with their titles — the console's front marker and current tab) |
 | `auth-server/` | Built-in login + CDP API key (`ENABLE_AUTH=true`, default): `server.mjs` (dependency-free Node service on a unix socket that nginx asks about every web UI / console request — `check/web`, a session cookie — and every CDP request — `check/cdp`, the API key once one is set — via `auth_request`; also serves the setup/login form nginx shows in place on 401, the account page and the auth API under `<subfolder>/__auth/` and `/__auth/`), `src/` (`store.mjs`: `/browser/settings/auth.json`, scrypt/SHA-256 hashes, sessions; `secrets.mjs`; `limiter.mjs`), `page.html` (setup/login/account page), `ui.js` (the console's *Access* rows + dialogs, loaded by `dashboard.html` and `panel.js`), `keepalive.js` (renews the session cookie via `api/renew` while a page is open, idle tabs included; nginx injects it into the Selkies page, `dashboard.html` loads it), `test/` (`node --test`, not shipped) |
 | `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Git release tags are `v<VERSION>` (code releases; a Chrome bump publishes only the `<VERSION>-<chrome-version>` image tag) — see [Releases](#releases) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + the README build-arg tables together |
@@ -50,7 +50,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION                   # X.Y.Z, one line
 node --check update-chrome-node.mjs
-for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
+for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
 npm test --prefix auth-server                                  # auth server unit tests (no deps)
@@ -115,11 +115,12 @@ node update-chrome-node.mjs --node 22        # force the Node major
    80/443/9222); host-side published ports are `NGINX_HTTP_PORT` /
    `NGINX_HTTPS_PORT` / `CDP_PORT`. Compose `ports:` and the healthcheck
    must reference the container-side variables, never a literal port.
-5. **New behavior needs an env knob** with a default that is safe for the
-   majority, plus matching entries in `entrypoint/lib/config.sh` (default,
-   validation, reference comment), `compose.yaml` and BOTH READMEs —
-   same PR; also `.env.example` when it is a knob most users will want to
-   change (it lists only those).
+5. **Runtime preferences belong in the web settings schema and both console UIs**,
+   with shared defaults/validation in `cdp-gateway/src/settings-schema.mjs` and
+   startup adaptation through `entrypoint/lib/settings.sh`. Never add an env
+   fallback for a migrated preference. Deployment knobs still need defaults,
+   validation and a reference comment in `entrypoint/lib/config.sh`, matching
+   Compose and BOTH READMEs, and `.env.example` for commonly changed knobs.
 6. **Docs are a deliverable.** `README.md` and `README.zh-CN.md` mirror each
    other; update both or the change is incomplete.
 7. **Lint gates are hard:** shellcheck-clean (keep the existing
@@ -213,8 +214,8 @@ node update-chrome-node.mjs --node 22        # force the Node major
   browsers get the main browser's flags via `chromium_mode_flags` +
   `CHROMIUM_COMMON_FLAGS`/`CHROMIUM_TAIL_FLAGS` — new chromium flags belong
   in one of those so context browsers inherit them. The gateway is in
-  `pids`; the main chromium (started at once with `CHROMIUM_AUTOSTART=true`,
-  on demand with `false`) and the context chromiums are its children and are
+  `pids`; the main chromium (started at once when the saved browser autostart setting is enabled,
+  otherwise on demand) and the context chromiums are its children and are
   cleaned up by it — the browser exiting never stops the container, the
   next client starts it again.
 * **Two display backends (`DISPLAY_BACKEND=wayland|x11`, default wayland).**
@@ -236,7 +237,7 @@ node update-chrome-node.mjs --node 22        # force the Node major
   Chromium's Vulkan flags are X11-only (Chromium rejects Vulkan with
   Wayland). X11-only, always on: picom, the chromium screen follower, the
   8192x4096 RandR ceiling and the free-display probe from `:0`.
-* **GPU policy is one knob:** `CHROMIUM_GPU=auto|off|strict`. Hardware GL
+* **GPU policy is one web setting:** `browser.gpu=auto|off|strict`. Hardware GL
   goes through Vulkan/ANGLE (`--use-angle=vulkan --enable-features=Vulkan`)
   because native GL cannot work on the Xvfb display; SwiftShader stays
   allowed as a runtime fallback unless `strict`.
@@ -244,6 +245,12 @@ node update-chrome-node.mjs --node 22        # force the Node major
   `CHROMIUM_EXTRA_ARGS` so user flags win (Chromium honors the last
   occurrence of a repeated switch). Keep new flags on the entrypoint side of
   that boundary.
+
+The gateway also provides settings-only mode with `ENABLE_CDP=false`: it stays
+supervised on its Unix socket, serves the console settings and restart action,
+and refuses browser/CDP operations. nginx publishes no CDP listener in that mode.
+The sidebar remains on the web UI. Settings writes require a revision; reductions
+that delete sleepers also require confirmation bound to the exact removal list.
 
 ## Releases
 

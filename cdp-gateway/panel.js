@@ -38,7 +38,7 @@
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { ...data, status: res.status });
     return data;
   }
 
@@ -315,10 +315,6 @@
               <span class="lang-label"></span>
               <span class="seg" role="group"><button type="button" data-lang="en" lang="en">English</button><button type="button" data-lang="zh" lang="zh-CN">中文</button></span>
             </div>
-            <label class="setting raise-row" hidden>
-              <span><span class="raise-label"></span><span class="setting-hint raise-hint"></span></span>
-              <input class="switch" type="checkbox" role="switch">
-            </label>
             <label class="setting overlay-row" hidden>
               <span><span class="overlay-label"></span><span class="setting-hint overlay-hint"></span></span>
               <input class="switch overlay-switch" type="checkbox" role="switch">
@@ -487,8 +483,7 @@
     $('.settings-restart').title = t('restartHint');
     $('.lang-label').textContent = t('language');
     renderLanguageChoice();
-    $('.raise-label').textContent = t('raiseNew');
-    $('.raise-hint').textContent = t('raiseNewHint');
+    settingsEditor.render();
     $('.overlay-label').textContent = t('showInput');
     $('.overlay-hint').textContent = t('showInputHint');
     window.AgenteneInputOverlay?.setLang(lang);
@@ -507,6 +502,23 @@
   let settingsDraft = null;
   const settingsDirty = new Set();
   let settingsBusy = false;
+  let settingsOnlyOpened = false;
+  const settingsEditor = window.AgenteneSettings.mount({ container: settingsContent, getLang: () => lang, onDirty: renderSave });
+  function renderSave() {
+    const localChange = settingsDraft && (settingsDraft.language !== lang || settingsDirty.has('overlay'));
+    $('.settings-save').disabled = settingsBusy || !settingsEditor.ready() || !(settingsEditor.dirty() || localChange);
+  }
+  function receiveSettings(view) {
+    const first = !settingsEditor.ready();
+    serverSettings = view;
+    if (first && settingsDraft) settingsEditor.open(view); else settingsEditor.update(view);
+    max = view.effective?.contexts.maxRunning ?? max;
+    overflow = view.effective?.contexts.overflow ?? overflow;
+    if (view.capabilities?.browser === false && !settingsOnlyOpened) {
+      settingsOnlyOpened = true;
+      setSettings(true);
+    }
+  }
   let connectionError = false;
   let restarting = false;
   let restartAccepted = false;
@@ -523,7 +535,8 @@
   function setSettings(open) {
     if (settingsBusy) return;
     settingsDirty.clear();
-    settingsDraft = open ? { language: lang, raiseNewWindows: serverSettings.desktop?.raiseNewWindows, overlay: window.AgenteneInputOverlay?.enabled() } : null;
+    settingsDraft = open ? { language: lang, overlay: window.AgenteneInputOverlay?.enabled() } : null;
+    if (open) settingsEditor.open(serverSettings); else settingsEditor.close();
     settingsPage.hidden = !open;
     body.hidden = open;
     panel.classList.toggle('configuring', open);
@@ -531,7 +544,7 @@
     showError(null);
     $('.settings-status').textContent = '';
     renderLanguageChoice();
-    renderRaiseNew();
+    settingsEditor.update(serverSettings);
     renderOverlay();
     if (open) $('.settings-title').focus();
     else settingsBtn.focus();
@@ -563,28 +576,31 @@
     if (!settingsDraft || settingsBusy) return;
     settingsDraft.language = b.dataset.lang;
     renderLanguageChoice();
+    renderSave();
   });
 
   settingsPage.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!settingsDraft || settingsBusy) return;
     const draft = settingsDraft;
+    let savedOk = false;
     setSettingsBusy(true);
     showError(null);
     $('.settings-status').textContent = t('savingSettings');
     try {
-      if (settingsDirty.has('raiseNewWindows') && draft.raiseNewWindows !== serverSettings.desktop?.raiseNewWindows) {
-        serverSettings = await call('PATCH', '/settings', { desktop: { raiseNewWindows: draft.raiseNewWindows } });
-      }
+      const view = await settingsEditor.save((body) => call('PATCH', '/settings', body), ask);
+      if (!view) return;
+      receiveSettings(view);
+      if (Object.keys(view.errors).length) throw new Error(lang === 'zh' ? '配置已保存，但部分设置未生效，请查看下方详情。' : 'Settings saved, but some changes could not be applied. See the details below.');
       if (settingsDirty.has('overlay')) window.AgenteneInputOverlay?.setEnabled(draft.overlay);
       setLang(draft.language, true);
-      setSettingsBusy(false);
-      setSettings(false);
+      settingsDirty.clear();
+      savedOk = true;
     } catch (err) {
       showError(err);
     } finally {
       setSettingsBusy(false);
-      $('.settings-status').textContent = '';
+      $('.settings-status').textContent = savedOk ? (lang === 'zh' ? '配置已保存。' : 'Settings saved.') : '';
     }
   });
 
@@ -685,6 +701,7 @@
     host.classList.toggle('open', open);
     panel.inert = !open;
     if (open) {
+      if (serverSettings.capabilities?.browser === false) setSettings(true);
       connect();
     } else {
       disconnect();
@@ -770,21 +787,6 @@
     $('.error').textContent = err ? String(err.message || err) : '';
   }
 
-  // Server pushes refresh the saved state, never a field the user edited.
-  const raiseRow = $('.raise-row');
-  const raiseBox = $('.raise-row .switch');
-  function renderRaiseNew() {
-    const on = serverSettings.desktop?.raiseNewWindows;
-    raiseRow.hidden = on === undefined; // no desktop
-    if (settingsDraft && !settingsDirty.has('raiseNewWindows')) settingsDraft.raiseNewWindows = on;
-    raiseBox.checked = !!(settingsDraft ? settingsDraft.raiseNewWindows : on);
-  }
-  raiseBox.addEventListener('change', () => {
-    if (!settingsDraft || settingsBusy) return;
-    settingsDraft.raiseNewWindows = raiseBox.checked;
-    settingsDirty.add('raiseNewWindows');
-  });
-
   // The input overlay's switch (overlay.js, when nginx injected it): the
   // viewer's own choice, kept in this browser by the overlay itself.
   const overlayRow = $('.overlay-row');
@@ -799,6 +801,7 @@
     if (!settingsDraft || settingsBusy) return;
     settingsDraft.overlay = overlayBox.checked;
     settingsDirty.add('overlay');
+    renderSave();
   });
   window.addEventListener('agentene-input-overlay', () => {
     window.AgenteneInputOverlay.setLang(lang);
@@ -1057,7 +1060,7 @@
     if (op.t === 'snapshot') {
       max = op.max;
       overflow = op.overflow ?? 'reject';
-      serverSettings = op.settings ?? {};
+      receiveSettings(op.settings ?? {});
       browsers.clear();
       views.clear();
       body.replaceChildren();
@@ -1066,7 +1069,7 @@
       return [...browsers.keys()];
     }
     if (op.t === 'settings') {
-      serverSettings = op.settings;
+      receiveSettings(op.settings);
       return [];
     }
     if (op.t === 'ai') {
@@ -1121,7 +1124,7 @@
       }
       touched.forEach(update);
       renderSummary();
-      renderRaiseNew();
+      settingsEditor.update(serverSettings);
       if (restarting && restartDisconnected && snapshot) {
         restartReady = true;
         finishRestart();

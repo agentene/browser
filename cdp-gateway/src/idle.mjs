@@ -16,9 +16,12 @@ function busy() {
     || (VIEWER_SOCKET !== '' && connectionsTo(VIEWER_SOCKET) > 0);
 }
 
-export function watchIdle() {
+let timer;
+export function watchIdle(reset = false) {
+  clearInterval(timer);
+  if (reset) mainBrowser.lastActive = Date.now();
   if (!IDLE_TIMEOUT_MS) return;
-  setInterval(() => {
+  timer = setInterval(() => {
     if (!mainBrowser.running) return;
     if (busy()) {
       mainBrowser.lastActive = Date.now();
