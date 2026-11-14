@@ -291,7 +291,7 @@ Configure browser, capacity, desktop and audio preferences in **Settings** in ei
 | `CHROMIUM_AUTOSTART` | Start the main browser with the container | `true` | Next container start |
 | `CHROMIUM_IDLE_TIMEOUT` | Idle close time (minutes) | `0` | Live; 0 disables it, changes reset the timer |
 | `CHROMIUM_START_URL` | Main browser startup page | `about:blank` | Next main browser start |
-| `CHROMIUM_LANG` | Browser language | `en-US` | Container restart |
+| `CHROMIUM_LANG` | Browser language | `en-US` | New browser processes after saving; no container restart |
 | `CHROMIUM_HEADLESS` | Headless browser | `false` | Container restart |
 | `CHROMIUM_GPU` | Rendering policy | `auto` | Container restart; auto / off / strict |
 | `CDP_CONTEXTS_MAX` | Maximum running isolated browsers | `4` | Live; existing running browsers are not stopped on save |
@@ -426,7 +426,7 @@ What it does:
 
 ### Timezone and language
 
-Defaults are the container-friendly **UTC** timezone and **system-default English** (`en-US`) browser locale. Set the timezone through the environment. Choose the browser language in web Settings, save it, and restart the container:
+Defaults are the container-friendly **UTC** timezone and **system-default English** (`en-US`) browser locale. Set the timezone through the environment. Choose the browser language from the dropdown in web Settings and save it. New browser processes use it without a container restart:
 
 ```bash
 # with docker run
@@ -436,7 +436,7 @@ docker run -e TZ=Asia/Shanghai ...
 TZ=Asia/Shanghai
 ```
 
-**Browser language** sets both the browser UI language and `navigator.language`/`Accept-Language`; the entrypoint seeds the persisted profile so the locale applies even to profiles created with a different language (see `entrypoint/lib/chromium.sh` for the gory details).
+**Browser language** offers names such as “English (United States)” and “Chinese (Simplified)” while storing the corresponding locale tags. It sets both the browser UI language and `navigator.language`/`Accept-Language`. After saving, new isolated browsers, browsers woken from hibernation, and the main browser when started again use the selected language; already running browsers retain theirs. Before each process starts, the gateway updates that profile’s language preferences and the child’s environment, including profiles originally created in another language.
 
 ## HTTPS
 
@@ -652,7 +652,7 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 | Browser window not in the stream                  | **Headless browser** on set? The default runs headed on the streamed display.                                                                                                                                                             |
 | Isolated session fails with `CDP context limit reached` | `reject` mode is selected, or every running browser is temporarily ineligible for hibernation. Check card reasons, close an idle session, or raise **Maximum running isolated browsers**. Gateway log: `/tmp/cdp-gateway.log`; per-context chromium logs: `$CDP_CONTEXTS_DIR/<context>/chromium.log` while the context is alive (its directory is deleted with it, also after a failed startup — the reason is then in the gateway log). |
 | Profile "in use by another process" after restart | normally auto-cleaned; `rm browser/user-data/Singleton*` if it persists.                                                                                                                                                                        |
-| Locale not applied to an old profile              | the entrypoint seeds prefs at startup; save **Browser language** in web Settings and restart the container.                                                                                                                            |
+| Locale not applied to an old profile              | select and save **Browser language** in web Settings, then restart the target browser; no container restart is needed.                                                                                                                            |
 | HTTPS errors                                      | a broken or incomplete cert pair fails fast by design — fix or delete `tls/fullchain.pem` + `tls/privkey.pem` (a deleted pair is regenerated self-signed).                                                                                                |
 
 ## Contributing

@@ -1,6 +1,7 @@
 // Cloning the main browser's profile for a context's chromium.
 
 import { constants as fsConstants } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { CONTEXTS_DIR, MAIN_PROFILE } from './config.mjs';
@@ -103,4 +104,29 @@ export async function preparePrefs(profile, color) {
   } catch { /* fresh profile without Preferences */ }
   await fs.mkdir(path.dirname(prefsPath), { recursive: true });
   await fs.writeFile(prefsPath, JSON.stringify(adjustPrefs(prefs, color)));
+}
+
+// Only call before starting a process on this profile. In particular, changing
+// the global language must never rewrite a running main browser's Preferences.
+// A new clone or a sleeping browser can still carry the previous language.
+export async function prepareLanguage(profile, language) {
+  const prefsPath = path.join(profile, 'Default', 'Preferences');
+  let prefs = {};
+  try {
+    prefs = JSON.parse(await fs.readFile(prefsPath, 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+  }
+  if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs)) prefs = {};
+  const languages = [...new Set([language, language.split('-')[0]])].join(',');
+  prefs.intl = { ...prefs.intl, accept_languages: languages, selected_languages: languages };
+  await fs.mkdir(path.dirname(prefsPath), { recursive: true });
+  // Use Chromium's temporary-file prefix so a concurrent clone skips it.
+  const tmp = path.join(path.dirname(prefsPath), `.org.chromium.Chromium.language-${randomUUID()}`);
+  try {
+    await fs.writeFile(tmp, JSON.stringify(prefs), { mode: 0o600, flag: 'wx' });
+    await fs.rename(tmp, prefsPath);
+  } finally {
+    await fs.rm(tmp, { force: true });
+  }
 }

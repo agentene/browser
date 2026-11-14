@@ -291,7 +291,7 @@ location /desk/ {
 | `CHROMIUM_AUTOSTART` | 随容器启动主浏览器 | `true` | 下次容器启动 |
 | `CHROMIUM_IDLE_TIMEOUT` | 空闲关闭时间（分钟） | `0` | 在线；0 表示不关闭，修改后重新计时 |
 | `CHROMIUM_START_URL` | 主浏览器启动页 | `about:blank` | 下次主浏览器启动 |
-| `CHROMIUM_LANG` | 浏览器语言 | `en-US` | 重启容器 |
+| `CHROMIUM_LANG` | 浏览器语言 | `en-US` | 保存后新启动的浏览器进程生效，无需重启容器 |
 | `CHROMIUM_HEADLESS` | 无头浏览器 | `false` | 重启容器 |
 | `CHROMIUM_GPU` | 渲染策略 | `auto` | 重启容器；auto / off / strict |
 | `CDP_CONTEXTS_MAX` | 隔离浏览器运行上限 | `4` | 在线；保存时不停止现有运行实例 |
@@ -424,7 +424,7 @@ RUN_USER=0             # 不降权:所有进程以 root 运行
 
 ### 时区与语言
 
-默认值是对容器友好的 **UTC** 时区与**系统默认英语**(`en-US`)浏览器语言。时区仍通过环境变量设置；浏览器语言请在 Web 配置页选择，保存后重启容器生效:
+默认值是对容器友好的 **UTC** 时区与**系统默认英语**(`en-US`)浏览器语言。时区仍通过环境变量设置；浏览器语言请在 Web 配置页的下拉框中选择，保存后对新启动的浏览器进程生效，无需重启容器:
 
 ```bash
 # docker run
@@ -434,7 +434,7 @@ docker run -e TZ=Asia/Shanghai ...
 TZ=Asia/Shanghai
 ```
 
-**浏览器语言** 同时决定浏览器 UI 语言和 `navigator.language` / `Accept-Language`;入口脚本会对持久化配置目录做预置,即使目录最初是用其他语言创建的也能生效(细节见 `entrypoint/lib/chromium.sh`)。
+**浏览器语言**下拉框使用“英语 (美国)”“中文 (简体)”等名称，内部保存对应的语言标识。它同时决定浏览器 UI 语言和 `navigator.language` / `Accept-Language`。保存后，新建的隔离浏览器、从休眠中唤醒的浏览器和重新启动的主浏览器都会使用所选语言；正在运行的浏览器保持原语言。网关在每次启动进程前同步该 profile 的语言偏好与进程环境，即使 profile 最初使用其他语言也能生效。
 
 ## HTTPS
 
@@ -651,7 +651,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 | 串流里看不到浏览器窗口                         | 是否设了 **无头浏览器**开启?默认有头并显示在串流桌面。                                                                                                                                                          |
 | 隔离 session 报错 `CDP context limit reached`  | 当前为 `reject` 模式,或所有运行浏览器均暂不可休眠。查看卡片原因、关闭空闲 session,或提高 **隔离浏览器运行上限**。网关日志在 `/tmp/cdp-gateway.log`,各 context 的 Chromium 日志在 `$CDP_CONTEXTS_DIR/<context>/chromium.log`(仅在 context 存活期间存在:目录随 context 一起删除,启动失败时也一样 —— 此时原因见网关日志)。     |
 | 重启后提示 profile "in use by another process" | 正常情况会自动清理;仍出现就 `rm browser/user-data/Singleton*`。                                                                                                                                                          |
-| 旧配置目录语言未生效                           | 入口脚本启动时会预置偏好;在 Web 配置页保存**浏览器语言**后重启容器。                                                                                                                                           |
+| 旧配置目录语言未生效                           | 在 Web 配置页选择并保存**浏览器语言**，随后重新启动目标浏览器；无需重启容器。                                                                                                                                           |
 | HTTPS 报错                                     | 证书对损坏或不完整时会快速失败 —— 修复或删除 `tls/fullchain.pem` + `tls/privkey.pem`(删掉后重新生成自签对)。                                                                                                                    |
 
 ## 参与贡献

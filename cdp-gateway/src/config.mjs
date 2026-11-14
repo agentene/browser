@@ -42,6 +42,7 @@ export const MAIN_LOG = '/tmp/chromium.log';
 export const MAIN_AUTOSTART = STARTUP_SETTINGS.browser.autostart;
 export let IDLE_TIMEOUT_MS = STARTUP_SETTINGS.browser.idleTimeout * 60_000;
 export let START_URL = STARTUP_SETTINGS.browser.startUrl;
+export let BROWSER_LANGUAGE = STARTUP_SETTINGS.browser.language;
 // Selkies' unix socket: an open connection there is someone watching
 export const VIEWER_SOCKET = env.CDP_GATEWAY_VIEWER_SOCKET || '';
 // SCREEN_GEOMETRY as WxH: the desktop size while nobody watches (screen.mjs)
@@ -77,6 +78,7 @@ export function applyRuntimeSettings(values) {
   HIBERNATED_MAX = values.contexts.maxHibernated;
   IDLE_TIMEOUT_MS = values.browser.idleTimeout * 60_000;
   START_URL = values.browser.startUrl;
+  BROWSER_LANGUAGE = values.browser.language;
   INPUT_OVERLAY = OVERLAY_AVAILABLE ? values.overlay.mode : 'off';
 }
 

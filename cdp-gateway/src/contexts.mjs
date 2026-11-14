@@ -9,7 +9,7 @@ import {
   CONTEXT_COLORS, CONTEXTS_DIR, CONTEXTS_HEADLESS, MAIN_PROFILE, MAX_CONTEXTS, CONTEXTS_OVERFLOW, HIBERNATED_MAX, WAYLAND,
   appId, readFlags,
 } from './config.mjs';
-import { browserReady, launchChromium } from './launch.mjs';
+import { browserReady, launchChromium, prepareBrowserLaunch } from './launch.mjs';
 import { restoreScreen } from './screen.mjs';
 import { cloneProfile, preparePrefs } from './profile.mjs';
 import { copyCookies, restoreLocalStorage, snapshotLocalStorage } from './storage-sync.mjs';
@@ -125,6 +125,7 @@ export class Context {
     ]);
     // the Wayland app_id focus() raises this context's windows by
     if (WAYLAND && !CONTEXTS_HEADLESS) flags.push(`--class=${appId(this.name)}`);
+    const env = await prepareBrowserLaunch(this.profile);
     const logPath = path.join(this.dir, 'chromium.log');
     const logFile = createWriteStream(logPath, { flags: 'a' });
     // an error on the log (cannot be opened, the disk filled up) would be an
@@ -137,7 +138,7 @@ export class Context {
     });
     if (!CONTEXTS_HEADLESS) await restoreScreen();
     if (this.destroyed || !this.alive()) { logFile.end(); throw new Error('context was deleted or its owner disconnected'); }
-    const { proc, pipe } = launchChromium(flags, logFile, this.name);
+    const { proc, pipe } = launchChromium(flags, logFile, this.name, env);
     this.proc = proc;
     this.pipe = pipe;
     // a failed spawn (EAGAIN, ENOMEM, ...) is an 'error' event and no 'exit';

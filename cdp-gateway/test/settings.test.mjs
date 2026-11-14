@@ -100,8 +100,12 @@ test('atomic persistence, live application, restart state, conflicts and retry a
     assert.equal(config.MAX_CONTEXTS, 7);
     assert.equal(config.IDLE_TIMEOUT_MS, 300000);
     assert.equal(config.START_URL, 'https://example.com/');
-    assert.equal(changed.effective.browser.language, 'en-US');
-    assert.deepEqual(changed.pendingRestart.sort(), ['browser.language', 'desktop.width']);
+    assert.equal(changed.effective.browser.language, 'zh-CN');
+    assert.equal(config.BROWSER_LANGUAGE, 'zh-CN');
+    assert.equal(changed.fields.browser.language.type, 'select');
+    assert.equal(changed.fields.browser.language.apply, 'next-start');
+    assert.equal(changed.fields.browser.language.optionLabels['zh-CN'][1], '中文 (简体)');
+    assert.deepEqual(changed.pendingRestart, ['desktop.width']);
     assert.equal(JSON.parse(fs.readFileSync(file)).future.keep, true);
     assert.equal(JSON.parse(fs.readFileSync(file)).desktop.raiseNewWindows, false);
     await assert.rejects(updateSettings({ revision: original.revision, patch: { contexts: { maxRunning: 1 } } }), (e) => e.details.code === 'settings_conflict');

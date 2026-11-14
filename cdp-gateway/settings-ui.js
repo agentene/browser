@@ -6,7 +6,7 @@
     'browser.autostart': ['Start the main browser with the container', '随容器启动主浏览器'],
     'browser.idleTimeout': ['Close after idle minutes (0 = never)', '空闲关闭时间（分钟，0 表示不关闭）'],
     'browser.startUrl': ['Main browser startup page', '主浏览器启动页'],
-    'browser.language': ['Browser language (e.g. en-US, zh-CN)', '浏览器语言（如 en-US、zh-CN）'],
+    'browser.language': ['Browser language', '浏览器语言'],
     'browser.headless': ['Headless browser', '无头浏览器'],
     'browser.gpu': ['Rendering policy', '渲染策略'],
     'contexts.maxRunning': ['Maximum running isolated browsers', '隔离浏览器运行上限'],
@@ -55,7 +55,22 @@
     container.append(root);
     const zh = () => getLang() === 'zh';
     const label = (key) => LABELS[key]?.[zh() ? 1 : 0] || key;
-    const textValue = (v) => typeof v === 'boolean' ? (v ? (zh() ? '开启' : 'On') : (zh() ? '关闭' : 'Off')) : label(String(v));
+    function optionLabel(field, value, name) {
+      const translated = field.optionLabels?.[value]?.[zh() ? 1 : 0];
+      if (translated) return translated;
+      if (name === 'browser.language') {
+        // An older settings file may contain a valid locale outside the common
+        // choices. Keep it selected and show its name instead of resetting it.
+        try {
+          const translatedName = new Intl.DisplayNames([zh() ? 'zh-CN' : 'en'], { type: 'language', fallback: 'none' }).of(value);
+          if (translatedName) return translatedName;
+        } catch { /* unknown locale */ }
+        return zh() ? '已保存的语言' : 'Saved language';
+      }
+      return label(value);
+    }
+    const textValue = (v, field, name) => typeof v === 'boolean' ? (v ? (zh() ? '开启' : 'On') : (zh() ? '关闭' : 'Off'))
+      : field.type === 'select' ? optionLabel(field, String(v), name) : label(String(v));
     function build() {
       if (!state?.fields || rows.size) return;
       for (const [section, fields] of Object.entries(state.fields)) {
@@ -120,14 +135,21 @@
         const value = (draft || state.values)[row.section][row.key];
         row.title.textContent = label(name);
         row.input.disabled = !field.available;
+        if (name === 'browser.language') {
+          for (const option of [...row.input.options]) if (!field.options.includes(option.value) && option.value !== value) option.remove();
+          if (![...row.input.options].some((option) => option.value === value)) {
+            const option = el('option'); option.value = value; row.input.append(option);
+          }
+        }
         if (field.type === 'boolean') row.input.checked = value;
         else if (document.activeElement !== row.input && row.input.getRootNode().activeElement !== row.input) row.input.value = value;
-        if (field.options) for (const option of row.input.options) option.textContent = label(option.value);
+        if (field.options) for (const option of row.input.options) option.textContent = optionLabel(field, option.value, name);
         row.hint.textContent = !field.available ? (zh() ? '当前运行模式下不可用' : 'Unavailable in this service mode')
           : field.apply === 'restart' ? (zh() ? '保存后需重启容器生效' : 'Requires a container restart after saving')
+          : name === 'browser.language' ? (zh() ? '保存后新启动的浏览器进程生效，已运行的浏览器不受影响' : 'Applies to newly started browser processes after saving; running browsers keep their language')
           : field.apply === 'next-start' ? (zh() ? '用于下次启动，不改变当前浏览器' : 'Used on the next startup; leaves current browsers running')
           : (zh() ? '保存后在线应用' : 'Applies live after saving');
-        if (dirty.has(name)) row.hint.textContent += (zh() ? ' · 当前保存值：' : ' · Currently saved: ') + textValue(state.values[row.section][row.key]);
+        if (dirty.has(name)) row.hint.textContent += (zh() ? ' · 当前保存值：' : ' · Currently saved: ') + textValue(state.values[row.section][row.key], field, name);
       }
       const messages = [];
       if (state?.pendingRestart?.length) messages.push((zh() ? '待重启生效：' : 'Restart required: ') + state.pendingRestart.map(label).join('、'));

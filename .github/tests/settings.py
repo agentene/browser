@@ -72,7 +72,14 @@ def run(backend, cdp=True, desktop=True):
                     assert response.status == status, (url, response.status, raw[:500])
                     return json.loads(raw) if "application/json" in response.headers.get("Content-Type", "") else raw
 
+            def ready():
+                # PID 1 logs readiness just after starting nginx; its listener
+                # and auth upstream can still be opening on a fast CDP-only boot.
+                with opener.open(base + "/__auth/api/state", timeout=5) as response:
+                    return response.status == 200
+
             wait_for(lambda: "all services up" in docker("logs", name))
+            wait_for(ready)
             request(api + "/settings", status=401)
             request(base + "/__auth/api/setup", "POST", {"code": "settings-smoke-code", "username": "admin", "password": "settings-test-password"})
             initial = request(api + "/settings")
@@ -90,6 +97,52 @@ def run(backend, cdp=True, desktop=True):
             def patch(values, status=200, **extra):
                 return request(api + "/settings", "PATCH", {"revision": request(api + "/settings")["revision"], "patch": values, **extra}, status)
 
+            def page_language(target):
+                probe = "const ws = new WebSocket(process.argv[1]); ws.onopen=()=>ws.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:'navigator.language',returnByValue:true}})); ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id===1){console.log(m.result.result.value);ws.close();}}; ws.onerror=()=>process.exit(1);"
+                return subprocess.check_output(["node", "-e", probe, target["webSocketDebuggerUrl"]], text=True, timeout=10).strip()
+
+            def new_browser():
+                existing = {t["id"] for t in request(browser + "/json/list")}
+                created = request(api + "/browsers", "POST", status=201)["name"]
+                target = next(t for t in request(browser + "/json/list") if t["type"] == "page" and t["id"] not in existing)
+                return created, target
+
+            def main_language():
+                target = request(browser + "/json/new?about:blank", "PUT")
+                try:
+                    return page_language(target)
+                finally:
+                    request(browser + "/json/close/" + target["id"])
+
+            if cdp:
+                # Locale changes affect new processes, including wake and main
+                # relaunch, without touching existing browsers or the container.
+                started_at = json.loads(docker("inspect", name))[0]["State"]["StartedAt"]
+                request(api + "/main/start", "POST")
+                assert main_language() == "en-US"
+                old_name, old_target = new_browser()
+                assert page_language(old_target) == "en-US"
+                changed = patch({"browser": {"language": "zh-CN"}})
+                assert "browser.language" not in changed["pendingRestart"]
+                assert changed["fields"]["browser"]["language"]["type"] == "select"
+                assert main_language() == "en-US"
+                assert page_language(old_target) == "en-US"
+                new_name, new_target = new_browser()
+                assert page_language(new_target) == "zh-CN"
+                request(api + "/" + old_name + "/hibernate", "POST")
+                patch({"browser": {"language": "ja-JP"}})
+                request(api + "/" + old_name + "/wake", "POST")
+                assert page_language(old_target) == "ja-JP"
+                assert page_language(new_target) == "zh-CN"
+                request(api + "/main/stop", "POST")
+                request(api + "/main/start", "POST")
+                assert main_language() == "ja-JP"
+                assert json.loads(docker("inspect", name))[0]["State"]["StartedAt"] == started_at
+                assert request(api + "/settings")["revision"].split(":")[0] == before.split(":")[0]
+                request(api + "/" + old_name, "DELETE")
+                request(api + "/" + new_name, "DELETE")
+                print(f"Browser language applies on new/woken/restarted processes without a container restart: {backend}", flush=True)
+
             if cdp:
                 result = patch({"contexts": {"maxRunning": 2}, "browser": {"idleTimeout": 1}})
                 assert result["effective"]["contexts"]["maxRunning"] == 2
@@ -105,7 +158,7 @@ def run(backend, cdp=True, desktop=True):
                     if item != removed:
                         request(api + "/" + item, "DELETE")
                 pending = patch({"browser": {"language": "zh-CN", "gpu": "off", "headless": True, "startUrl": "data:text/html,%3Ctitle%3EConfigured%3C/title%3E"}})
-                assert "browser.language" in pending["pendingRestart"]
+                assert "browser.language" not in pending["pendingRestart"]
             else:
                 request(api + "/main/start", "POST", status=403)
                 assert request(api + "/browsers")["enabled"] is False
@@ -130,7 +183,8 @@ def run(backend, cdp=True, desktop=True):
             browser = f"http://127.0.0.1:{ports['9222/tcp'][0]['HostPort']}"
             base = web if desktop else browser
             api = base + ("/cdp-console/api" if desktop else "/console/api")
-            restored = wait_for(lambda: request(api + "/settings"))
+            wait_for(ready)
+            restored = request(api + "/settings")
             assert restored["values"] == desired
             assert restored["pendingRestart"] == []
             assert restored["errors"] == {}
@@ -139,8 +193,7 @@ def run(backend, cdp=True, desktop=True):
                 targets = wait_for(lambda: request(browser + "/json/list"))
                 assert any(t["url"] == desired["browser"]["startUrl"] for t in targets), targets
                 target = next(t for t in targets if t["url"] == desired["browser"]["startUrl"])
-                probe = "const ws = new WebSocket(process.argv[1]); ws.onopen=()=>ws.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:'navigator.language',returnByValue:true}})); ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id===1){console.log(m.result.result.value);ws.close();}}; ws.onerror=()=>process.exit(1);"
-                assert subprocess.check_output(["node", "-e", probe, target["webSocketDebuggerUrl"]], text=True, timeout=10).strip() == "zh-CN"
+                assert page_language(target) == "zh-CN"
                 prefs = json.loads(docker("exec", name, "cat", "/browser/user-data/Default/Preferences"))
                 assert "zh-CN" in prefs["intl"]["accept_languages"]
                 flags = docker("exec", name, "cat", "/tmp/cdp-gateway-main-flags")
