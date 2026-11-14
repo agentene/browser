@@ -109,6 +109,29 @@ try {
   await state(b.name, null); await state(c.name, null);
   console.log('PASS logical Page identity, cached helpers, LRU, newPage and disconnect cleanup');
 
+  const occupied = await connect();
+  const keptPage = await occupied.c.newPage();
+  const occupiedPid = (await state(occupied.name, 'running')).pid;
+  const emptied = await connect();
+  await (await emptied.c.newPage()).close();
+  const replacement = await connect();
+  await state(emptied.name, 'hibernated');
+  assert.equal((await state(occupied.name, 'running')).pid, occupiedPid, 'creation must prefer a newer empty browser over an older browser with tabs');
+  assert.equal((await state(emptied.name, 'hibernated')).tabs.length, 0);
+  await emptied.c.cookies();
+  await state(emptied.name, 'running');
+  await state(replacement.name, 'hibernated');
+  assert.equal((await state(occupied.name, 'running')).pid, occupiedPid, 'waking must also prefer an empty browser');
+  await keptPage.close(); // Both are empty now; the originally older browser has the most recent activity.
+  const next = await connect();
+  await state(emptied.name, 'hibernated');
+  assert.equal((await state(occupied.name, 'running')).pid, occupiedPid, 'multiple empty browsers must be selected by LRU');
+  for (const client of [occupied, emptied, replacement, next]) {
+    await client.b.close();
+    await state(client.name, null);
+  }
+  console.log('PASS empty browsers take priority on creation and wake; multiple empty browsers use LRU');
+
   const native = await connect();
   const fixture = (process.env.CDP_FIXTURE_URL ?? endpoint) + '/json/version';
   const nativePages = [];
@@ -204,7 +227,12 @@ try {
       await p.evaluate((methods) => { for (const method of methods) void fetch('/' + method).catch(() => {}); }, [...gates.keys()]);
       await bounded(Promise.all([...gates.values()].map((gate) => gate.paused.promise)), 'request interception');
       if (cause === 'console') await action(delayed.name, 'hibernate');
-      const peers = [await connect(), await connect()];
+      const peers = [];
+      for (let i = 0; i < 2; i++) {
+        const peer = await connect();
+        await peer.c.newPage(); // Keep every candidate nonempty so LRU selects the intercepted browser.
+        peers.push(peer);
+      }
       await state(delayed.name, 'hibernated');
       const pids = new Map();
       for (const peer of peers) pids.set(peer.name, (await state(peer.name, 'running')).pid);

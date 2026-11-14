@@ -218,7 +218,7 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 背景的像素存储由图片尺寸决定,4K 和小数输出缩放也不再需要整屏背景位图。Wayland 将一个纯色像素铺满输出,再叠加图片大小的子表面;固定版本的 `swaybg` 应用 [`patches/swaybg-center-surfaces.patch`](patches/swaybg-center-surfaces.patch),并保留带分配检查的 [`memfd` 缓冲区](patches/swaybg-memfd.patch)。X11 使用平铺的 1×1 root pixmap 和图片大小的窗口,鼠标输入可穿透,窗口始终位于浏览器下方;原生 helper 无需常驻 Python PNG 解码器。调整分辨率只重新定位或裁剪图片,不会分配整屏背景位图。背景可在 Docker 默认的 64 MiB `/dev/shm` 下工作;桌面、浏览器和编码器仍需要各自的内存。
 
-**达到上限后的休眠。** `CDP_CONTEXTS_OVERFLOW=hibernate`(默认)允许保留超过 `CDP_CONTEXTS_MAX` 个隔离浏览器。启动另一个浏览器前,网关会正常关闭最久未操作且可休眠的浏览器,保留其 profile 和标签快照。正在启动、唤醒、尚未退出的浏览器都占运行名额;主浏览器不计入。设为 `CDP_CONTEXTS_OVERFLOW=reject` 可恢复原先的超额报错行为。
+**达到上限后的休眠。** `CDP_CONTEXTS_OVERFLOW=hibernate`(默认)允许保留超过 `CDP_CONTEXTS_MAX` 个隔离浏览器。创建或唤醒另一个浏览器前,网关会优先选择没有打开任何 tab 且可休眠的浏览器;如果有多个空浏览器,则选择其中最久未操作的一个。如果没有可休眠的空浏览器,则从所有可休眠的浏览器中按 LRU 选择最久未操作的一个,不按 tab 数量多少排序。网关会正常关闭选中的浏览器,保留其 profile 和标签快照。正在启动、唤醒、尚未退出的浏览器都占运行名额;主浏览器不计入。设为 `CDP_CONTEXTS_OVERFLOW=reject` 可恢复原先的超额报错行为。
 
 * console 和侧栏分别显示运行与休眠数量、保存的标签以及 **休眠** / **唤醒** 按钮。点击休眠卡片或标签也会唤醒。console 刷新和缩略图采集不更新活跃时间;LRU 按客户端 CDP 指令和 console 显式操作计算。
 * CDP 连接、context alias 和顶层 Playwright `Page` 对象保持有效。需要浏览器的指令会自动唤醒;`context.pages()` 是本地列表,不会触发唤醒。原来已有标签时,未修改的 playwright-cli `tab-list` 唤醒不会多开空白页,`tab-new`(带或不带 URL)则恰好新增一个标签。`tab-close` 关闭最后一个标签后,浏览器仍以零标签状态运行,刚唤醒时也一样;`tab-new` 会复用该浏览器,无需重新 `open`。原本没有标签时,仍遵循 CLI 自动创建默认页面的行为。
@@ -362,7 +362,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | 变量                        | 默认值                      | 说明                                                                                                                                    |
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDP_CONTEXTS_MAX` | `4` | 同时运行或启动的隔离浏览器上限;主浏览器和休眠项不计入 |
-| `CDP_CONTEXTS_OVERFLOW` | `hibernate` | 达上限后 `hibernate` 最久未操作的可休眠浏览器;`reject` 返回错误 |
+| `CDP_CONTEXTS_OVERFLOW` | `hibernate` | 达上限后 `hibernate` 优先选择零 tab 的可休眠浏览器,同组内按 LRU 排序;`reject` 返回错误 |
 | `CDP_CONTEXTS_HIBERNATED_MAX` | `16` | 保留的休眠 profile 个数,不是字节数;超出删除最早休眠项;`0` 不保留 |
 | `CDP_ALLOW_ORIGINS`         | *(空)*                      | 允许使用 CDP API 的网页 origin,逗号分隔(`*` = 任意),与 Chromium 的 `--remote-allow-origins` 相同;空 = 都不允许 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |
 | `CDP_CONSOLE_ACTIONS`       | `true`                      | 允许在控制台和侧边栏新建独立浏览器、关闭单个标签页 |

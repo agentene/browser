@@ -118,8 +118,7 @@
 #   Clients need no changes.)
 #   CDP_CONTEXTS_MAX=4           most isolated browsers running/starting at once;
 #                                main and hibernated browsers are excluded
-#   CDP_CONTEXTS_OVERFLOW=hibernate  hibernate the least recently used eligible
-#                                browser at capacity; reject = previous behavior
+#   CDP_CONTEXTS_OVERFLOW=hibernate  at capacity, hibernate eligible browsers with no tabs first, then LRU within each group; reject = previous behavior
 #   CDP_CONTEXTS_HIBERNATED_MAX=16  retained sleeping browsers (not a byte quota);
 #                                delete the oldest beyond this cap; 0 keeps none
 #   CDP_ALLOW_ORIGINS=""         web page origins allowed to use the CDP API

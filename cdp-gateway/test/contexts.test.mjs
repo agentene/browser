@@ -20,6 +20,7 @@ import path from 'node:path';
 const args = process.argv.slice(2);
 if (fs.existsSync(${JSON.stringify(path.join(tmp, 'fail-start'))})) process.exit(1);
 const dir = args.find((a) => a.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+const targetsFile = path.join(dir, 'test-targets.json');
 fs.writeFileSync(path.join(${JSON.stringify(tmp)}, 'args-' + path.basename(path.dirname(dir))), args.join('\\n'));
 // sockets, not fs streams: a blocking read of a pipe in the thread pool
 // would hold up process.exit
@@ -33,7 +34,7 @@ new net.Socket({ fd: 3, writable: false }).on('data', (d) => {
     buf = buf.slice(i + 1);
     const result = msg.method === 'Browser.getVersion' ? { product: 'Fake/1', revision: '@fake' }
       : msg.method === 'Storage.getCookies' ? { cookies: [] }
-      : msg.method === 'Target.getTargets' ? { targetInfos: [] } : {};
+      : msg.method === 'Target.getTargets' ? { targetInfos: fs.existsSync(targetsFile) ? JSON.parse(fs.readFileSync(targetsFile, 'utf8')) : [] } : {};
     out.write(JSON.stringify({ id: msg.id, result, sessionId: msg.sessionId }) + '\\0');
     if (msg.method === 'Browser.close' && !fs.existsSync(${JSON.stringify(path.join(tmp, 'hang-close'))})) setImmediate(() => process.exit(0));
   }
@@ -65,6 +66,7 @@ before(async () => {
 
 // The command line the fake chromium of a context was started with.
 const argsOf = (context) => fs.readFileSync(path.join(tmp, `args-${context.name}`), 'utf8').split('\n');
+const setTargets = (context, types) => fs.writeFileSync(path.join(context.profile, 'test-targets.json'), JSON.stringify(types.map((type, i) => ({ targetId: `target-${i}`, type, title: type, url: 'about:blank' }))));
 
 after(async () => {
   await Promise.all(contexts.values().map((c) => c.destroy('test over')));
@@ -173,6 +175,54 @@ test('LRU releases a real process before replacement; waking reuses its profile'
   for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) assert.equal(fs.lstatSync(path.join(a.profile, name), { throwIfNoEntry: false }), undefined);
   await Promise.all([a, b, c].map((c) => c.destroy('test')));
 });
+
+for (const { name, targets, ages, blocked, victim } of [
+  { name: 'a newer empty browser is hibernated before an older browser with tabs', targets: [['page'], []], ages: [1, 2], victim: 1 },
+  { name: 'multiple empty browsers are ordered by activity, not creation', targets: [[], []], ages: [2, 1], victim: 1 },
+  { name: 'browsers with tabs use LRU regardless of their tab counts', targets: [['page', 'page'], ['page']], ages: [1, 2], victim: 0 },
+  { name: 'worker and iframe targets do not count as open tabs', targets: [['page'], ['service_worker', 'iframe']], ages: [1, 2], victim: 1 },
+  { name: 'an empty browser with a direct page connection remains ineligible', targets: [['page'], []], ages: [2, 1], blocked: 1, victim: 0 },
+]) {
+  test(name, async () => {
+    const made = [await contexts.create('a'), await contexts.create('b')];
+    try {
+      for (const [i, c] of made.entries()) { setTargets(c, targets[i]); c.lastUsedAt = ages[i]; }
+      if (blocked !== undefined) made[blocked].relays = 1;
+      const survivorPid = made[1 - victim].proc.pid;
+      made.push(await contexts.create('c'));
+      assert.equal(made[victim].state, 'hibernated');
+      assert.equal(made[victim].proc, null);
+      assert.equal(made[1 - victim].state, 'running');
+      assert.equal(made[1 - victim].proc.pid, survivorPid);
+      assert.deepEqual(made.slice(0, 2).map((c) => c.lastUsedAt), ages, 'internal tab queries must not change LRU activity');
+      assert.equal(contexts.running, 2);
+    } finally { await Promise.all(made.map((c) => c.destroy('test'))); }
+  });
+}
+
+for (const change of ['query failure', 'new blocker', 'disconnect']) {
+  test(`tab selection handles ${change} while probing a candidate`, async (t) => {
+    const made = [await contexts.create('a'), await contexts.create('b')];
+    const [a, b] = made;
+    setTargets(a, ['page']);
+    a.lastUsedAt = 1; b.lastUsedAt = 2;
+    const call = b.pipe.call.bind(b.pipe);
+    t.mock.method(b.pipe, 'call', async (method, ...args) => {
+      if (method !== 'Target.getTargets') return call(method, ...args);
+      if (change === 'query failure') throw new Error('target query failed');
+      if (change === 'new blocker') b.relays = 1;
+      if (change === 'disconnect') await b.destroy('owner disconnected while probing');
+      return { targetInfos: [] };
+    });
+    try {
+      made.push(await contexts.create('c'));
+      assert.equal(a.state, change === 'disconnect' ? 'running' : 'hibernated');
+      assert.equal(b.state, change === 'disconnect' ? 'destroying' : 'running');
+      assert.equal(contexts.running, 2);
+      assert.equal(made[2].state, 'running');
+    } finally { await Promise.all(made.map((c) => c.destroy('test'))); }
+  });
+}
 
 test('concurrent creation respects running and retained limits; deletion removes sleepers', async () => {
   let peak = 0;

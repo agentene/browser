@@ -16,6 +16,7 @@ import { copyCookies, restoreLocalStorage, snapshotLocalStorage } from './storag
 import { killGroup, log, sleep } from './util.mjs';
 import { ContextSession } from './context-session.mjs';
 import { captureTabs, nativeRestore, restoreTabs, parkSessionFiles, finishSessionFiles } from './context-restore.mjs';
+import { pageInfos } from './targets.mjs';
 
 const STARTUP_TIMEOUT_MS = 15_000;
 
@@ -348,11 +349,21 @@ export class ContextRegistry {
   async makeRoom(exclude) {
     if (this.closing) throw new Error('CDP gateway is shutting down');
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+    const eligible = (c) => c !== exclude && c.state === 'running' && !c.destroyed && !c.blockedReason;
     while (this.running >= MAX_CONTEXTS) {
       if (CONTEXTS_OVERFLOW === 'reject') throw new Error(`CDP context limit reached (${MAX_CONTEXTS}); close another isolated session or raise CDP_CONTEXTS_MAX`);
-      const candidates = this.values().filter((c) => c !== exclude && c.state === 'running' && !c.destroyed && !c.blockedReason);
-      candidates.sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.createdAt.localeCompare(b.createdAt));
-      if (candidates.length) { await candidates[0].hibernateNow('least recently used; running limit reached'); continue; }
+      const candidates = this.values().filter(eligible);
+      // Query the browser itself: console-owned contexts may have no client session, and its target cache may be incomplete. A failed query cannot establish that a browser is empty.
+      const tabs = await Promise.allSettled(candidates.map((c) => pageInfos(c.pipe)));
+      const empty = new Set(candidates.filter((_, i) => tabs[i].status === 'fulfilled' && tabs[i].value.length === 0));
+      candidates.sort((a, b) => Number(empty.has(b)) - Number(empty.has(a)) || a.lastUsedAt - b.lastUsedAt || a.createdAt.localeCompare(b.createdAt));
+      // A client can disconnect or acquire a hibernation blocker while the tab queries are in flight.
+      if (this.running < MAX_CONTEXTS) return;
+      const victim = candidates.find(eligible);
+      if (victim) {
+        await victim.hibernateNow(`${empty.has(victim) ? 'least recently used empty browser' : 'least recently used'}; running limit reached`);
+        continue;
+      }
       // A newly created context's Mux finishes attaching outside the registry
       // lock. Wait for that short lease, not for an arbitrary user command.
       if (Date.now() < deadline && this.values().some((c) => c.holds || c.destroyed)) { await sleep(20); continue; }

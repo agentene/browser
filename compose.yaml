@@ -208,7 +208,7 @@ services:
       # closes. Dashboard: http://host:${CDP_PORT}/console/
       # Running/starting isolated browsers; main and sleeping browsers excluded
       CDP_CONTEXTS_MAX: "${CDP_CONTEXTS_MAX:-4}"
-      # Hibernate the least recently used eligible browser, or reject at capacity
+      # At capacity, hibernate eligible browsers with no tabs first, then LRU within each group; or reject
       CDP_CONTEXTS_OVERFLOW: "${CDP_CONTEXTS_OVERFLOW:-hibernate}"
       # Retained sleeping browsers (not bytes); evict the oldest above this cap
       CDP_CONTEXTS_HIBERNATED_MAX: "${CDP_CONTEXTS_HIBERNATED_MAX:-16}"
