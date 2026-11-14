@@ -216,7 +216,7 @@ services:
       # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
       # or 401 when a login is on (502 = Selkies not up). With
       # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
-      # probed instead — /json/list, which (unlike /json/version) does not
+      # probed instead — /json/list, which does not
       # start a stopped main browser; 401 there means a CDP API key is set
       # (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
       # exits and docker restarts the container). $$ = evaluated in the

@@ -67,7 +67,7 @@ async function resolveTarget(req, p) {
       if (context?.state !== undefined && context.state !== 'running') throw new Error('browser is transitioning; retry the page connection');
       const upstream = await pipe.connect({ targetId: id });
       if (context) upstream.once('close', () => { context.relays--; });
-      return { kind: 'page', upstream, onMain: !context };
+      return { kind: 'page', upstream };
     } catch (err) { if (context) context.relays--; throw err; }
   }
   if (CONSOLE_SOCKETS.has(p)) {
@@ -112,6 +112,6 @@ export async function handleUpgrade(req, socket, head) {
     if (target.kind === 'browser') new Mux(client, clientAddress(req), target.upstream);
     else if (target.kind === 'console') subscribe(client);
     else if (target.kind === 'overlay') subscribeOverlay(client);
-    else relay(client, target.upstream, target.onMain);
+    else relay(client, target.upstream);
   });
 }

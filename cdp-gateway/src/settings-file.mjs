@@ -1,10 +1,10 @@
 import fs from 'node:fs';
-import { isObject } from './settings-schema.mjs';
+import { isObject, migrateSettings } from './settings-schema.mjs';
 
 export function readSettings(file, warn = () => {}) {
   try {
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (isObject(saved)) return saved;
+    if (isObject(saved)) return migrateSettings(saved);
     warn(`${file} is not a JSON object; using the defaults`);
   } catch (err) {
     if (err.code !== 'ENOENT') warn(`${file}: ${err.message}; using the defaults`);

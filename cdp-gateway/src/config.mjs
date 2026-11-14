@@ -27,7 +27,8 @@ export const STARTUP_SAVED = readSettings(SETTINGS_FILE, (message) => process.st
 export const STARTUP_SETTINGS = resolve(SCHEMA, STARTUP_SAVED);
 export const BROWSER_ENABLED = env.CDP_GATEWAY_BROWSER_ENABLED !== 'false';
 export const DESKTOP_ENABLED = env.CDP_GATEWAY_DESKTOP_ENABLED === 'true' || !!env.CDP_GATEWAY_RAISE_SWITCH;
-export const OVERLAY_AVAILABLE = BROWSER_ENABLED && DESKTOP_ENABLED;
+export const STREAM_ENABLED = env.CDP_GATEWAY_STREAM_ENABLED === 'true';
+export const OVERLAY_AVAILABLE = BROWSER_ENABLED && STREAM_ENABLED;
 export let MAX_CONTEXTS = STARTUP_SETTINGS.contexts.maxRunning;
 export let CONTEXTS_OVERFLOW = STARTUP_SETTINGS.contexts.overflow;
 export let HIBERNATED_MAX = STARTUP_SETTINGS.contexts.maxHibernated;
@@ -37,13 +38,9 @@ export const CHROME_BIN = env.CHROME_BIN;
 export const FLAGS_FILE = env.CDP_GATEWAY_FLAGS_FILE || '/tmp/cdp-gateway-chromium-flags';
 export const MAIN_FLAGS_FILE = env.CDP_GATEWAY_MAIN_FLAGS_FILE || '/tmp/cdp-gateway-main-flags';
 export const MAIN_LOG = '/tmp/chromium.log';
-// The gateway always owns the main browser (main-browser.mjs);
-// CHROMIUM_AUTOSTART=true starts it with the gateway, false on demand only.
-export const MAIN_AUTOSTART = STARTUP_SETTINGS.browser.autostart;
-export let IDLE_TIMEOUT_MS = STARTUP_SETTINGS.browser.idleTimeout * 60_000;
-export let START_URL = STARTUP_SETTINGS.browser.startUrl;
+// The gateway starts the main browser only when a client or the console needs it.
 export let BROWSER_LANGUAGE = STARTUP_SETTINGS.browser.language;
-// Selkies' unix socket: an open connection there is someone watching
+// Selkies' unix socket: viewers keep their current screen size (screen.mjs).
 export const VIEWER_SOCKET = env.CDP_GATEWAY_VIEWER_SOCKET || '';
 // SCREEN_GEOMETRY as WxH: the desktop size while nobody watches (screen.mjs)
 export const SCREEN_SIZE = env.CDP_GATEWAY_SCREEN_SIZE || '';
@@ -54,7 +51,6 @@ export const PROTOCOL_FILE = env.CDP_GATEWAY_PROTOCOL_FILE || '/opt/chrome-for-t
 export const VERSION_FILE = env.CDP_GATEWAY_VERSION_FILE || '/opt/chrome-for-testing/devtools-version.json';
 export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
 export const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
-export const CONTEXTS_HEADLESS = env.CDP_CONTEXTS_HEADLESS === '1';
 // desktop-raise-new-windows.sh, which hands the console's "new windows to
 // the front" to the desktop; empty when the browsers have no desktop
 export const RAISE_SWITCH = env.CDP_GATEWAY_RAISE_SWITCH || '';
@@ -76,8 +72,6 @@ export function applyRuntimeSettings(values) {
   MAX_CONTEXTS = values.contexts.maxRunning;
   CONTEXTS_OVERFLOW = values.contexts.overflow;
   HIBERNATED_MAX = values.contexts.maxHibernated;
-  IDLE_TIMEOUT_MS = values.browser.idleTimeout * 60_000;
-  START_URL = values.browser.startUrl;
   BROWSER_LANGUAGE = values.browser.language;
   INPUT_OVERLAY = OVERLAY_AVAILABLE ? values.overlay.mode : 'off';
 }

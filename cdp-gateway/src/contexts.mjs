@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { notifyChange } from './changes.mjs';
 import {
-  CONTEXT_COLORS, CONTEXTS_DIR, CONTEXTS_HEADLESS, MAIN_PROFILE, MAX_CONTEXTS, CONTEXTS_OVERFLOW, HIBERNATED_MAX, WAYLAND,
+  CONTEXT_COLORS, CONTEXTS_DIR, MAIN_PROFILE, MAX_CONTEXTS, CONTEXTS_OVERFLOW, HIBERNATED_MAX, WAYLAND,
   appId, readFlags,
 } from './config.mjs';
 import { browserReady, launchChromium, prepareBrowserLaunch } from './launch.mjs';
@@ -115,7 +115,6 @@ export class Context {
       await fs.rm(path.join(this.profile, name), { force: true });
     }
     let flags = readFlags();
-    if (CONTEXTS_HEADLESS && !flags.includes('--headless')) flags.push('--headless');
     flags = flags.concat([
       `--user-data-dir=${this.profile}`,
       // With the debugging pipe, this also keeps Chromium and its profile alive after the last window closes. Native restore is triggered explicitly in restoreTabs().
@@ -124,7 +123,7 @@ export class Context {
       ...this.proxy,
     ]);
     // the Wayland app_id focus() raises this context's windows by
-    if (WAYLAND && !CONTEXTS_HEADLESS) flags.push(`--class=${appId(this.name)}`);
+    if (WAYLAND) flags.push(`--class=${appId(this.name)}`);
     const env = await prepareBrowserLaunch(this.profile);
     const logPath = path.join(this.dir, 'chromium.log');
     const logFile = createWriteStream(logPath, { flags: 'a' });
@@ -136,7 +135,7 @@ export class Context {
       logFile.once('open', resolve);
       logFile.once('error', reject);
     });
-    if (!CONTEXTS_HEADLESS) await restoreScreen();
+    await restoreScreen();
     if (this.destroyed || !this.alive()) { logFile.end(); throw new Error('context was deleted or its owner disconnected'); }
     const { proc, pipe } = launchChromium(flags, logFile, this.name, env);
     this.proc = proc;

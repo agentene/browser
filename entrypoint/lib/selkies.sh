@@ -5,8 +5,7 @@
 # e.g. SELKIES_ENCODER (selkies' own default: h264enc).
 
 selkies_start() {
-    local extra_args=() resize_lock=""
-    [ "${SELKIES_RESIZE_LOCKED}" = "true" ] && resize_lock="|locked"
+    local extra_args=()
     selkies_backend_args
     selkies_media_defaults
     [ -n "${SELKIES_EXTRA_ARGS:-}" ] && read -r -a extra_args <<< "${SELKIES_EXTRA_ARGS}"
@@ -17,14 +16,17 @@ selkies_start() {
     # in the browser could open a loopback port's origin and use the desktop
     # past nginx's login (config.sh). Authentication belongs to nginx: Basic
     # Auth and token-based secure mode stay disabled even when extra args or
-    # native env settings request them.
+    # native env settings request them. Automatic resizing is fixed and locked;
+    # zero manual dimensions prevent native overrides from enabling manual sizing.
     start_service - \
         "${DROP[@]}" selkies \
         --unix-socket="${SELKIES_SOCKET}" \
         --subfolder="${SELKIES_SUBFOLDER}" \
-        --enable-resize="${SELKIES_ENABLE_RESIZE}${resize_lock}" \
         "${SELKIES_BACKEND_ARGS[@]}" \
         "${extra_args[@]}" \
+        --enable-resize='true|locked' \
+        --manual-resolution='false|locked' --manual-width=0 --manual-height=0 \
+        --audio-on-start=true \
         --enable-basic-auth=false \
         --master-token=
 }
@@ -44,9 +46,10 @@ selkies_wait_ready() {
     fi
 }
 
-# Media defaults, as the native SELKIES_* env vars so a user value (including
-# a "|locked" suffix) wins. Every media path is available but only the video
-# stream starts with the session: audio, microphone, webcam and gamepads wait
+# Audio starts on via the fixed CLI default above; viewers can toggle it.
+# Other media defaults use native SELKIES_* env vars so a user value (including
+# a "|locked" suffix) wins. Video and audio start with the session;
+# microphone, webcam and gamepads wait
 # for the side menu toggle (selkies itself starts audio and gamepads, and has
 # microphone and webcam off).
 # Turbo (video_streaming_mode) is off: selkies would encode every frame even
@@ -58,7 +61,6 @@ selkies_media_defaults() {
     export SELKIES_VIDEO_STREAMING_MODE="${SELKIES_VIDEO_STREAMING_MODE:-false}"
     export SELKIES_VIDEO_ON_START="${SELKIES_VIDEO_ON_START:-true}"
     export SELKIES_AUDIO_ENABLED="${SELKIES_AUDIO_ENABLED:-true}"
-    export SELKIES_AUDIO_ON_START
     export SELKIES_MICROPHONE_ENABLED="${SELKIES_MICROPHONE_ENABLED:-true}"
     export SELKIES_MICROPHONE_ON_START="${SELKIES_MICROPHONE_ON_START:-false}"
     export SELKIES_WEBCAM_ENABLED="${SELKIES_WEBCAM_ENABLED:-true}"
@@ -92,16 +94,6 @@ selkies_backend_args() {
     # AMD GPU, and still so with 2.2.3 (repeated capture failures, black
     # picture).
     export PIXELFLUX_HOST_CAPTURE=zwlr
-    # Without the browser-driven resize selkies sizes a captured host to its
-    # own default (1024x768) when a stream starts; pin it to the
-    # SCREEN_GEOMETRY labwc was started at instead, like the fixed Xvfb
-    # screen (an explicit SELKIES_MANUAL_* setting still wins).
-    if [ "${SELKIES_ENABLE_RESIZE}" != "true" ] \
-        && [ -z "${SELKIES_MANUAL_WIDTH:-}${SELKIES_MANUAL_HEIGHT:-}${SELKIES_MANUAL_RESOLUTION:-}" ]; then
-        SELKIES_BACKEND_ARGS+=(--manual-resolution=true
-            --manual-width="${SCREEN_WIDTH}"
-            --manual-height="${SCREEN_HEIGHT}")
-    fi
     if gpu_has_mesa_node; then
         [ -n "${SELKIES_RENDER_DRI:-}${DRINODE:-}" ] \
             || SELKIES_BACKEND_ARGS+=(--render-dri="${GPU_RENDER_NODE}")

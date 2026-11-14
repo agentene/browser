@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { browserPid, pipeOf } from './browsers.mjs';
 import { notifyChange } from './changes.mjs';
-import { CONTEXTS_HEADLESS, RAISE_SWITCH, ROOT, WAYLAND, appId } from './config.mjs';
+import { RAISE_SWITCH, ROOT, WAYLAND, appId } from './config.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { contexts } from './contexts.mjs';
 import { pageInfos } from './targets.mjs';
@@ -52,7 +52,7 @@ export async function desktopWindows(names) {
     }
     return { front: x11Windows.length ? byPid(x11Windows[0][0]) ?? null : null, titles };
   }
-  const shown = names.filter((name) => (name === 'main' ? mainBrowser.running : !CONTEXTS_HEADLESS));
+  const shown = names.filter((name) => name !== 'main' || mainBrowser.running);
   if (!shown.length) return { front: null, titles };
   const [focused, all] = (await Promise.all([
     output('wlrctl', ['toplevel', 'list', 'state:focused']),
@@ -91,7 +91,7 @@ export function watchFront() {
   child.stdin.on('error', () => { /* exited */ });
   child.on('error', () => { /* no python3: no front marker */ });
   child.on('exit', () => {
-    // no X display (headless desktop) ends it right away: no front marker
+    // A lost X connection clears the front marker.
     if (frontWatch === child) frontWatch = null;
     x11Windows = [];
   });
@@ -125,7 +125,6 @@ export async function focus(name, targetId) {
       return false; // no such tab (any more)
     }
   }
-  if (name !== 'main' && CONTEXTS_HEADLESS) return true;
   // a freshly opened window may take a moment to map
   for (let tries = opened ? 20 : 1; tries > 0; tries--) {
     if (await raise(name) === 0) break;

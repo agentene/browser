@@ -38,7 +38,7 @@
 import WebSocket from 'ws';
 import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
-import { CONTEXTS_HEADLESS, INPUT_OVERLAY, WAYLAND } from './config.mjs';
+import { INPUT_OVERLAY, WAYLAND } from './config.mjs';
 import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
 import { readScreen } from './screen.mjs';
 import { MAX_BUFFERED, log } from './util.mjs';
@@ -477,7 +477,6 @@ async function tabOf(t) {
 
 // Why the stream does not show this target's pointer input, or null.
 async function hiddenBecause(t, name, facts) {
-  if (name !== 'main' && CONTEXTS_HEADLESS) return 'headless';
   if (facts.vis && facts.vis !== 'visible') return 'background';
   const inFront = await frontName();
   if (inFront.known && inFront.name !== name) return 'behind';

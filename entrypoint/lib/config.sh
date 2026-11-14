@@ -1,13 +1,13 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034 # the knobs set here are read by the other modules
 # config.sh — deployment environment: defaults and validation.
-# Browser, capacity, display size and audio preferences come from settings_load
+# Browser, capacity, display size and AI input preferences come from settings_load
 # (settings.json / the web UI); their schema is cdp-gateway/src/settings-schema.mjs.
 # The former preference variables are warned about and ignored by settings.sh.
 #
 # Environment reference (compose host-side ports and mounts are in compose.yaml):
-#   ENABLE_SELKIES=true           start the desktop, streaming and audio services
-#   ENABLE_CDP=true               start Chromium and public CDP; false keeps web settings
+#   ENABLE_SELKIES=true           start desktop streaming and audio services
+#   ENABLE_CDP=true               enable on-demand browsers and public CDP; false keeps web settings
 #   ENABLE_AUTH=true              built-in login and CDP API key service
 #   AUTH_SETUP_CODE=""            setup code; empty generates and logs one
 #   ENABLE_HTTPS=false            additionally serve TLS on the web UI
@@ -32,7 +32,7 @@
 #   CDP_CONSOLE_RESTART=true      console container restart action (requires restart policy)
 #   RUN_USER=browser              runtime uid[:gid] or username (privileges.sh)
 #   CHROME_BIN=/opt/chrome-for-testing/chrome alternative binary (chromium.sh)
-# Other native SELKIES_* settings pass through, except the migrated resize/audio defaults.
+# Other native SELKIES_* settings pass through, except fixed resizing and the audio startup default.
 # Fixed paths: /browser/{user-data,contexts,settings}; sockets /tmp/agentene;
 # TLS /etc/nginx/tls/{fullchain,privkey}.pem. X11 RandR ceiling: 8192x4096x24.
 
@@ -86,8 +86,7 @@ config_display() {
     [ "${ENABLE_SELKIES}" = "true" ] || [ "${ENABLE_CDP}" = "true" ] \
         || die "nothing to start (ENABLE_SELKIES and ENABLE_CDP both false?)"
     # Desktop the headed browser windows live on (display-x11.sh /
-    # display-wayland.sh); only meaningful with ENABLE_SELKIES=true, which
-    # owns the display either way.
+    # display-wayland.sh), with or without the Selkies viewing service.
     DISPLAY_BACKEND="${DISPLAY_BACKEND:-wayland}"
     case "${DISPLAY_BACKEND}" in
         x11|wayland) : ;;

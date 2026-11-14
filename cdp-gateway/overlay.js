@@ -9,8 +9,8 @@
 // sidebar: nginx checks the built-in login before serving this script.
 // The gateway streams the input over cdp-console/overlay
 // (cdp-gateway/src/input-overlay.mjs — the op format is documented there)
-// while this page is visible and the viewer has the overlay on (the
-// sidebar's settings, remembered per browser; window.AgenteneInputOverlay).
+// while this page is visible. The server controls display and detail for
+// every viewer through the shared AI input setting.
 // Nothing here takes input: the layer is pointer-events:none, under the
 // sidebar.
 (() => {
@@ -19,7 +19,6 @@
 
   const WS = new URL('cdp-console/overlay', document.baseURI);
   WS.protocol = WS.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ON_KEY = 'cdp-input-overlay'; // '0' = the viewer turned it off
   const LANG_KEY = 'cdp-console-lang'; // the sidebar's language
   // The input arrives before the frames that show its effect: hold each op
   // back about the stream's latency so pointer and picture move together.
@@ -45,10 +44,9 @@
       quote: (tab, host) => `“${tab}”${host ? ` (${host})` : ''}`,
       off: {
         background: (c, { ctx, tab }) => `AI #${c} is working in a background tab${ctx ? ` of ${ctx === 'main' ? 'the main browser' : ctx}` : ''}${tab ? `, ${tab}` : ''}`,
-        headless: (c, { ctx, tab }) => `AI #${c} is working in a headless tab of ${ctx}${tab ? `, ${tab}` : ''}`,
       },
       // a key card's label when there is no tab title to show
-      where: { background: 'background tab', headless: 'headless' },
+      where: { background: 'background tab' },
     },
     zh: {
       right: '右键',
@@ -59,9 +57,8 @@
       quote: (tab, host) => `「${tab}」${host ? `(${host})` : ''}`,
       off: {
         background: (c, { ctx, tab }) => `AI #${c} 正在后台的 ${ctx ? `${ctx} ` : ''}标签页${tab} 中操作`,
-        headless: (c, { ctx, tab }) => `AI #${c} 正在无界面的 ${ctx} 标签页${tab} 中操作`,
       },
-      where: { background: '后台标签页', headless: '无界面' },
+      where: { background: '后台标签页' },
     },
   };
   const read = (key) => {
@@ -69,7 +66,6 @@
   };
   let lang = read(LANG_KEY) || '';
   if (!STRINGS[lang]) lang = navigator.languages?.find((l) => /^(zh|en)\b/i.test(l))?.slice(0, 2).toLowerCase() || 'en';
-  let enabled = read(ON_KEY) !== '0';
 
   // --- the layer ------------------------------------------------------------
   const host = document.createElement('div');
@@ -510,7 +506,7 @@
   let retry = 0;
   let retryTimer = 0;
   function connect() {
-    if (ws || !enabled || document.hidden) return;
+    if (ws || document.hidden) return;
     clearTimeout(retryTimer);
     const sock = new WebSocket(WS);
     ws = sock;
@@ -526,7 +522,7 @@
         serverMode = msg.mode;
         modeEpoch++;
         clearDrawing();
-        host.style.display = enabled && serverMode !== 'off' ? '' : 'none';
+        host.style.display = serverMode !== 'off' ? '' : 'none';
         return;
       }
       if (serverMode === 'off' || !Array.isArray(msg.ops)) return;
@@ -556,14 +552,6 @@
     lastLine = null;
   }
 
-  function setEnabled(on) {
-    enabled = !!on;
-    try { localStorage.setItem(ON_KEY, enabled ? '1' : '0'); } catch { /* storage blocked */ }
-    host.style.display = enabled && serverMode !== 'off' ? '' : 'none';
-    if (enabled) connect();
-    else disconnect();
-  }
-
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) disconnect();
     else connect();
@@ -575,8 +563,6 @@
 
   // for the sidebar's settings (panel.js)
   window.AgenteneInputOverlay = {
-    enabled: () => enabled,
-    setEnabled,
     setLang(next) {
       if (STRINGS[next]) lang = next;
     },
@@ -585,7 +571,7 @@
 
   function start() {
     document.body.append(host);
-    host.style.display = enabled && serverMode !== 'off' ? '' : 'none';
+    host.style.display = serverMode !== 'off' ? '' : 'none';
     connect();
   }
   if (document.body) start();

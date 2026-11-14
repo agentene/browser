@@ -30,11 +30,9 @@
 //     configuration and verified Playwright helpers are rebuilt; arbitrary
 //     JS memory and evaluations are never replayed. See the README limits.
 //
-// The gateway also owns the main browser: started with the gateway
-// (CHROMIUM_AUTOSTART=true) or only by the first CDP client or the console's
-// "Start" (false), and it may exit (window closed, "Stop", a crash) without
+// The gateway also owns the main browser: started on demand by the first
+// CDP client that needs it or the console's "Start", and it may exit (window closed, "Stop", a crash) without
 // taking the container down — the next client starts it again.
-// CHROMIUM_IDLE_TIMEOUT closes it after that many idle minutes.
 //
 // Also serves /json/* (made from CDP, with URLs on the public host:port the
 // client dialed) and a small dashboard under /console/: its state (a
@@ -65,8 +63,7 @@
 //   context-restore.mjs tab identity, native restore and URL fallback
 //   profile.mjs         profile cloning and the clone's Preferences
 //   storage-sync.mjs    live cookies + localStorage from main into a context
-//   main-browser.mjs    the main browser (at start, or on demand)
-//   idle.mjs            CHROMIUM_IDLE_TIMEOUT
+//   main-browser.mjs    the main browser (on demand, manually stopped)
 //   browsers.mjs        main + contexts by name (pipe, pid, target owner)
 //   screen.mjs          the desktop back to SCREEN_GEOMETRY before a context window opens unwatched
 //   desktop.mjs         the browser windows (the one in front, their titles), bringing one to the front

@@ -3,7 +3,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { notifyChange } from './changes.mjs';
 import {
-  BROWSER_ENABLED, DESKTOP_ENABLED, OVERLAY_AVAILABLE, CONTEXTS_HEADLESS,
+  BROWSER_ENABLED, DESKTOP_ENABLED, STREAM_ENABLED, OVERLAY_AVAILABLE,
   SETTINGS_FILE, STARTUP_SAVED, STARTUP_SETTINGS, applyRuntimeSettings,
 } from './config.mjs';
 import { applyRaiseNewWindows } from './desktop.mjs';
@@ -14,8 +14,8 @@ import { log } from './util.mjs';
 export { SCHEMA, resolve };
 
 const capabilities = {
-  browser: BROWSER_ENABLED, desktop: DESKTOP_ENABLED, overlay: OVERLAY_AVAILABLE,
-  actualHeadless: CONTEXTS_HEADLESS, gpuDevice: process.env.CDP_GATEWAY_GPU_DEVICE || '',
+  browser: BROWSER_ENABLED, desktop: DESKTOP_ENABLED, stream: STREAM_ENABLED, overlay: OVERLAY_AVAILABLE,
+  gpuDevice: process.env.CDP_GATEWAY_GPU_DEVICE || '',
 };
 const available = (field) => field.available ? field.available() : !!capabilities[field.scope];
 export function parsePatch(schema, patch) {
@@ -109,7 +109,6 @@ async function update(body, contexts) {
   saved = nextSaved;
   values = next;
   generation++;
-  const idleChanged = changes.some(([s, k]) => s === 'browser' && k === 'idleTimeout');
   const overlayChanged = changes.some(([s]) => s === 'overlay');
   for (const [s, k, v] of changes) {
     const name = `${s}.${k}`;
@@ -121,10 +120,6 @@ async function update(body, contexts) {
     } catch (err) { errors[name] = err.message; }
   }
   applyRuntimeSettings(effective);
-  if (idleChanged && BROWSER_ENABLED) {
-    const { watchIdle } = await import('./idle.mjs');
-    watchIdle(true);
-  }
   if (overlayChanged) {
     const { resetOverlayMode } = await import('./input-overlay.mjs');
     resetOverlayMode();

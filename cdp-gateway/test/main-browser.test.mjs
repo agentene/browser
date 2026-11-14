@@ -35,7 +35,7 @@ test('concurrent stops share one shutdown: one SIGTERM, all resolve with the exi
     return realKill.call(process, pid, signal);
   };
   try {
-    // the console's Stop and the idle timer's tick, while Browser.close is underway
+    // Concurrent Stop requests while Browser.close is underway
     const stops = [mainBrowser.stop(), mainBrowser.stop(), mainBrowser.stop()];
     assert.equal(stops[1], stops[0], 'the same shutdown');
     await Promise.all(stops);

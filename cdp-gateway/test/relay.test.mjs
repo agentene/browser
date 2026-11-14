@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
 import { test } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { openRelays, relay } from '../src/relay.mjs';
+import { relay } from '../src/relay.mjs';
 import { wsConnection } from './fake-upstream.mjs';
 
 class FakeClient extends EventEmitter {
@@ -37,9 +37,9 @@ test('frames go both ways as text', async () => {
     ws.send(JSON.stringify({ id: JSON.parse(data).id, result: {} }));
   }));
   const client = new FakeClient();
-  const before = openRelays();
-  relay(client, await wsConnection(`ws://127.0.0.1:${server.address().port}/devtools/page/X`));
-  assert.equal(openRelays(), before + 1);
+  const upstream = await wsConnection(`ws://127.0.0.1:${server.address().port}/devtools/page/X`);
+  const closed = once(upstream, 'close');
+  relay(client, upstream);
   client.emit('message', Buffer.from('{"id":1,"method":"Runtime.enable"}'), false);
   await once(client, 'sent');
   client.emit('message', Buffer.from('{"id":2,"method":"Runtime.evaluate"}'), false);
@@ -47,7 +47,7 @@ test('frames go both ways as text', async () => {
   assert.deepEqual(got, [['{"id":1,"method":"Runtime.enable"}', false], ['{"id":2,"method":"Runtime.evaluate"}', false]]);
   assert.deepEqual(client.sent, [['{"id":1,"result":{}}', false], ['{"id":2,"result":{}}', false]]);
   client.terminate();
-  assert.equal(openRelays(), before);
+  await closed;
   server.close();
 });
 
@@ -56,10 +56,9 @@ test('a closing upstream (the page closed) closes the client', async () => {
   await once(server, 'listening');
   server.on('connection', (ws) => setImmediate(() => ws.close()));
   const client = new FakeClient();
-  const before = openRelays();
   relay(client, await wsConnection(`ws://127.0.0.1:${server.address().port}/devtools/page/X`));
   await once(client, 'close');
-  assert.equal(openRelays(), before);
+  assert.equal(client.readyState, WebSocket.CLOSED);
   server.close();
 });
 

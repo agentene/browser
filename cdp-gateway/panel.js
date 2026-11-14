@@ -315,10 +315,6 @@
               <span class="lang-label"></span>
               <span class="seg" role="group"><button type="button" data-lang="en" lang="en">English</button><button type="button" data-lang="zh" lang="zh-CN">中文</button></span>
             </div>
-            <label class="setting overlay-row" hidden>
-              <span><span class="overlay-label"></span><span class="setting-hint overlay-hint"></span></span>
-              <input class="switch overlay-switch" type="checkbox" role="switch">
-            </label>
           </div>
         </fieldset>
         <footer class="settings-footer">
@@ -389,8 +385,6 @@
       language: 'Language',
       raiseNew: 'New windows to the front',
       raiseNewHint: 'Off: windows that open later (e.g. a new isolated context) stay behind the one in front; Show brings one forward.',
-      showInput: 'Show AI input',
-      showInputHint: 'Draw the CDP clients\' pointer, clicks and keys over the desktop (this browser only).',
     },
     zh: {
       title: 'CDP 控制台',
@@ -447,8 +441,6 @@
       language: '语言',
       raiseNew: '新窗口切到最前',
       raiseNewHint: '关闭后，之后新打开的窗口（如新的隔离上下文）留在当前窗口之后，可用“显示”切过去。',
-      showInput: '显示 AI 操作',
-      showInputHint: '在桌面画面上画出 CDP 客户端的指针、点击和按键（只对本浏览器生效）。',
     },
   };
   const LANG_KEY = 'cdp-console-lang';
@@ -484,8 +476,6 @@
     $('.lang-label').textContent = t('language');
     renderLanguageChoice();
     settingsEditor.render();
-    $('.overlay-label').textContent = t('showInput');
-    $('.overlay-hint').textContent = t('showInputHint');
     window.AgenteneInputOverlay?.setLang(lang);
     window.AgenteneAuth?.setLang(lang);
     for (const v of views.values()) v.card.remove();
@@ -500,12 +490,11 @@
   const settingsPage = $('.settings-page');
   const settingsContent = $('.settings-content');
   let settingsDraft = null;
-  const settingsDirty = new Set();
   let settingsBusy = false;
   let settingsOnlyOpened = false;
   const settingsEditor = window.AgenteneSettings.mount({ container: settingsContent, getLang: () => lang, onDirty: renderSave });
   function renderSave() {
-    const localChange = settingsDraft && (settingsDraft.language !== lang || settingsDirty.has('overlay'));
+    const localChange = settingsDraft && settingsDraft.language !== lang;
     $('.settings-save').disabled = settingsBusy || !settingsEditor.ready() || !(settingsEditor.dirty() || localChange);
   }
   function receiveSettings(view) {
@@ -534,8 +523,7 @@
 
   function setSettings(open) {
     if (settingsBusy) return;
-    settingsDirty.clear();
-    settingsDraft = open ? { language: lang, overlay: window.AgenteneInputOverlay?.enabled() } : null;
+    settingsDraft = open ? { language: lang } : null;
     if (open) settingsEditor.open(serverSettings); else settingsEditor.close();
     settingsPage.hidden = !open;
     body.hidden = open;
@@ -545,7 +533,6 @@
     $('.settings-status').textContent = '';
     renderLanguageChoice();
     settingsEditor.update(serverSettings);
-    renderOverlay();
     if (open) $('.settings-title').focus();
     else settingsBtn.focus();
   }
@@ -592,9 +579,7 @@
       if (!view) return;
       receiveSettings(view);
       if (Object.keys(view.errors).length) throw new Error(lang === 'zh' ? '配置已保存，但部分设置未生效，请查看下方详情。' : 'Settings saved, but some changes could not be applied. See the details below.');
-      if (settingsDirty.has('overlay')) window.AgenteneInputOverlay?.setEnabled(draft.overlay);
       setLang(draft.language, true);
-      settingsDirty.clear();
       savedOk = true;
     } catch (err) {
       showError(err);
@@ -787,27 +772,9 @@
     $('.error').textContent = err ? String(err.message || err) : '';
   }
 
-  // The input overlay's switch (overlay.js, when nginx injected it): the
-  // viewer's own choice, kept in this browser by the overlay itself.
-  const overlayRow = $('.overlay-row');
-  const overlayBox = $('.overlay-switch');
-  function renderOverlay() {
-    const overlay = window.AgenteneInputOverlay;
-    overlayRow.hidden = !overlay;
-    if (settingsDraft && !settingsDirty.has('overlay')) settingsDraft.overlay = overlay?.enabled();
-    overlayBox.checked = !!(settingsDraft ? settingsDraft.overlay : overlay?.enabled());
-  }
-  overlayBox.addEventListener('change', () => {
-    if (!settingsDraft || settingsBusy) return;
-    settingsDraft.overlay = overlayBox.checked;
-    settingsDirty.add('overlay');
-    renderSave();
-  });
   window.addEventListener('agentene-input-overlay', () => {
     window.AgenteneInputOverlay.setLang(lang);
-    renderOverlay();
   });
-  renderOverlay();
 
   function renderNewBrowser() {
     const button = $('.new-browser');

@@ -30,20 +30,12 @@ const languageLabels = {
 };
 export const SCHEMA = {
   browser: {
-    autostart: bool(true, 'browser', 'next-start'),
-    idleTimeout: number(0, 0, 525600, 'browser'),
-    startUrl: { default: 'about:blank', type: 'url', scope: 'browser', apply: 'next-start', valid: (v) => {
-      if (typeof v !== 'string' || v.length > 8192 || /[\x00-\x20\x7f]/.test(v)) return false;
-      try { return !!new URL(v).protocol; } catch { return false; }
-    } },
     language: { default: 'en-US', type: 'select', options: Object.keys(languageLabels), optionLabels: languageLabels,
       scope: 'browser', apply: 'next-start', valid: (v) => {
       // Preserve valid locales saved before the dropdown was introduced.
       if (typeof v !== 'string' || !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(v)) return false;
       try { return Intl.getCanonicalLocales(v).length === 1; } catch { return false; }
     } },
-    headless: bool(false, 'browser'),
-    gpu: choice('auto', ['auto', 'off', 'strict'], 'browser', 'restart'),
   },
   contexts: {
     maxRunning: number(4, 1, 10000, 'browser'),
@@ -52,16 +44,38 @@ export const SCHEMA = {
   },
   desktop: {
     raiseNewWindows: bool(true, 'desktop', 'live'),
-    width: number(1920, 1, 8192, 'desktop', 'restart'),
-    height: number(1080, 1, 4096, 'desktop', 'restart'),
-    resize: bool(true, 'desktop'),
-    resizeLocked: bool(false, 'desktop'),
+    resolution: { ...choice('1920x1080', ['1280x720', '1920x1080', '2560x1440', '3840x2160'], 'desktop', 'restart'),
+      // Keep valid custom sizes from older settings files as a saved choice.
+      valid: (v) => typeof v === 'string' && /^[1-9]\d{0,3}x[1-9]\d{0,3}$/.test(v)
+        && v.split('x').every((n, i) => Number(n) <= [8192, 4096][i]),
+    },
   },
   overlay: { mode: choice('text', ['off', 'keys', 'text'], 'overlay') },
-  media: { audioOnStart: bool(false, 'desktop'), audioLocked: bool(false, 'desktop') },
 };
 
 export const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+// One-way compatibility for persisted files, never an environment fallback.
+// Removed preferences no longer affect startup and disappear on the next save.
+export function migrateSettings(saved) {
+  if (isObject(saved.desktop)) {
+    const { width, height } = saved.desktop;
+    const size = `${width}x${height}`;
+    if (saved.desktop.resolution === undefined && Number.isInteger(width) && Number.isInteger(height)
+        && SCHEMA.desktop.resolution.valid(size)) saved.desktop.resolution = size;
+  }
+  for (const [section, keys] of Object.entries({
+    browser: ['autostart', 'startUrl', 'headless', 'gpu', 'idleTimeout'],
+    desktop: ['width', 'height', 'resize', 'resizeLocked'],
+    media: ['audioOnStart', 'audioLocked'],
+  })) {
+    if (isObject(saved[section])) {
+      for (const key of keys) delete saved[section][key];
+      if (!Object.keys(saved[section]).length) delete saved[section];
+    }
+  }
+  return saved;
+}
 export function resolve(schema, saved, warn = () => {}) {
   const result = {};
   for (const [section, fields] of Object.entries(schema)) {

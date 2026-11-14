@@ -6,11 +6,9 @@
 # the gateway; display/browser startup preferences are adapted here before
 # any service starts. No preference has an environment fallback.
 #
-# Sets SETTINGS_FILE and internal startup adapters: CHROMIUM_AUTOSTART,
-# CHROMIUM_IDLE_TIMEOUT, CHROMIUM_START_URL, CHROMIUM_LANG, CHROMIUM_HEADLESS,
-# CHROMIUM_GPU, CDP_CONTEXTS_MAX, CDP_CONTEXTS_OVERFLOW,
+# Sets SETTINGS_FILE and internal startup adapters: CHROMIUM_LANG,
+# CDP_CONTEXTS_MAX, CDP_CONTEXTS_OVERFLOW,
 # CDP_CONTEXTS_HIBERNATED_MAX, CDP_INPUT_OVERLAY, SCREEN_GEOMETRY,
-# SELKIES_ENABLE_RESIZE, SELKIES_RESIZE_LOCKED, SELKIES_AUDIO_ON_START,
 # DESKTOP_RAISE_NEW_WINDOWS.
 
 # Read persisted preferences before config_load derives display sizes or flags.
@@ -18,7 +16,13 @@
 settings_load() {
     SETTINGS_FILE=/browser/settings/settings.json
     local knob assignment snapshot
-    for knob in CHROMIUM_AUTOSTART CHROMIUM_IDLE_TIMEOUT CHROMIUM_START_URL CHROMIUM_LANG CHROMIUM_HEADLESS CHROMIUM_GPU CDP_CONTEXTS_MAX CDP_CONTEXTS_OVERFLOW CDP_CONTEXTS_HIBERNATED_MAX CDP_INPUT_OVERLAY SCREEN_GEOMETRY SELKIES_ENABLE_RESIZE SELKIES_AUDIO_ON_START; do
+    for knob in CHROMIUM_AUTOSTART CHROMIUM_START_URL CHROMIUM_HEADLESS CHROMIUM_GPU CHROMIUM_IDLE_TIMEOUT SELKIES_AUDIO_ON_START SELKIES_ENABLE_RESIZE SELKIES_MANUAL_RESOLUTION SELKIES_MANUAL_WIDTH SELKIES_MANUAL_HEIGHT; do
+        if [ "${!knob+x}" ]; then
+            log "WARNING: ${knob} is ignored; this option has been removed"
+        fi
+        unset "${knob}"
+    done
+    for knob in CHROMIUM_LANG CDP_CONTEXTS_MAX CDP_CONTEXTS_OVERFLOW CDP_CONTEXTS_HIBERNATED_MAX CDP_INPUT_OVERLAY SCREEN_GEOMETRY; do
         if [ "${!knob+x}" ]; then
             log "WARNING: ${knob} is ignored; configure it in the web settings page"
         fi

@@ -9,6 +9,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 
 process.env.CDP_GATEWAY_DESKTOP_ENABLED = 'true';
+process.env.CDP_GATEWAY_STREAM_ENABLED = 'true';
 process.env.DISPLAY_BACKEND = 'wayland';
 
 const {

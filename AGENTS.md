@@ -214,10 +214,9 @@ node update-chrome-node.mjs --node 22        # force the Node major
   browsers get the main browser's flags via `chromium_mode_flags` +
   `CHROMIUM_COMMON_FLAGS`/`CHROMIUM_TAIL_FLAGS` — new chromium flags belong
   in one of those so context browsers inherit them. The gateway is in
-  `pids`; the main chromium (started at once when the saved browser autostart setting is enabled,
-  otherwise on demand) and the context chromiums are its children and are
+  `pids`; the main chromium (started on demand) and the context chromiums are its children and are
   cleaned up by it — the browser exiting never stops the container, the
-  next client starts it again.
+  next client starts it again. There is no idle timeout or automatic idle shutdown.
 * **Two display backends (`DISPLAY_BACKEND=wayland|x11`, default wayland).**
   `wayland` replaces Xvfb/picom with labwc on the wlroots *headless*
   backend, which Selkies captures as an external compositor
@@ -237,10 +236,12 @@ node update-chrome-node.mjs --node 22        # force the Node major
   Chromium's Vulkan flags are X11-only (Chromium rejects Vulkan with
   Wayland). X11-only, always on: picom, the chromium screen follower, the
   8192x4096 RandR ceiling and the free-display probe from `:0`.
-* **GPU policy is one web setting:** `browser.gpu=auto|off|strict`. Hardware GL
-  goes through Vulkan/ANGLE (`--use-angle=vulkan --enable-features=Vulkan`)
-  because native GL cannot work on the Xvfb display; SwiftShader stays
-  allowed as a runtime fallback unless `strict`.
+* **GPU selection is automatic.** X11 hardware GL goes through Vulkan/ANGLE
+  (`--use-angle=vulkan --enable-features=Vulkan`) because native GL cannot work
+  on the Xvfb display; Wayland uses EGL. SwiftShader stays allowed as a fallback.
+  Browsers always run headed; the virtual display starts even with Selkies off.
+  Chrome owns its startup pages. Desktop resolution is one saved choice; Selkies
+  always follows the viewer window, with manual sizing disabled and locked.
 * **Chromium flag order matters:** the entrypoint appends its flags before
   `CHROMIUM_EXTRA_ARGS` so user flags win (Chromium honors the last
   occurrence of a repeated switch). Keep new flags on the entrypoint side of

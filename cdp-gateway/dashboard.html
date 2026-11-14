@@ -427,12 +427,11 @@
   const settingsPage = $('.settings-page');
   const settingsContent = $('.settings-content');
   let settingsDraft = null;
-  const settingsDirty = new Set();
   let settingsBusy = false;
   let settingsOnlyOpened = false;
   const settingsEditor = window.AgenteneSettings.mount({ container: settingsContent, getLang: () => lang, onDirty: renderSave });
   function renderSave() {
-    const localChange = settingsDraft && (settingsDraft.language !== lang || settingsDirty.has('overlay'));
+    const localChange = settingsDraft && settingsDraft.language !== lang;
     $('.settings-save').disabled = settingsBusy || !settingsEditor.ready() || !(settingsEditor.dirty() || localChange);
   }
   function receiveSettings(view) {
@@ -461,7 +460,6 @@
 
   function setSettings(open) {
     if (settingsBusy) return;
-    settingsDirty.clear();
     settingsDraft = open ? { language: lang } : null;
     if (open) settingsEditor.open(serverSettings); else settingsEditor.close();
     settingsPage.hidden = !open;
@@ -519,7 +517,6 @@
       receiveSettings(view);
       if (Object.keys(view.errors).length) throw new Error(lang === 'zh' ? '配置已保存，但部分设置未生效，请查看下方详情。' : 'Settings saved, but some changes could not be applied. See the details below.');
       setLang(draft.language, true);
-      settingsDirty.clear();
       savedOk = true;
     } catch (err) {
       showError(err);
