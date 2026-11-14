@@ -221,7 +221,7 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 **达到上限后的休眠。** `CDP_CONTEXTS_OVERFLOW=hibernate`(默认)允许保留超过 `CDP_CONTEXTS_MAX` 个隔离浏览器。启动另一个浏览器前,网关会正常关闭最久未操作且可休眠的浏览器,保留其 profile 和标签快照。正在启动、唤醒、尚未退出的浏览器都占运行名额;主浏览器不计入。设为 `CDP_CONTEXTS_OVERFLOW=reject` 可恢复原先的超额报错行为。
 
 * console 和侧栏分别显示运行与休眠数量、保存的标签以及 **休眠** / **唤醒** 按钮。点击休眠卡片或标签也会唤醒。console 刷新和缩略图采集不更新活跃时间;LRU 按客户端 CDP 指令和 console 显式操作计算。
-* CDP 连接、context alias 和顶层 Playwright `Page` 对象保持有效。需要浏览器的指令会自动唤醒;`context.pages()` 是本地列表,不会触发唤醒。原来已有标签时,未修改的 playwright-cli `tab-list` 唤醒不会多开空白页,`tab-new`(带或不带 URL)则恰好新增一个标签,无需重新 `open`。原本没有标签时,仍遵循 CLI 自动创建默认页面的行为。
+* CDP 连接、context alias 和顶层 Playwright `Page` 对象保持有效。需要浏览器的指令会自动唤醒;`context.pages()` 是本地列表,不会触发唤醒。原来已有标签时,未修改的 playwright-cli `tab-list` 唤醒不会多开空白页,`tab-new`(带或不带 URL)则恰好新增一个标签。`tab-close` 关闭最后一个标签后,浏览器仍以零标签状态运行,刚唤醒时也一样;`tab-new` 会复用该浏览器,无需重新 `open`。原本没有标签时,仍遵循 CLI 自动创建默认页面的行为。
 * 页面文档会重新加载:JS 内存、旧 JSHandle/ElementHandle、子 frame 和 worker 的身份不保留。正在执行的命令可能失败,依赖导航状态的读取也可能被重新加载打断。迟到的请求拦截应答会收到协议错误,不会唤醒浏览器;恢复过程中产生的新请求仍可正常拦截和应答。网关只重建已识别的 Playwright 辅助对象和声明式配置,不会重放任意业务脚本或输入操作。兼容测试覆盖 CLI 0.1.23 和 0.1.24;发现未识别的辅助对象时,会暂时禁止该浏览器休眠,直到网关更新兼容性。
 * 优先使用 Chrome 原生会话恢复,headless 也支持。通过临时随机 sessionStorage 键校验标签身份(相同 URL 的标签不会合并),原生恢复成功后删除该键。无法核对身份、标签无法保存标记,或请求拦截、业务初始化脚本、自定义请求头或 user-agent 必须在导航前安装时,整个浏览器改为按 URL 快照恢复。此兜底保留 profile,不保证标签历史和 sessionStorage。失败原因显示在卡片上;唤醒失败仍保留 profile,供后续重试。
 * 存在内部无痕 context、直接 page WebSocket 连接、非 flatten CDP 会话、正在调试/录制或不支持的辅助对象状态时,浏览器不能休眠。没有可休眠候选时,创建或唤醒会返回容量错误。可结束这些会话、关闭其他浏览器或提高上限。

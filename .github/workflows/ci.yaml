@@ -122,18 +122,21 @@ jobs:
           trap 'if docker inspect hibernation-smoke >/dev/null 2>&1; then docker logs hibernation-smoke; docker exec hibernation-smoke tail -200 /tmp/cdp-gateway.log || true; docker rm -f hibernation-smoke >/dev/null; fi' EXIT
           for backend in headless wayland x11; do
             headless=0
+            # Headed cases need the desktop stack to avoid falling back to headless.
+            selkies=true
             display_backend="$backend"
-            if [ "$backend" = headless ]; then headless=1; display_backend=wayland; fi
+            if [ "$backend" = headless ]; then headless=1; selkies=false; display_backend=wayland; fi
             docker run -d --name hibernation-smoke --shm-size=1g \
-              -e ENABLE_AUTH=false -e ENABLE_SELKIES=false -e CHROMIUM_AUTOSTART=false \
+              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" -e CHROMIUM_AUTOSTART=false \
               -e CHROMIUM_HEADLESS="$headless" -e DISPLAY_BACKEND="$display_backend" \
               -e CDP_CONTEXTS_MAX=2 -e CDP_CONTEXTS_HIBERNATED_MAX=2 \
               -v "$PWD/.github/tests:/tests:ro" -v "$deps/node_modules:/test-deps/node_modules:ro" \
               localhost/ci:${{ env.IMAGE_NAME }}
-            for i in $(seq 1 60); do
+            for _ in $(seq 1 60); do
               docker exec hibernation-smoke curl -sf http://127.0.0.1:9222/json/list >/dev/null && break
               sleep 1
             done
+            docker logs hibernation-smoke 2>&1 | grep "starting CDP gateway .*headless=$headless," >/dev/null
             for cli in cli-current cli-previous; do
               docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 \
                 -e PLAYWRIGHT_CLI_JS="/test-deps/node_modules/$cli/playwright-cli.js" \

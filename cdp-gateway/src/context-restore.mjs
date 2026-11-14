@@ -71,6 +71,8 @@ export async function restoreTabs(context, native) {
   const { pipe, snapshot } = context;
   const found = new Map();
   if (native) {
+    // --no-startup-window preserves the automation lifetime but defers session restore until a window opens. Remove this bootstrap tab before attaching the client's session.
+    const { targetId: bootstrap } = await pipe.call('Target.createTarget', { url: 'about:blank' });
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
       for (const info of await pageInfos(pipe)) {
@@ -81,15 +83,19 @@ export async function restoreTabs(context, native) {
       if (found.size === snapshot.tabs.length) break;
       await sleep(100);
     }
+    await pipe.call('Target.closeTarget', { targetId: bootstrap });
+    const closeDeadline = Date.now() + 5000;
+    while ((await pageInfos(pipe)).some((t) => t.targetId === bootstrap)) {
+      if (Date.now() >= closeDeadline) throw new Error('native restore bootstrap tab did not close');
+      await sleep(50);
+    }
   }
   if (native && found.size !== snapshot.tabs.length) throw new Error('native tab identity could not be verified');
   let pages;
   if (native && found.size === snapshot.tabs.length) {
     pages = snapshot.tabs.map((t) => ({ ...t, physical: found.get(t.id), navigate: false }));
   } else {
-    // Keep existing windows until replacement targets exist: closing the
-    // last window can exit headed chromium. No replacement goes to a client
-    // before its logical slot has been assigned.
+    // Create replacement targets before discarding any startup pages, and assign their logical slots before attaching the client.
     const old = await pageInfos(pipe);
     pages = [];
     const groups = Map.groupBy(snapshot.tabs, (t) => t.window);

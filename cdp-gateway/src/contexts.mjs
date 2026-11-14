@@ -117,7 +117,9 @@ export class Context {
     if (CONTEXTS_HEADLESS && !flags.includes('--headless')) flags.push('--headless');
     flags = flags.concat([
       `--user-data-dir=${this.profile}`,
-      ...(restore ? ['--restore-last-session'] : ['--no-startup-window']),
+      // With the debugging pipe, this also keeps Chromium and its profile alive after the last window closes. Native restore is triggered explicitly in restoreTabs().
+      '--no-startup-window',
+      ...(restore ? ['--restore-last-session'] : []),
       ...this.proxy,
     ]);
     // the Wayland app_id focus() raises this context's windows by

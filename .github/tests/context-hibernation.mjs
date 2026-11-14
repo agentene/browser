@@ -126,10 +126,13 @@ try {
   }
   await native.c.addCookies([{ name: 'session_kept', value: 'yes', url: fixture }]);
   const oldHandle = await nativePages[0].evaluateHandle(() => ({ old: true }));
+  let nativePageEvents = 0;
+  native.c.on('page', () => nativePageEvents++);
   await action(native.name, 'hibernate');
   assert.equal((await native.c.cookies()).find((c) => c.name === 'session_kept').value, 'yes');
   assert.equal((await state(native.name, 'running')).restoreWarning, '');
   assert.deepEqual(native.c.pages(), nativePages);
+  assert.equal(nativePageEvents, 0, 'native restoration must not expose its bootstrap tab');
   for (const [i, p] of nativePages.entries()) {
     assert.equal(await p.evaluate(() => sessionStorage.getItem('identity')), ['one', 'two'][i]);
     assert.equal(await p.evaluate(() => typeof window.volatileState), 'undefined');
@@ -258,6 +261,58 @@ try {
   await cli('close');
   await state(name, null);
   console.log('PASS real CLI: tab-list, tab-new, tab-new URL each directly from sleep; duplicate and blank tabs; selected tab; console wake');
+
+  for (const url of [fixture, 'data:text/html,<title>URL fallback</title>']) {
+    await cli('open', '--config=' + config);
+    await cli('goto', url);
+    const name = (await listing()).browsers.find((v) => !v.main).name;
+    const empty = async (pid) => {
+      const current = await state(name, 'running');
+      assert.equal(current.restoreWarning, '');
+      assert.equal(current.tabs.length, 0, 'closing the last tab must not create a replacement');
+      if (pid !== undefined) assert.equal(current.pid, pid, 'closing the last tab must not restart the browser');
+      await cli('cookie-list');
+      const ready = await state(name, 'running');
+      assert.equal(ready.pid, current.pid, 'the empty context must remain usable in the same process');
+      assert.equal(ready.tabs.length, 0);
+      return ready.pid;
+    };
+
+    const initialPid = (await state(name, 'running')).pid;
+    await cli('tab-close');
+    await empty(initialPid);
+
+    for (const wake of ['command', 'console']) {
+      await cli('tab-new', url);
+      await action(name, 'hibernate');
+      let pid;
+      if (wake === 'console') {
+        await action(name, 'wake');
+        pid = (await state(name, 'running')).pid;
+      }
+      await cli('tab-close', '0');
+      pid = await empty(pid);
+      await cli('tab-new', url);
+      const reopened = await state(name, 'running');
+      assert.equal(reopened.pid, pid, 'tab-new must reuse the empty browser without another open');
+      assert.equal(reopened.tabs.length, 1);
+      assert.equal(reopened.tabs[0].url, url);
+      await cli('tab-close');
+      await empty(pid);
+    }
+
+    await action(name, 'hibernate');
+    assert.equal((await state(name, 'hibernated')).tabs.length, 0);
+    await action(name, 'wake');
+    const pid = await empty();
+    await cli('tab-new');
+    const blank = await state(name, 'running');
+    assert.equal(blank.pid, pid);
+    assert.deepEqual(blank.tabs.map((t) => t.url), ['about:blank'], 'waking an empty context must not resurrect closed tabs');
+    await cli('close');
+    await state(name, null);
+  }
+  console.log('PASS real CLI: last tab-close keeps an empty browser alive before and after native/URL restoration; tab-new reuses it; empty sleep/wake does not resurrect tabs');
 } finally {
   await cli('close').catch(() => {});
   await Promise.all(clients.map((b) => b.close().catch(() => {})));
