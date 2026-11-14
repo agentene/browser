@@ -126,9 +126,12 @@ jobs:
             selkies=true
             display_backend="$backend"
             if [ "$backend" = headless ]; then headless=1; selkies=false; display_backend=wayland; fi
+            # Built-in extension workers generate Playwright setup traffic at
+            # arbitrary times, changing LRU order even when test tabs are idle.
             docker run -d --name hibernation-smoke --shm-size=1g \
               -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" -e CHROMIUM_AUTOSTART=false \
               -e CHROMIUM_HEADLESS="$headless" -e DISPLAY_BACKEND="$display_backend" \
+              -e CHROMIUM_EXTRA_ARGS=--disable-component-extensions-with-background-pages \
               -e CDP_CONTEXTS_MAX=2 -e CDP_CONTEXTS_HIBERNATED_MAX=2 \
               -v "$PWD/.github/tests:/tests:ro" -v "$deps/node_modules:/test-deps/node_modules:ro" \
               localhost/ci:${{ env.IMAGE_NAME }}
@@ -138,6 +141,7 @@ jobs:
             done
             docker logs hibernation-smoke 2>&1 | grep "starting CDP gateway .*headless=$headless," >/dev/null
             for cli in cli-current cli-previous; do
+              echo "Context hibernation: backend=$backend cli=$cli"
               docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 \
                 -e PLAYWRIGHT_CLI_JS="/test-deps/node_modules/$cli/playwright-cli.js" \
                 hibernation-smoke node /tests/context-hibernation.mjs

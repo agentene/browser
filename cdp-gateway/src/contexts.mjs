@@ -235,6 +235,7 @@ export class Context {
         catch (err) {
           if (!native) throw err;
           this.restoreWarning = `${err.message}; restored URLs instead`;
+          log(`${this.name}: ${this.restoreWarning}`);
           await this.stop(true);
           await parkSessionFiles(this);
           native = false;

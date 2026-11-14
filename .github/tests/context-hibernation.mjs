@@ -1,6 +1,8 @@
 // Real, unmodified Playwright/CLI regression. Run against a disposable
 // container with MAX=2, HIBERNATED_MAX=2 and auth disabled. Dependencies are
 // test-only; neither Playwright nor this file ships in the image.
+// Use CHROMIUM_EXTRA_ARGS=--disable-component-extensions-with-background-pages
+// so extension worker setup traffic cannot change the LRU fixture's order.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
