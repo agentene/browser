@@ -112,7 +112,8 @@
 
       * { box-sizing:border-box; }
       .spacer { flex:1; }
-      .summary { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+      .card.hibernated { opacity:.72; cursor:pointer; }
+  .summary { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
       /* buttons: quiet outlines; the tint comes on hover */
       button {
         font:inherit; font-size:12px; font-weight:500; line-height:18px; border-radius:7px; padding:3px 10px; cursor:pointer;
@@ -327,6 +328,13 @@
       title: 'CDP Console',
       loading: 'loading…',
       newBrowser: 'New browser',
+      hibernate: 'Hibernate',
+      wake: 'Wake',
+      stateHibernated: 'hibernated',
+      stateHibernating: 'hibernating',
+      stateWaking: 'waking',
+      stateDestroying: 'deleting',
+      hibernateConfirm: 'Hibernate this browser? Pages reload when woken; unsaved page memory is lost.',
       browserLimit: 'Browser limit reached — delete an isolated browser to make room',
       creatingBrowser: 'Creating…',
       newBrowserHint: 'Open an independent browser with a copy of the main profile',
@@ -357,7 +365,7 @@
       tabs: (n) => `${n} tab${n === 1 ? '' : 's'}`,
       mainMeta: 'The persistent profile every isolated context is cloned from.',
       contextMeta: (client, since, pid) => `client ${client} · since ${since} · pid ${pid}`,
-      summary: (n, max) => `${n} of ${max} contexts`,
+      summary: (n, max, sleeping) => `${n} / ${max} running · ${sleeping} hibernated`,
       reconnecting: (s) => `Lost the connection to the CDP gateway, reconnecting in ${s}s…`,
       resizeTitle: 'Drag to resize',
       close: 'Close',
@@ -372,6 +380,13 @@
       title: 'CDP 控制台',
       loading: '加载中…',
       newBrowser: '新建浏览器',
+      hibernate: '休眠',
+      wake: '唤醒',
+      stateHibernated: '已休眠',
+      stateHibernating: '正在休眠',
+      stateWaking: '正在唤醒',
+      stateDestroying: '正在删除',
+      hibernateConfirm: '休眠此浏览器？唤醒后页面会重新加载，未保存的页面内存状态会丢失。',
       browserLimit: '浏览器数量已达上限，请先删除一个独立浏览器',
       creatingBrowser: '正在创建…',
       newBrowserHint: '复制主浏览器配置，打开独立浏览器',
@@ -402,7 +417,7 @@
       tabs: (n) => `${n} 个标签页`,
       mainMeta: '持久化的浏览器配置，每个隔离上下文都从它克隆。',
       contextMeta: (client, since, pid) => `客户端 ${client} · 创建于 ${since} · pid ${pid}`,
-      summary: (n, max) => `${n} / ${max} 个上下文`,
+      summary: (n, max, sleeping) => `运行 ${n} / ${max} · 休眠 ${sleeping}`,
       reconnecting: (s) => `与 CDP 网关的连接已断开，${s} 秒后重连…`,
       resizeTitle: '拖动调整宽度',
       close: '关闭',
@@ -606,6 +621,7 @@
   const aiColor = (c) => AI_COLORS[(c - 1) % AI_COLORS.length];
   const views = new Map(); // name -> the card's DOM parts, see liveCard()
   let max = 0;
+  let overflow = 'hibernate';
   let actionsEnabled = false;
   let creatingBrowser = false;
   const closingTabs = new Set();
@@ -613,8 +629,9 @@
 
   function renderSummary() {
     renderNewBrowser();
-    const n = [...browsers.values()].filter((b) => !b.main).length;
-    $('.summary').textContent = views.size ? t('summary', n, max) : '';
+    const n = [...browsers.values()].filter((b) => !b.main && (b.occupied ?? b.state !== 'hibernated')).length;
+    const sleeping = [...browsers.values()].filter((b) => b.state === 'hibernated').length;
+    $('.summary').textContent = views.size ? t('summary', n, max, sleeping) : '';
   }
 
   function showError(err) {
@@ -656,7 +673,7 @@
   function renderNewBrowser() {
     const button = $('.new-browser');
     button.hidden = !actionsEnabled;
-    const atLimit = views.size > 0 && [...browsers.values()].filter((b) => !b.main).length >= max;
+    const atLimit = overflow === 'reject' && [...browsers.values()].filter((b) => !b.main && (b.occupied ?? b.state !== 'hibernated')).length >= max;
     button.disabled = creatingBrowser || atLimit;
     button.setAttribute('aria-busy', String(creatingBrowser));
     button.title = t(atLimit ? 'browserLimit' : 'newBrowserHint');
@@ -751,6 +768,10 @@
           && call('POST', `${base}/stop`).catch(showError) }, t('stop')));
     }
     if (!isMain) {
+      v.hibernate = el('button', {
+        onclick: async () => await ask(t('hibernateConfirm'), t('hibernate'))
+          && call('POST', `${base}/hibernate`).catch(showError) }, t('hibernate'));
+      actions.append(v.hibernate);
       actions.append(el('button', { class: 'danger', title: t('deleteTitle'),
         onclick: async () => await ask(t('deleteConfirm', name), t('delete'))
           && call('DELETE', base).catch(showError) }, t('delete')));
@@ -769,6 +790,11 @@
     // a context's color (the swatch by its name) is also its browser frame color on the desktop
     v.card = el('section', { class: 'card', ...(context.color ? { style: `--tint:${context.color}` } : {}) },
       head, v.meta, v.tabview, v.empty);
+    v.card.addEventListener('click', (event) => {
+      if (browsers.get(name)?.state === 'hibernated' && !event.target.closest('button')) {
+        call('POST', `${base}/focus`).catch(showError);
+      }
+    });
     return v;
   }
 
@@ -777,7 +803,19 @@
   // with it.
   function fillCard(context, v) {
     const n = context.tabs.size;
-    v.chip.textContent = t('tabs', n);
+    const state = context.state ?? 'running';
+    const sleeping = state === 'hibernated';
+    const pending = !['running', 'hibernated'].includes(state);
+    const stateKey = { starting: 'stateStarting', hibernated: 'stateHibernated', hibernating: 'stateHibernating', waking: 'stateWaking', destroying: 'stateDestroying' }[state];
+    v.chip.textContent = stateKey ? `${t(stateKey)} · ${t('tabs', n)}` : t('tabs', n);
+    v.card.classList.toggle('hibernated', sleeping);
+    v.show.textContent = t(sleeping ? 'wake' : 'show');
+    v.show.disabled = pending;
+    if (v.hibernate) {
+      v.hibernate.hidden = !actionsEnabled || state !== 'running';
+      v.hibernate.disabled = !!context.blockedReason;
+      v.hibernate.title = context.blockedReason || t('hibernate');
+    }
     // the browser the desktop (and the Selkies stream) shows in front
     v.card.classList.toggle('front', !!context.front);
     v.frontChip.hidden = !context.front;
@@ -785,6 +823,8 @@
     v.meta.textContent = context.main
       ? t('mainMeta')
       : t('contextMeta', context.client, new Date(context.createdAt).toLocaleTimeString(locale()), context.pid ?? '—');
+    if (context.hibernatedAt) v.meta.textContent += ` · ${t('stateHibernated')} ${new Date(context.hibernatedAt).toLocaleTimeString(locale())}`;
+    if (context.lastError || context.restoreWarning) v.meta.textContent += ` · ${context.lastError || context.restoreWarning}`;
     v.tabview.hidden = !n;
     v.empty.hidden = !!n;
     for (const [id, li] of v.items) {
@@ -810,7 +850,7 @@
       const title = tab.title || t('untitled');
       const close = li.lastChild;
       close.hidden = !actionsEnabled;
-      close.disabled = closingTabs.has(`${context.name}/${tab.id}`);
+      close.disabled = sleeping || pending || closingTabs.has(`${context.name}/${tab.id}`);
       close.setAttribute('aria-label', t('closeTab', title));
       if (label.textContent !== title) label.textContent = title;
       const here = working.filter((w) => w.name === context.name && w.id === tab.id).map((w) => w.c);
@@ -880,6 +920,7 @@
   function apply(op) {
     if (op.t === 'snapshot') {
       max = op.max;
+      overflow = op.overflow ?? 'reject';
       serverSettings = op.settings ?? {};
       browsers.clear();
       views.clear();

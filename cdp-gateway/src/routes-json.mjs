@@ -3,7 +3,8 @@
 // the public host:port the client dialed.
 
 import fs from 'node:fs/promises';
-import { browserNames, pipeOf, targetOwner } from './browsers.mjs';
+import { browserNames, pipeOf, targetAddress } from './browsers.mjs';
+import { contexts } from './contexts.mjs';
 import { cdpOriginDenied } from './cdp-origin.mjs';
 import { PROTOCOL_FILE } from './config.mjs';
 import { mainBrowser } from './main-browser.mjs';
@@ -63,8 +64,13 @@ export async function jsonRoute(req, res, url) {
   if (p === '/json' || p === '/json/list') {
     // all browsers at once (a stopped main browser lists nothing and is not
     // started); one shutting down meanwhile lists nothing either
-    const lists = await Promise.all(browserNames().map(pipeOf).filter(Boolean).map((pipe) => (
-      targetInfos(pipe).then((infos) => infos.map((info) => listEntry(info, host, pipe.version?.revision)), () => []))));
+    const lists = await Promise.all(browserNames().map(async (name) => {
+      const pipe = pipeOf(name);
+      if (!pipe) return [];
+      const context = contexts.get(name);
+      return targetInfos(pipe).then((infos) => infos.map((info) => listEntry({ ...info,
+        targetId: context?.logicalTarget(info.targetId) ?? info.targetId }, host, pipe.version?.revision)), () => []);
+    }));
     send(res, 200, lists.flat());
     return true;
   }
@@ -81,14 +87,16 @@ export async function jsonRoute(req, res, url) {
   const m = p.match(/^\/json\/(activate|close)\/([^/]+)$/);
   if (m) {
     const [, action, targetId] = m;
-    const pipe = await targetOwner(targetId);
-    if (!pipe) {
+    const target = await targetAddress(targetId, true);
+    if (!target) {
       send(res, 404, `No such target id: ${targetId}`, TEXT);
     } else if (action === 'activate') {
-      await pipe.call('Target.activateTarget', { targetId });
+      target.context?.touch();
+      await target.pipe.call('Target.activateTarget', { targetId: target.id });
       send(res, 200, 'Target activated', TEXT);
     } else {
-      await pipe.call('Target.closeTarget', { targetId });
+      target.context?.touch();
+      await target.pipe.call('Target.closeTarget', { targetId: target.id });
       send(res, 200, 'Target is closing', TEXT);
     }
     return true;

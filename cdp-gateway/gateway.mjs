@@ -25,6 +25,10 @@
 //     get their browserContextId rewritten to the alias;
 //   * Target.disposeBrowserContext(alias) or the client disconnecting
 //     destroys the context: process killed, cloned profile deleted.
+//   * at capacity, hibernation keeps the profile and logical top-level Page
+//     sessions, replacing their physical pipe on next use. Stateful CDP
+//     configuration and verified Playwright helpers are rebuilt; arbitrary
+//     JS memory and evaluations are never replayed. See the README limits.
 //
 // The gateway also owns the main browser: started with the gateway
 // (CHROMIUM_AUTOSTART=true) or only by the first CDP client or the console's
@@ -54,6 +58,10 @@
 //   file-access.mjs     local files a client names stay in CDP_FILE_DIRS
 //   flow.mjs            backpressure between the WebSockets mux/relay join
 //   contexts.mjs        isolated contexts: a chromium each, and their registry
+//   context-session.mjs logical CDP connection across hibernation / wake
+//   context-protocol.mjs typed id translation (application values untouched)
+//   context-journal.mjs declarative settings and verified helper recipes
+//   context-restore.mjs tab identity, native restore and URL fallback
 //   profile.mjs         profile cloning and the clone's Preferences
 //   storage-sync.mjs    live cookies + localStorage from main into a context
 //   main-browser.mjs    the main browser (at start, or on demand)

@@ -218,9 +218,18 @@ CDP 控制台在 **`http://localhost:9222/console/`**,和 CDP 在同一端口,�
 
 背景的像素存储由图片尺寸决定,4K 和小数输出缩放也不再需要整屏背景位图。Wayland 将一个纯色像素铺满输出,再叠加图片大小的子表面;固定版本的 `swaybg` 应用 [`patches/swaybg-center-surfaces.patch`](patches/swaybg-center-surfaces.patch),并保留带分配检查的 [`memfd` 缓冲区](patches/swaybg-memfd.patch)。X11 使用平铺的 1×1 root pixmap 和图片大小的窗口,鼠标输入可穿透,窗口始终位于浏览器下方;原生 helper 无需常驻 Python PNG 解码器。调整分辨率只重新定位或裁剪图片,不会分配整屏背景位图。背景可在 Docker 默认的 64 MiB `/dev/shm` 下工作;桌面、浏览器和编码器仍需要各自的内存。
 
+**达到上限后的休眠。** `CDP_CONTEXTS_OVERFLOW=hibernate`(默认)允许保留超过 `CDP_CONTEXTS_MAX` 个隔离浏览器。启动另一个浏览器前,网关会正常关闭最久未操作且可休眠的浏览器,保留其 profile 和标签快照。正在启动、唤醒、尚未退出的浏览器都占运行名额;主浏览器不计入。设为 `CDP_CONTEXTS_OVERFLOW=reject` 可恢复原先的超额报错行为。
+
+* console 和侧栏分别显示运行与休眠数量、保存的标签以及 **休眠** / **唤醒** 按钮。点击休眠卡片或标签也会唤醒。console 刷新和缩略图采集不更新活跃时间;LRU 按客户端 CDP 指令和 console 显式操作计算。
+* CDP 连接、context alias 和顶层 Playwright `Page` 对象保持有效。需要浏览器的指令会自动唤醒;`context.pages()` 是本地列表,不会触发唤醒。原来已有标签时,未修改的 playwright-cli `tab-list` 唤醒不会多开空白页,`tab-new`(带或不带 URL)则恰好新增一个标签,无需重新 `open`。原本没有标签时,仍遵循 CLI 自动创建默认页面的行为。
+* 页面文档会重新加载:JS 内存、旧 JSHandle/ElementHandle、子 frame 和 worker 的身份不保留。正在执行的命令可能失败,依赖导航状态的读取也可能被重新加载打断。迟到的请求拦截应答会收到协议错误,不会唤醒浏览器;恢复过程中产生的新请求仍可正常拦截和应答。网关只重建已识别的 Playwright 辅助对象和声明式配置,不会重放任意业务脚本或输入操作。兼容测试覆盖 CLI 0.1.23 和 0.1.24;发现未识别的辅助对象时,会暂时禁止该浏览器休眠,直到网关更新兼容性。
+* 优先使用 Chrome 原生会话恢复,headless 也支持。通过临时随机 sessionStorage 键校验标签身份(相同 URL 的标签不会合并),原生恢复成功后删除该键。无法核对身份、标签无法保存标记,或请求拦截、业务初始化脚本、自定义请求头或 user-agent 必须在导航前安装时,整个浏览器改为按 URL 快照恢复。此兜底保留 profile,不保证标签历史和 sessionStorage。失败原因显示在卡片上;唤醒失败仍保留 profile,供后续重试。
+* 存在内部无痕 context、直接 page WebSocket 连接、非 flatten CDP 会话、正在调试/录制或不支持的辅助对象状态时,浏览器不能休眠。没有可休眠候选时,创建或唤醒会返回容量错误。可结束这些会话、关闭其他浏览器或提高上限。
+* `CDP_CONTEXTS_HIBERNATED_MAX=16` 限制休眠 profile 的**个数,不是磁盘字节数**。超出后永久删除最早休眠项,并断开其所属 CDP 连接;console 创建的浏览器也在范围内。`0` 表示不保留休眠项。客户端断线或 `context.close()` 仍会立即删除所属 profile;console 创建的浏览器在其他情况下保留到手动删除。容器重启会清理全部隔离 profile,包括休眠项。
+
 局限:
 
-* 每个隔离 context 是一个完整的浏览器进程,通常占几百 MB 内存。`CDP_CONTEXTS_MAX` 限制同时运行的数量;超出上限时,新建 context 会返回明确的 CDP 错误。
+* 每个运行中的隔离浏览器通常占几百 MB 内存。休眠以重新启动的延迟和页面内存状态为代价,减少同时运行的进程。
 * CDP 协议里不带 session 名,所以一个隔离 context 绑定一个连接。用同一个名字重新打开 playwright-cli session,得到的是新的隔离 context,而不是原来那个。
 * 只有一个连接上的*第一个*隔离 context 会获得独立的 profile 克隆浏览器。同一连接上再调用 `browser.newContext()`(包括同时发起的,例如放在 `Promise.all` 里),得到的是该浏览器内部的普通无痕 context,不带登录态;需要另一个带登录态的 context 时请新开一个连接。
 * profile 是在主浏览器运行期间复制的。cookie 和已打开站点的 localStorage 会实时补同步(见上文),但其他数据库(IndexedDB、历史记录等)按复制那一刻磁盘上的状态复制,因此主浏览器在复制期间写入的内容可能在克隆里缺失,极少数情况下只写了一半。
@@ -352,7 +361,9 @@ docker compose build --build-arg CHROME_VERSION=<version>
 
 | 变量                        | 默认值                      | 说明                                                                                                                                    |
 | --------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `CDP_CONTEXTS_MAX`          | `4`                         | 同时存在的隔离 context 上限(每个都是完整浏览器);超出后新建 context 返回 CDP 错误                                                        |
+| `CDP_CONTEXTS_MAX` | `4` | 同时运行或启动的隔离浏览器上限;主浏览器和休眠项不计入 |
+| `CDP_CONTEXTS_OVERFLOW` | `hibernate` | 达上限后 `hibernate` 最久未操作的可休眠浏览器;`reject` 返回错误 |
+| `CDP_CONTEXTS_HIBERNATED_MAX` | `16` | 保留的休眠 profile 个数,不是字节数;超出删除最早休眠项;`0` 不保留 |
 | `CDP_ALLOW_ORIGINS`         | *(空)*                      | 允许使用 CDP API 的网页 origin,逗号分隔(`*` = 任意),与 Chromium 的 `--remote-allow-origins` 相同;空 = 都不允许 —— 见[通过 CDP 接入 Playwright](#通过-cdp-接入-playwright) |
 | `CDP_CONSOLE_ACTIONS`       | `true`                      | 允许在控制台和侧边栏新建独立浏览器、关闭单个标签页 |
 | `CDP_INPUT_OVERLAY`         | `text`                      | Selkies 页面在串流上叠加画出的 CDP 客户端输入(见上文“看到 AI Agent 在做什么”):`text` = 指针、点击、滚轮、组合键和输入的文字(密码 / 一次性验证码 / 银行卡字段及 frame 内显示为 `••••`);`keys` = 同上,但文字只显示字数;`off` = 不显示。需要 Selkies 和 CDP 同时启用 |
@@ -619,7 +630,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 | 使用 host 网络时容器反复重启                   | 某个监听端口已被宿主机占用 —— 查看 `docker compose logs` / `/tmp/nginx/error.log`,然后更换 `NGINX_LISTEN_HTTP_PORT`、`NGINX_LISTEN_HTTPS_PORT` 或 `CDP_LISTEN_PORT`。 |
 | Web UI 打不开                                  | 是否设了 `ENABLE_SELKIES=false`?查看 `/tmp/nginx/error.log` 及 Selkies 是否起来(其输出在 `docker compose logs` 里)。                                                                                                     |
 | 串流里看不到浏览器窗口                         | 是否设了 `CHROMIUM_HEADLESS=1`?默认 `0` 有头并显示在串流桌面。                                                                                                                                                          |
-| 隔离 session 报错 `CDP context limit reached`  | 已有 `CDP_CONTEXTS_MAX` 个隔离 context 在运行:关闭空闲的 session(或在 `/console/` 上删除),或者调高上限。网关日志在 `/tmp/cdp-gateway.log`,各 context 的 Chromium 日志在 `$CDP_CONTEXTS_DIR/<context>/chromium.log`(仅在 context 存活期间存在:目录随 context 一起删除,启动失败时也一样 —— 此时原因见网关日志)。     |
+| 隔离 session 报错 `CDP context limit reached`  | 当前为 `reject` 模式,或所有运行浏览器均暂不可休眠。查看卡片原因、关闭空闲 session,或提高 `CDP_CONTEXTS_MAX`。网关日志在 `/tmp/cdp-gateway.log`,各 context 的 Chromium 日志在 `$CDP_CONTEXTS_DIR/<context>/chromium.log`(仅在 context 存活期间存在:目录随 context 一起删除,启动失败时也一样 —— 此时原因见网关日志)。     |
 | 重启后提示 profile "in use by another process" | 正常情况会自动清理;仍出现就 `rm browser/user-data/Singleton*`。                                                                                                                                                          |
 | 旧配置目录语言未生效                           | 入口脚本启动时会预置偏好;确认 `CHROMIUM_LANG` 设在*容器*上,而不是单个页面上。                                                                                                                                           |
 | HTTPS 报错                                     | 证书对损坏或不完整时会快速失败 —— 修复或删除 `tls/fullchain.pem` + `tls/privkey.pem`(删掉后重新生成自签对)。                                                                                                                    |

@@ -226,6 +226,7 @@ export class Mux {
       this.answerGone(answerAs);
       return;
     }
+    this.context.touch?.();
     // a window id the gateway handed out goes back as the context chromium's own
     const params = paramsOf(msg);
     if (this.contextWindows.has(params.windowId)) {
@@ -545,12 +546,12 @@ export class Mux {
     try {
       // its proxy becomes the context chromium's own (contexts.mjs)
       const { proxyServer, proxyBypassList } = paramsOf(msg);
-      context = await contexts.create(this.clientAddr, { proxyServer, proxyBypassList });
+      context = await contexts.create(this.clientAddr, { proxyServer, proxyBypassList }, { hold: true, alive: () => !this.closed });
       if (this.closed) {
         await context.destroy('client went away during startup');
         return;
       }
-      const ws = await context.pipe.connect();
+      const ws = await (context.connect ? context.connect() : context.pipe.connect());
       if (this.closed || context.destroyed) {
         // the client left (or the chromium died) while the connection opened:
         // nothing else would ever destroy the context
@@ -579,6 +580,8 @@ export class Mux {
       log(`mux ${this.clientAddr}: context creation failed: ${err.message}`);
       if (context && !context.destroyed) await context.destroy('attach failed');
       this.replyError(msg, err.message);
+    } finally {
+      if (context?.holds) context.holds--;
     }
   }
 
@@ -883,7 +886,7 @@ export class Mux {
     this.contextWindows.clear();
     this.browserSessions.clear();
     this.browserSessionOf.clear();
-    this.contextWs?.close();
+    this.contextWs?.close(true); // pending commands were answered above
     this.contextWs = null;
     this.context = null;
   }

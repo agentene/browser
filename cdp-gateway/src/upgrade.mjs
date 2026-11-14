@@ -12,7 +12,7 @@
 
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
-import { targetOwner } from './browsers.mjs';
+import { targetAddress } from './browsers.mjs';
 import { cdpOriginDenied } from './cdp-origin.mjs';
 import { INPUT_OVERLAY, WS_OPTIONS } from './config.mjs';
 import { consoleDenied, consoleOriginDenied } from './console-auth.mjs';
@@ -58,9 +58,16 @@ async function resolveTarget(req, p) {
   }
   if (p.startsWith('/devtools/page/')) {
     const targetId = p.slice('/devtools/page/'.length);
-    const pipe = await targetOwner(targetId);
-    if (!pipe) return { refuse: 404 };
-    return { kind: 'page', upstream: await pipe.connect({ targetId }), onMain: pipe === mainBrowser.pipe };
+    const target = await targetAddress(targetId, true);
+    if (!target) return { refuse: 404 };
+    const { pipe, id, context } = target;
+    if (context) context.relays++;
+    try {
+      if (context?.state !== undefined && context.state !== 'running') throw new Error('browser is transitioning; retry the page connection');
+      const upstream = await pipe.connect({ targetId: id });
+      if (context) upstream.once('close', () => { context.relays--; });
+      return { kind: 'page', upstream, onMain: !context };
+    } catch (err) { if (context) context.relays--; throw err; }
   }
   if (CONSOLE_SOCKETS.has(p)) {
     if (p === '/console/overlay' && INPUT_OVERLAY === 'off') return { refuse: 404 };

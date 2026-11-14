@@ -20,7 +20,7 @@
 import WebSocket from 'ws';
 import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
-import { MAX_CONTEXTS } from './config.mjs';
+import { MAX_CONTEXTS, HIBERNATED_MAX, CONTEXTS_OVERFLOW } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
 import { unwatchInput, watchInput, workingTabs } from './input-overlay.mjs';
@@ -80,7 +80,8 @@ onChange(consolePoke);
 function browserFields(name, front) {
   if (name === 'main') return { main: true, state: mainBrowser.state, front };
   const s = contexts.get(name);
-  return { color: s.color, client: s.client, createdAt: s.createdAt, pid: s.proc?.pid ?? null, front };
+  return { color: s.color, client: s.client, createdAt: s.createdAt, pid: s.proc?.pid ?? null, front,
+    state: s.state, occupied: s.slot, hibernatedAt: s.hibernatedAt, lastError: s.lastError, restoreWarning: s.restoreWarning, blockedReason: s.blockedReason };
 }
 
 async function tick() {
@@ -90,7 +91,7 @@ async function tick() {
     settingsSent = JSON.stringify(settings);
     ops.push({ t: 'settings', settings });
   }
-  const ai = workingTabs();
+  const ai = workingTabs().map((tab) => ({ ...tab, id: contexts.get(tab.name)?.logicalTarget(tab.id) ?? tab.id }));
   if (JSON.stringify(ai) !== aiSent) {
     aiSent = JSON.stringify(ai);
     ops.push({ t: 'ai', ai });
@@ -112,7 +113,12 @@ async function tick() {
     if (!memos.has(name)) memos.set(name, {});
     if (name === 'main' && !mainBrowser.running) return NO_TABS;
     // null: starting up or shutting down — keep what the consoles have
-    return pipe ? browserTabs(pipe, memos.get(name), titles.get(name)).catch(() => null) : null;
+    const context = contexts.get(name);
+    if (!pipe) return context?.snapshot ?? NO_TABS;
+    return browserTabs(pipe, memos.get(name), titles.get(name)).then((listing) => context ? {
+      tabs: listing.tabs.map((t) => ({ ...t, id: context.logicalTarget(t.id) })),
+      current: listing.current && context.logicalTarget(listing.current),
+    } : listing).catch(() => null);
   }));
   for (const [i, name] of names.entries()) {
     const listing = listings[i];
@@ -158,6 +164,8 @@ function snapshot() {
   return {
     t: 'snapshot',
     max: MAX_CONTEXTS,
+    hibernatedMax: HIBERNATED_MAX,
+    overflow: CONTEXTS_OVERFLOW,
     settings: settingsView(),
     browsers: [...views].map(([name, v]) => ({
       name, ...v.fields, tabs: [...v.tabs.values()], current: v.current, thumb: v.thumb,
@@ -169,10 +177,10 @@ function snapshot() {
 // Screencast the browser's current tab while a console is connected.
 function syncCast(name, view, pipe) {
   const want = subscribers.size && pipe ? view.current : null;
-  if ((view.cast?.id ?? null) === want) return;
+  if ((view.cast?.logicalId ?? null) === want) return;
   stopCast(view);
   if (!want) return;
-  const cast = new Screencast(pipe, want, {
+  const cast = new Screencast(pipe, contexts.get(name)?.physicalTarget(want) ?? want, {
     interval: () => (view.fields.front || !anyFront ? THUMB_FRONT_MS : THUMB_BACK_MS),
     onFrame: (jpeg) => {
       if (view.thumb?.id === want && view.thumb.jpeg === jpeg) return false;
@@ -185,6 +193,7 @@ function syncCast(name, view, pipe) {
     },
   });
   view.cast = cast;
+  cast.logicalId = want;
 }
 
 function stopCast(view) {
