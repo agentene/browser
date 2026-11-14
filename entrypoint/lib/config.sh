@@ -142,6 +142,9 @@
 #   CDP_CONSOLE_ACTIONS=true     the console's / sidebar's New browser (+)
 #                                and per-tab close (×) buttons; false =
 #                                hidden, and their API routes refused
+#   CDP_CONSOLE_RESTART=true     allow restarting the whole container from
+#                                the console's / sidebar's settings page;
+#                                needs Docker's restart policy (Compose: always)
 #   CDP_INPUT_OVERLAY=text       what the Selkies page draws over the stream of
 #                                the CDP clients' input, which never moves the
 #                                desktop's own pointer: text = their pointer,
@@ -459,6 +462,11 @@ config_cdp_gateway() {
     case "${CDP_CONSOLE_ACTIONS}" in
         true|false) ;;
         *) die "CDP_CONSOLE_ACTIONS='${CDP_CONSOLE_ACTIONS}' must be true or false" ;;
+    esac
+    CDP_CONSOLE_RESTART="${CDP_CONSOLE_RESTART:-true}"
+    case "${CDP_CONSOLE_RESTART}" in
+        true|false) ;;
+        *) die "CDP_CONSOLE_RESTART='${CDP_CONSOLE_RESTART}' must be true or false" ;;
     esac
     # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
     # needs the web UI to sit in and the gateway to talk to.

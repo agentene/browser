@@ -45,6 +45,7 @@
 //
 // The modules, in src/:
 //   server.mjs          startup, the HTTP server (unix socket), shutdown
+//   shutdown.mjs        orderly exit for signals and console container restart
 //   http.mjs            HTTP dispatch -> routes-json.mjs (/json/*),
 //                       routes-console.mjs (/console/*), respond.mjs
 //   upgrade.mjs         WebSocket dispatch -> mux.mjs, relay.mjs, console-live.mjs

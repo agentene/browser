@@ -1,4 +1,4 @@
-// The console's server-side settings (its settings menu; the language is
+// The console's server-side settings (its settings page; the language is
 // per viewer and stays in the browser). Saved as a JSON object by section in
 // SETTINGS_FILE on the /browser mount, so they outlive the container:
 //   { "desktop": { "raiseNewWindows": true } }

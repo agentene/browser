@@ -231,6 +231,8 @@ services:
       CDP_INPUT_OVERLAY: "${CDP_INPUT_OVERLAY:-text}"
       # Allow creating browsers and closing individual tabs from the console/sidebar.
       CDP_CONSOLE_ACTIONS: "${CDP_CONSOLE_ACTIONS:-true}"
+      # Restart the whole container from Settings (uses restart: always above).
+      CDP_CONSOLE_RESTART: "${CDP_CONSOLE_RESTART:-true}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: wayland = labwc, a headless

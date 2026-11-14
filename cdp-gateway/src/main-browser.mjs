@@ -29,6 +29,7 @@ class MainBrowser {
     this.browserId = ''; // the id in its /devtools/browser/<id> URL, new per launch
     this.starting = null; // the launch in progress, shared by concurrent callers
     this.stopping = null; // the shutdown in progress, likewise
+    this.closing = false; // gateway shutdown: no subsequent client may start it again
     this.lastActive = Date.now(); // last time idle.mjs saw it in use
   }
 
@@ -44,9 +45,11 @@ class MainBrowser {
   // stopped (still 'running' until it has exited) is waited for and started
   // anew, instead of handing a client a browser on its way out.
   ensure() {
+    if (this.closing) return Promise.reject(new Error('the gateway is shutting down'));
     if (this.running && !this.stopping) return Promise.resolve();
     this.starting ??= (async () => {
       if (this.stopping) await this.stopping;
+      if (this.closing) throw new Error('the gateway is shutting down');
       if (!this.running) await this.launch();
     })().finally(() => { this.starting = null; });
     return this.starting;
@@ -122,6 +125,14 @@ class MainBrowser {
   stop() {
     this.stopping ??= this.#shutdown().finally(() => { this.stopping = null; });
     return this.stopping;
+  }
+
+  // Unlike the console's Stop, gateway shutdown permanently closes this
+  // instance. Include a launch already awaiting filesystem work/readiness.
+  async close() {
+    this.closing = true;
+    await this.starting?.catch(() => {});
+    await this.stop();
   }
 
   async #shutdown() {

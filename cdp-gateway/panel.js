@@ -6,7 +6,7 @@
 // entrypoint/lib/nginx.sh) and proxies cdp-console/ — relative to the page,
 // so SELKIES_SUBFOLDER works — to /console/ on the gateway. Same origin as
 // Selkies on purpose: nginx checks the built-in login's session cookie
-// (ENABLE_AUTH). Its settings menu also carries the built-in
+// (ENABLE_AUTH). Its settings page also carries the built-in
 // login's controls (login, CDP API key, log out): __auth/ui.js, served by
 // the auth service next to the page.
 //
@@ -135,17 +135,21 @@
         display:inline-flex; align-items:center; justify-content:center; flex:none; width:28px; height:28px; padding:0;
         border:none; border-radius:7px; background:transparent; color:var(--muted);
       }
-      .settings-btn:hover, .settings-btn[aria-expanded="true"], button.close:hover { background:var(--chip); color:var(--text); }
-      /* settings: the gear's menu */
-      .settings { position:relative; }
-      .settings-menu {
-        position:absolute; right:0; top:calc(100% + 8px); z-index:20; width:min(300px, calc(100vw - 32px));
-        display:grid; gap:14px; padding:14px; background:var(--card); color:var(--text);
-        border:1px solid var(--line); border-radius:12px;
-        box-shadow:0 1px 2px rgb(0 0 0 / 6%), 0 12px 32px rgb(0 0 0 / 16%);
-        font-size:13px; line-height:1.45; text-align:left;
-      }
-      .settings-title { margin:0; font-weight:600; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+      .settings-btn:hover, .settings-btn[aria-pressed="true"], button.close:hover { background:var(--chip); color:var(--text); }
+
+      /* Settings occupy the content area; only their fields scroll. */
+      .settings { flex:none; }
+      .settings-page { display:flex; flex:1; flex-direction:column; min-height:0; margin:0; }
+      .settings-fields { flex:1; min-height:0; min-width:0; overflow:auto; border:0; padding:0; margin:0; scrollbar-width:thin; }
+      .settings-content { display:grid; align-content:start; gap:20px; padding:18px 14px 24px; }
+      .settings-title { margin:0; font-weight:600; font-size:15px; outline:none; }
+      .settings-footer { display:flex; align-items:center; gap:8px; flex:none; padding:12px 14px; border-top:1px solid var(--line); background:var(--bg); }
+      .settings-footer button { padding:5px 10px; }
+      .settings-buttons { display:flex; gap:8px; margin-left:auto; }
+      .settings-status { flex:none; margin:0; padding:12px 14px 0; color:var(--muted); font-size:13px; }
+      .settings-status:empty { display:none; }
+      .configuring .summary, .configuring .new-browser, .body[hidden], #cards[hidden] { display:none; }
+      .setting > span:first-child { min-width:0; overflow-wrap:anywhere; }
       .setting { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:default; }
       label.setting { cursor:pointer; }
       .setting-hint { display:block; margin-top:2px; color:var(--muted); font-size:12px; }
@@ -270,7 +274,7 @@
       button.ai:hover { filter:brightness(1.1); }
       .tabs button.working { color:var(--text); }
       .empty { color:var(--muted); font-size:13px; padding:10px 14px 14px; }
-      .settings-menu[hidden], .setting[hidden], .tabview[hidden], .empty[hidden], .chip[hidden], .actions [hidden] { display:none; }
+      .settings-page[hidden], .settings-footer [hidden], .setting[hidden], .tabview[hidden], .empty[hidden], .chip[hidden], .actions [hidden] { display:none; }
       /* the console's confirmations (ask()): over the panel only, the stream stays live and usable, never window.confirm() */
       .ask {
         position:absolute; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; padding:16px;
@@ -295,9 +299,18 @@
         <span class="spacer"></span>
         <button class="settings-btn new-browser" type="button" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         <div class="settings">
-          <button class="settings-btn" type="button" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
-          <div class="settings-menu" role="dialog" hidden>
-            <p class="settings-title"></p>
+          <button class="settings-btn" type="button" aria-controls="console-settings" aria-pressed="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+
+        </div>
+        <button class="close">×</button>
+      </header>
+      <div role="alert" class="error"></div>
+      <div class="body"></div>
+      <form id="console-settings" class="settings-page" aria-labelledby="settings-heading" hidden>
+        <p class="settings-status" role="status"></p>
+        <fieldset class="settings-fields">
+          <div class="settings-content">
+            <h3 class="settings-title" id="settings-heading" tabindex="-1"></h3>
             <div class="setting">
               <span class="lang-label"></span>
               <span class="seg" role="group"><button type="button" data-lang="en" lang="en">English</button><button type="button" data-lang="zh" lang="zh-CN">中文</button></span>
@@ -311,17 +324,18 @@
               <input class="switch overlay-switch" type="checkbox" role="switch">
             </label>
           </div>
-        </div>
-        <button class="close">×</button>
-      </header>
-      <div role="alert" class="error"></div>
-      <div class="body"></div>
+        </fieldset>
+        <footer class="settings-footer">
+          <button class="settings-restart danger-solid" type="button" hidden></button>
+          <div class="settings-buttons"><button class="settings-save primary" type="submit"></button><button class="settings-cancel" type="button"></button></div>
+        </footer>
+      </form>
     </aside>`;
   const $ = (sel) => root.querySelector(sel);
   const handle = $('.handle'), panel = $('.panel'), body = $('.body');
 
   // --- language ---------------------------------------------------------------
-  // English and Simplified Chinese: the viewer's choice (the settings menu,
+  // English and Simplified Chinese: the viewer's choice (the settings page,
   // remembered per browser), else the browser's languages.
   const STRINGS = {
     en: {
@@ -370,6 +384,12 @@
       resizeTitle: 'Drag to resize',
       close: 'Close',
       settings: 'Settings',
+      saveSettings: 'Save and apply',
+      savingSettings: 'Saving settings…',
+      restartContainer: 'Restart',
+      restartHint: 'Restart the entire container without saving pending changes',
+      restartingContainer: 'Restarting the container… This page will reload when it is ready.',
+      restartTimeout: 'The service has not recovered yet. Check the container and its restart policy, then reload this page.',
       language: 'Language',
       raiseNew: 'New windows to the front',
       raiseNewHint: 'Off: windows that open later (e.g. a new isolated context) stay behind the one in front; Show brings one forward.',
@@ -421,7 +441,13 @@
       reconnecting: (s) => `与 CDP 网关的连接已断开，${s} 秒后重连…`,
       resizeTitle: '拖动调整宽度',
       close: '关闭',
-      settings: '设置',
+      settings: '配置',
+      saveSettings: '保存并应用',
+      savingSettings: '正在保存配置…',
+      restartContainer: '重启',
+      restartHint: '重启整个容器，不保存尚未提交的修改',
+      restartingContainer: '正在重启容器…服务恢复后此页面将自动刷新。',
+      restartTimeout: '服务尚未恢复，请检查容器及其重启策略，然后刷新此页面。',
       language: '语言',
       raiseNew: '新窗口切到最前',
       raiseNewHint: '关闭后，之后新打开的窗口（如新的隔离上下文）留在当前窗口之后，可用“显示”切过去。',
@@ -454,10 +480,13 @@
     renderNewBrowser();
     settingsBtn.title = t('settings');
     settingsBtn.setAttribute('aria-label', t('settings'));
-    settingsMenu.setAttribute('aria-label', t('settings'));
     $('.settings-title').textContent = t('settings');
+    $('.settings-save').textContent = t('saveSettings');
+    $('.settings-cancel').textContent = t('cancel');
+    $('.settings-restart').textContent = t('restartContainer');
+    $('.settings-restart').title = t('restartHint');
     $('.lang-label').textContent = t('language');
-    for (const b of settings.querySelectorAll('[data-lang]')) b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+    renderLanguageChoice();
     $('.raise-label').textContent = t('raiseNew');
     $('.raise-hint').textContent = t('raiseNewHint');
     $('.overlay-label').textContent = t('showInput');
@@ -470,38 +499,139 @@
     renderSummary();
   }
 
-  // Settings: the header's gear opens a menu with the console's language and
-  // the desktop's "new windows to the front" switch (only with a desktop).
-  const settings = $('.settings');
+  // Settings replace the cards below the header. Ordinary edits stay in a
+  // draft until Save; the Access dialogs still save independently.
   const settingsBtn = $('.settings .settings-btn');
-  const settingsMenu = $('.settings-menu');
-  function setMenu(open) {
-    settingsMenu.hidden = !open;
-    settingsBtn.setAttribute('aria-expanded', String(open));
-  }
-  settingsBtn.addEventListener('click', () => {
-    if (settingsMenu.hidden) renderOverlay();
-    setMenu(settingsMenu.hidden);
-  });
-  document.addEventListener('pointerdown', (e) => {
-    if (!settingsMenu.hidden && !e.composedPath().includes(settings)) setMenu(false);
-  });
-  settings.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || settingsMenu.hidden) return;
-    e.stopPropagation(); // the menu closes first, not what it sits in
-    setMenu(false);
-    settingsBtn.focus();
-  });
-  for (const b of settings.querySelectorAll('[data-lang]')) b.addEventListener('click', () => setLang(b.dataset.lang, true));
+  const settingsPage = $('.settings-page');
+  const settingsContent = $('.settings-content');
+  let settingsDraft = null;
+  const settingsDirty = new Set();
+  let settingsBusy = false;
+  let connectionError = false;
+  let restarting = false;
+  let restartAccepted = false;
+  let restartDisconnected = false;
+  let restartReady = false;
+  let restartTimer = 0;
 
-  // The built-in login's rows in the menu and their dialogs (in the shadow
+  function renderLanguageChoice() {
+    for (const b of settingsContent.querySelectorAll('[data-lang]')) {
+      b.setAttribute('aria-pressed', String(b.dataset.lang === (settingsDraft?.language ?? lang)));
+    }
+  }
+
+  function setSettings(open) {
+    if (settingsBusy) return;
+    settingsDirty.clear();
+    settingsDraft = open ? { language: lang, raiseNewWindows: serverSettings.desktop?.raiseNewWindows, overlay: window.AgenteneInputOverlay?.enabled() } : null;
+    settingsPage.hidden = !open;
+    body.hidden = open;
+    panel.classList.toggle('configuring', open);
+    settingsBtn.setAttribute('aria-pressed', String(open));
+    showError(null);
+    $('.settings-status').textContent = '';
+    renderLanguageChoice();
+    renderRaiseNew();
+    renderOverlay();
+    if (open) $('.settings-title').focus();
+    else settingsBtn.focus();
+  }
+
+  function renderRestart() {
+    $('.settings-restart').disabled = settingsBusy || ws?.readyState !== WebSocket.OPEN;
+  }
+
+  function setSettingsBusy(busy) {
+    settingsBusy = busy;
+    settingsPage.setAttribute('aria-busy', String(busy));
+    $('.settings-fields').disabled = busy;
+    for (const b of settingsPage.querySelectorAll('.settings-footer button')) b.disabled = busy;
+    settingsBtn.disabled = busy;
+    renderRestart();
+    $('.close').disabled = busy;
+  }
+
+  settingsBtn.addEventListener('click', () => setSettings(settingsPage.hidden));
+  $('.settings-cancel').addEventListener('click', () => setSettings(false));
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || settingsPage.hidden) return;
+    e.preventDefault();
+    e.stopPropagation(); // return to the list before closing the sidebar
+    setSettings(false);
+  });
+  for (const b of settingsContent.querySelectorAll('[data-lang]')) b.addEventListener('click', () => {
+    if (!settingsDraft || settingsBusy) return;
+    settingsDraft.language = b.dataset.lang;
+    renderLanguageChoice();
+  });
+
+  settingsPage.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!settingsDraft || settingsBusy) return;
+    const draft = settingsDraft;
+    setSettingsBusy(true);
+    showError(null);
+    $('.settings-status').textContent = t('savingSettings');
+    try {
+      if (settingsDirty.has('raiseNewWindows') && draft.raiseNewWindows !== serverSettings.desktop?.raiseNewWindows) {
+        serverSettings = await call('PATCH', '/settings', { desktop: { raiseNewWindows: draft.raiseNewWindows } });
+      }
+      if (settingsDirty.has('overlay')) window.AgenteneInputOverlay?.setEnabled(draft.overlay);
+      setLang(draft.language, true);
+      setSettingsBusy(false);
+      setSettings(false);
+    } catch (err) {
+      showError(err);
+    } finally {
+      setSettingsBusy(false);
+      $('.settings-status').textContent = '';
+    }
+  });
+
+  function finishRestart() {
+    if (!restarting || !restartAccepted || !restartReady) return;
+    clearTimeout(restartTimer);
+    location.reload(); // reload Selkies too, after the new gateway is ready
+  }
+
+  $('.settings-restart').addEventListener('click', async () => {
+    // An open live connection lets us observe shutdown before reloading.
+    if (settingsBusy || ws?.readyState !== WebSocket.OPEN) return;
+    restarting = true;
+    restartAccepted = restartDisconnected = restartReady = false;
+    setSettingsBusy(true);
+    showError(null);
+    $('.settings-status').textContent = t('restartingContainer');
+    restartTimer = setTimeout(() => showError(t('restartTimeout')), 90000);
+    try {
+      await call('POST', '/restart');
+      restartAccepted = true;
+      settingsDraft = null; // restarting never saves the draft
+      finishRestart();
+    } catch (err) {
+      if (!err.status) {
+        // The connection may have gone away after the server accepted it.
+        // Wait for recovery, never send the restart a second time.
+        restartAccepted = true;
+        finishRestart();
+        return;
+      }
+      clearTimeout(restartTimer);
+      restarting = false;
+      setSettingsBusy(false);
+      $('.settings-status').textContent = '';
+      showError(err);
+    }
+  });
+
+  // The built-in login's rows in the settings page and their dialogs (in the shadow
   // root, so the panel's keyboard rules cover them); absent without
   // ENABLE_AUTH.
   const authUi = document.createElement('script');
   authUi.src = new URL('__auth/ui.js', document.baseURI).href;
   authUi.onload = () => {
     window.AgenteneAuth?.setLang(lang);
-    window.AgenteneAuth?.mount({ menu: settingsMenu, root, onError: showError });
+    window.AgenteneAuth?.mount({ menu: settingsContent, root, onError: showError });
   };
   document.head.append(authUi);
 
@@ -551,20 +681,21 @@
   }
 
   function setOpen(open) {
+    if (settingsBusy) return;
     host.classList.toggle('open', open);
     panel.inert = !open;
     if (open) {
       connect();
     } else {
       disconnect();
-      setMenu(false);
+      setSettings(false);
       asking?.(false);
       if (root.activeElement) root.activeElement.blur(); // hand the keyboard back to the remote desktop
     }
   }
   handle.addEventListener('click', () => setOpen(!host.classList.contains('open')));
   $('.close').addEventListener('click', () => setOpen(false));
-  root.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
+  root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !e.defaultPrevented) setOpen(false); });
 
   // Width: drag the panel's left edge; remembered per viewer. The cards and
   // their thumbnails follow (fractional grid columns).
@@ -634,24 +765,24 @@
     $('.summary').textContent = views.size ? t('summary', n, max, sleeping) : '';
   }
 
-  function showError(err) {
+  function showError(err, connection = false) {
+    connectionError = connection;
     $('.error').textContent = err ? String(err.message || err) : '';
   }
 
-  // The desktop's "new windows to the front" switch; the gateway's 'settings'
-  // op confirms a flip, a failed one flips back.
+  // Server pushes refresh the saved state, never a field the user edited.
   const raiseRow = $('.raise-row');
-  const raiseBox = $('.switch');
+  const raiseBox = $('.raise-row .switch');
   function renderRaiseNew() {
     const on = serverSettings.desktop?.raiseNewWindows;
     raiseRow.hidden = on === undefined; // no desktop
-    raiseBox.checked = !!on;
+    if (settingsDraft && !settingsDirty.has('raiseNewWindows')) settingsDraft.raiseNewWindows = on;
+    raiseBox.checked = !!(settingsDraft ? settingsDraft.raiseNewWindows : on);
   }
   raiseBox.addEventListener('change', () => {
-    call('PATCH', '/settings', { desktop: { raiseNewWindows: raiseBox.checked } }).catch((err) => {
-      showError(err);
-      renderRaiseNew();
-    });
+    if (!settingsDraft || settingsBusy) return;
+    settingsDraft.raiseNewWindows = raiseBox.checked;
+    settingsDirty.add('raiseNewWindows');
   });
 
   // The input overlay's switch (overlay.js, when nginx injected it): the
@@ -661,9 +792,14 @@
   function renderOverlay() {
     const overlay = window.AgenteneInputOverlay;
     overlayRow.hidden = !overlay;
-    overlayBox.checked = !!overlay?.enabled();
+    if (settingsDraft && !settingsDirty.has('overlay')) settingsDraft.overlay = overlay?.enabled();
+    overlayBox.checked = !!(settingsDraft ? settingsDraft.overlay : overlay?.enabled());
   }
-  overlayBox.addEventListener('change', () => window.AgenteneInputOverlay?.setEnabled(overlayBox.checked));
+  overlayBox.addEventListener('change', () => {
+    if (!settingsDraft || settingsBusy) return;
+    settingsDraft.overlay = overlayBox.checked;
+    settingsDirty.add('overlay');
+  });
   window.addEventListener('agentene-input-overlay', () => {
     window.AgenteneInputOverlay.setLang(lang);
     renderOverlay();
@@ -969,24 +1105,33 @@
   let retryTimer = 0;
 
   function connect() {
-    if (ws || document.hidden || !host.classList.contains('open')) return;
+    if (ws || (document.hidden && !restarting) || !host.classList.contains('open')) return;
     ws = new WebSocket(WS);
     ws.onopen = () => {
       retry = 1000;
-      showError(null);
+      renderRestart();
+      if (!restarting && (connectionError || !settingsDraft)) showError(null);
     };
     ws.onmessage = (e) => {
       const touched = new Set();
+      let snapshot = false;
       for (const op of JSON.parse(e.data).ops) {
+        if (op.t === 'snapshot') snapshot = true;
         for (const name of apply(op)) touched.add(name);
       }
       touched.forEach(update);
       renderSummary();
       renderRaiseNew();
+      if (restarting && restartDisconnected && snapshot) {
+        restartReady = true;
+        finishRestart();
+      }
     };
     ws.onclose = () => {
       ws = null;
-      showError(t('reconnecting', retry / 1000));
+      renderRestart();
+      if (restarting) restartDisconnected = true;
+      else showError(t('reconnecting', retry / 1000), true);
       retryTimer = setTimeout(connect, retry);
       retry = Math.min(retry * 2, 10000);
     };
@@ -998,11 +1143,12 @@
     ws.onclose = null;
     ws.close();
     ws = null;
+    renderRestart();
   }
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      disconnect();
+      if (!restarting) disconnect();
     } else {
       retry = 1000;
       connect();
@@ -1013,6 +1159,11 @@
     actionsEnabled = data.enabled;
     renderNewBrowser();
     browsers.forEach((b, name) => update(name));
+  }).catch(showError);
+
+  call('GET', '/restart').then((data) => {
+    $('.settings-restart').hidden = !data.enabled;
+    renderRestart();
   }).catch(showError);
 
   setLang(lang, false);

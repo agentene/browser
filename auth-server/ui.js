@@ -6,7 +6,7 @@
 // loads where the built-in login is on (ENABLE_AUTH=true). A page loads it
 // and calls
 //   AgenteneAuth.mount({ menu, root, onError })
-// menu    the element its rows go into (the console's settings menu): the
+// menu    the element its rows go into (the console's settings page): the
 //         login (Change…), the CDP API key (Change…), Log out
 // root    where its dialogs go: document.body, or the panel's shadow root
 // onError shows an error (null clears it)

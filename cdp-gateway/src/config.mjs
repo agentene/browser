@@ -19,6 +19,7 @@ export function intEnv(name, fallback, source = env) {
 // port a page in the browser could open (pipe.mjs)
 export const SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
 export const CONSOLE_ACTIONS = env.CDP_CONSOLE_ACTIONS !== 'false';
+export const CONSOLE_RESTART = env.CDP_CONSOLE_RESTART !== 'false';
 export const MAX_CONTEXTS = intEnv('CDP_CONTEXTS_MAX', 4);
 if (MAX_CONTEXTS < 1) throw new Error('CDP_CONTEXTS_MAX must be positive');
 export const CONTEXTS_OVERFLOW = env.CDP_CONTEXTS_OVERFLOW || 'hibernate';

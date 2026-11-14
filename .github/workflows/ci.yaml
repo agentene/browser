@@ -585,6 +585,9 @@ jobs:
           if docker logs restart-smoke 2>&1 | grep -F '[entrypoint] ERROR'; then exit 1; fi
           echo "RUN_USER restart smoke test OK"
 
+      - name: Smoke test — console restarts the whole container
+        run: python3 .github/tests/console-restart.py localhost/ci:${{ env.IMAGE_NAME }}
+
       - name: Smoke test — RUN_USER default (browser) and RUN_USER=0 (root)
         run: |
           set -euo pipefail

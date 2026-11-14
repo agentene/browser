@@ -10,12 +10,13 @@
 //                                           CDP connection that owns it)
 //   GET    /console/api/settings            the server-side settings (settings.mjs)
 //   PATCH  /console/api/settings            change some: {section: {key: value}}
+//   GET/POST /console/api/restart             capability / restart the container
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { notifyChange } from './changes.mjs';
 import { pipeOf } from './browsers.mjs';
-import { CONSOLE_ACTIONS, ROOT } from './config.mjs';
+import { CONSOLE_ACTIONS, CONSOLE_RESTART, ROOT } from './config.mjs';
 import { consoleDenied } from './console-auth.mjs';
 import { contexts } from './contexts.mjs';
 import { focus } from './desktop.mjs';
@@ -30,7 +31,7 @@ const FILES = {
 };
 
 // Answers the request and returns true if it is one of these routes.
-export async function consoleRoute(req, res, url) {
+export async function consoleRoute(req, res, url, restart) {
   const p = url.pathname;
   if (p === '/console') {
     res.writeHead(302, { Location: '/console/' });
@@ -46,6 +47,18 @@ export async function consoleRoute(req, res, url) {
   if (FILES[p]) {
     const [file, type] = FILES[p];
     send(res, 200, await fs.readFile(path.join(ROOT, file)), type);
+    return true;
+  }
+  if (p === '/console/api/restart') {
+    if (req.method === 'GET') send(res, 200, { enabled: CONSOLE_RESTART });
+    else if (req.method !== 'POST') send(res, 405, { error: 'GET or POST' });
+    else if (!CONSOLE_RESTART) send(res, 403, { error: 'console container restart is disabled' });
+    else if (!restart) send(res, 503, { error: 'container restart is unavailable' });
+    else {
+      // Finish the response before shutdown closes the public connection.
+      res.once('finish', restart);
+      send(res, 202, { ok: true });
+    }
     return true;
   }
   if (p === '/console/api/settings') {

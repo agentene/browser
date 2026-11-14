@@ -1,5 +1,6 @@
 # shellcheck shell=bash
 # cdp-gateway.sh — the CDP gateway (always on with ENABLE_CDP).
+# Sets: CDP_GATEWAY_PID (the supervised gateway, checked by the stop hook).
 #
 # A Node gateway between nginx and chromium. Default-context clients pass
 # through to the main browser untouched; an isolated client's
@@ -52,6 +53,7 @@ cdp_gateway_start() {
         env CHROME_BIN="${CHROME_BIN}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
         CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" CDP_GATEWAY_SOCKET="${CDP_GATEWAY_SOCKET}" \
         CDP_CONSOLE_ACTIONS="${CDP_CONSOLE_ACTIONS}" \
+        CDP_CONSOLE_RESTART="${CDP_CONSOLE_RESTART}" \
         CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX}" CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
         CDP_CONTEXTS_OVERFLOW="${CDP_CONTEXTS_OVERFLOW}" CDP_CONTEXTS_HIBERNATED_MAX="${CDP_CONTEXTS_HIBERNATED_MAX}" \
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
@@ -65,6 +67,8 @@ cdp_gateway_start() {
         CDP_FILE_DIRS="${CDP_FILE_DIRS}" CDP_INPUT_OVERLAY="${CDP_INPUT_OVERLAY}" \
         "${CHROMIUM_ENV[@]}" \
         "${DROP[@]}" node /usr/local/lib/cdp-gateway/gateway.mjs
+
+    CDP_GATEWAY_PID="${SERVICE_PID}"
 
     STOP_HOOKS+=(cdp_gateway_close_browser)
 
@@ -84,6 +88,9 @@ cdp_gateway_start() {
 # may SIGKILL it before it finished; the console's Stop returns once the
 # browser has exited. Bounded well inside docker stop's 10s.
 cdp_gateway_close_browser() {
+    # A console restart already closed the browsers before the gateway
+    # exited. There is no socket to ask in that case (or after a crash).
+    kill -0 "${CDP_GATEWAY_PID}" 2>/dev/null || return 0
     timeout 8 curl -fsS -o /dev/null -X POST -H 'X-CDP-Console: 1' \
         --unix-socket "${CDP_GATEWAY_SOCKET}" http://gateway/console/api/main/stop \
         || log "WARNING: the main browser did not close in time; stopping it with a signal (recent cookies may be lost)"

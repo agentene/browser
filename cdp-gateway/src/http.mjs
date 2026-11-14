@@ -5,14 +5,14 @@ import { HttpError, requestPath, send, viaWeb } from './respond.mjs';
 import { consoleRoute } from './routes-console.mjs';
 import { jsonRoute } from './routes-json.mjs';
 
-export async function handleHttp(req, res) {
+export async function handleHttp(req, res, restart) {
   if (requestPath(req) === null) {
     send(res, 400, { error: 'malformed request path' });
     return;
   }
   const url = new URL(req.url, 'http://gateway');
   try {
-    if (viaWeb(req) ? await consoleRoute(req, res, url) : await jsonRoute(req, res, url) || await consoleRoute(req, res, url)) return;
+    if (viaWeb(req) ? await consoleRoute(req, res, url, restart) : await jsonRoute(req, res, url) || await consoleRoute(req, res, url, restart)) return;
     send(res, 404, { error: `not found: ${url.pathname}` });
   } catch (err) {
     log(`HTTP ${req.method} ${url.pathname}: ${err.message}`);
