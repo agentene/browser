@@ -71,24 +71,36 @@ export async function finishSessionFiles(context, success) {
   context.sessionBackup = null;
 }
 
+async function attachRestoredTabs(pipe, sessions) {
+  // WebContentsDevToolsAgentHost::AttachSession loads a deferred tab without
+  // selecting it, and leaves live renderers / pending navigations alone. A
+  // page-target session does not load these background session-restore tabs.
+  const { targetInfos } = await pipe.call('Target.getTargets', { filter: [{ type: 'tab' }] });
+  for (const { targetId } of targetInfos) {
+    if (sessions.has(targetId)) continue;
+    try {
+      const { sessionId } = await pipe.call('Target.attachToTarget', { targetId, flatten: true });
+      sessions.set(targetId, sessionId);
+    } catch { /* A startup target may disappear; retry discovery on the next pass. */ }
+  }
+}
+
 export async function restoreTabs(context, native) {
   const { pipe, snapshot } = context;
   const found = new Map();
   if (native) {
     // --no-startup-window preserves the automation lifetime but defers session restore until a window opens. Remove this bootstrap tab before attaching the client's session.
     const { targetId: bootstrap } = await pipe.call('Target.createTarget', { url: 'about:blank' });
-    const activated = new Set();
+    const tabSessions = new Map();
     const deadline = Date.now() + RESTORE_TIMEOUT_MS;
     try {
       while (Date.now() < deadline) {
+        await attachRestoredTabs(pipe, tabSessions);
         for (const info of await pageInfos(pipe)) {
           if (info.targetId === bootstrap || [...found.values()].includes(info.targetId)) continue;
-          // Chrome can defer loading background tabs. Activate each candidate
-          // once so its document loads; wake() restores the selected tab later.
-          if (!activated.has(info.targetId)) {
-            await pipe.call('Target.activateTarget', { targetId: info.targetId });
-            activated.add(info.targetId);
-          }
+          // Chrome restores the selected tab in every window. Probe without
+          // activating: cycling candidates changes those selections and fires
+          // focus/visibility events in pages. A slow document can be retried.
           const id = await evaluate(pipe, info.targetId, `(() => { try { return sessionStorage.getItem(${JSON.stringify(snapshot.key)}); } catch { return null; } })()`).catch(() => null);
           if (snapshot.tabs.some((t) => t.id === id) && !found.has(id)) found.set(id, info.targetId);
         }
@@ -96,6 +108,7 @@ export async function restoreTabs(context, native) {
         await sleep(100);
       }
     } finally {
+      await Promise.allSettled([...tabSessions.values()].map((sessionId) => pipe.call('Target.detachFromTarget', { sessionId })));
       await pipe.call('Target.closeTarget', { targetId: bootstrap });
     }
     const closeDeadline = Date.now() + 5000;

@@ -150,6 +150,32 @@ jobs:
             docker rm -f hibernation-smoke >/dev/null
           done
 
+      - name: Smoke test — native restore with multiple windows and default extensions
+        run: |
+          set -euo pipefail
+          trap 'if docker inspect native-restore-smoke >/dev/null 2>&1; then docker logs native-restore-smoke; docker exec native-restore-smoke tail -200 /tmp/cdp-gateway.log || true; docker rm -f native-restore-smoke >/dev/null; fi' EXIT
+          for backend in headless wayland x11; do
+            headless=0
+            selkies=true
+            display_backend="$backend"
+            if [ "$backend" = headless ]; then headless=1; selkies=false; display_backend=wayland; fi
+            # Keep the default extension environment; raw CDP does not emulate
+            # focus, so this can observe each window's actual selected tab.
+            docker run -d --name native-restore-smoke --shm-size=1g \
+              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" -e CHROMIUM_AUTOSTART=false \
+              -e CHROMIUM_HEADLESS="$headless" -e DISPLAY_BACKEND="$display_backend" \
+              -v "$PWD/.github/tests:/tests:ro" localhost/ci:${{ env.IMAGE_NAME }}
+            for _ in $(seq 1 60); do
+              docker exec native-restore-smoke curl -sf http://127.0.0.1:9222/json/list >/dev/null && break
+              sleep 1
+            done
+            docker logs native-restore-smoke 2>&1 | grep "starting CDP gateway .*headless=$headless," >/dev/null
+            echo "Native multi-window restore: backend=$backend (default extensions)"
+            docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 native-restore-smoke node /tests/context-native-restore.mjs
+            docker exec native-restore-smoke sh -c 'test -z "$(ls -A /browser/contexts)"'
+            docker rm -f native-restore-smoke >/dev/null
+          done
+
       - name: Smoke test — chromium CDP endpoint
         run: |
           set -euo pipefail
