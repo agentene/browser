@@ -47,12 +47,13 @@ cdp_gateway_start() {
     local raise_switch=""
     [ "${CDP_CONTEXTS_HEADLESS}" = "0" ] && raise_switch="${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh"
 
-    log "starting CDP gateway on ${CDP_GATEWAY_SOCKET} (main browser autostart=${CHROMIUM_AUTOSTART} idle-timeout=${CHROMIUM_IDLE_TIMEOUT}m, max ${CDP_CONTEXTS_MAX} contexts, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR}, web page origins allowed: ${CDP_ALLOW_ORIGINS:-none}, client Browser.close reaches the browser: ${CDP_ALLOW_BROWSER_CLOSE}, local files clients may name: ${CDP_FILE_DIRS}, input overlay: ${CDP_INPUT_OVERLAY})"
+    log "starting CDP gateway on ${CDP_GATEWAY_SOCKET} (main browser autostart=${CHROMIUM_AUTOSTART} idle-timeout=${CHROMIUM_IDLE_TIMEOUT}m, max ${CDP_CONTEXTS_MAX} running contexts, overflow=${CDP_CONTEXTS_OVERFLOW}, max ${CDP_CONTEXTS_HIBERNATED_MAX} sleepers, headless=${CDP_CONTEXTS_HEADLESS}, data in ${CDP_CONTEXTS_DIR}, web page origins allowed: ${CDP_ALLOW_ORIGINS:-none}, client Browser.close reaches the browser: ${CDP_ALLOW_BROWSER_CLOSE}, local files clients may name: ${CDP_FILE_DIRS}, input overlay: ${CDP_INPUT_OVERLAY})"
     start_service /tmp/cdp-gateway.log \
         env CHROME_BIN="${CHROME_BIN}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
         CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" CDP_GATEWAY_SOCKET="${CDP_GATEWAY_SOCKET}" \
         CDP_CONSOLE_ACTIONS="${CDP_CONSOLE_ACTIONS}" \
         CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX}" CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
+        CDP_CONTEXTS_OVERFLOW="${CDP_CONTEXTS_OVERFLOW}" CDP_CONTEXTS_HIBERNATED_MAX="${CDP_CONTEXTS_HIBERNATED_MAX}" \
         CDP_CONTEXTS_HEADLESS="${CDP_CONTEXTS_HEADLESS}" DISPLAY_BACKEND="${DISPLAY_BACKEND}" \
         CDP_GATEWAY_FLAGS_FILE="${flags_file}" \
         CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART}" \

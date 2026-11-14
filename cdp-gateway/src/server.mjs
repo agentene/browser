@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import {
-  CHROME_BIN, CONTEXTS_DIR, IDLE_TIMEOUT_MS, MAIN_AUTOSTART, MAIN_FLAGS_FILE, MAX_CONTEXTS, SOCKET_PATH,
+  CHROME_BIN, CONTEXTS_DIR, CONTEXTS_OVERFLOW, HIBERNATED_MAX, IDLE_TIMEOUT_MS, MAIN_AUTOSTART, MAIN_FLAGS_FILE, MAX_CONTEXTS, SOCKET_PATH,
   readFlags,
 } from './config.mjs';
 import { contexts } from './contexts.mjs';
@@ -44,10 +44,11 @@ export async function startGateway() {
     if (MAIN_AUTOSTART) mainBrowser.ensure().catch(() => { /* logged by launch() */ });
     await fs.chmod(SOCKET_PATH, 0o666);
     const idle = IDLE_TIMEOUT_MS ? `, closed after ${IDLE_TIMEOUT_MS / 60_000} idle min` : '';
-    log(`listening on ${SOCKET_PATH} (main browser started ${MAIN_AUTOSTART ? 'now' : 'when a client uses it'}${idle}, max ${MAX_CONTEXTS} contexts, data in ${CONTEXTS_DIR}; the browsers speak CDP on their pipes only)`);
+    log(`listening on ${SOCKET_PATH} (main browser started ${MAIN_AUTOSTART ? 'now' : 'when a client uses it'}${idle}, max ${MAX_CONTEXTS} running contexts, overflow=${CONTEXTS_OVERFLOW}, max ${HIBERNATED_MAX} sleepers, data in ${CONTEXTS_DIR}; the browsers speak CDP on their pipes only)`);
   });
 
   async function shutdown(signal) {
+    contexts.close(); // queued creation/wake requests must not spawn after shutdown starts
     log(`${signal}: destroying ${contexts.size} context(s)`);
     server.close();
     await Promise.all(contexts.values().map((s) => s.destroy('gateway shutdown')).concat(mainBrowser.stop()));

@@ -34,6 +34,31 @@ RUN apt-get update && \
     # for everything else in the image
     cp -L /src/addons/fake-udev/libudev.so.1 /out/libudev.so.1
 
+# === BUILD the desktop background clients ===
+# The centered picture uses an image-sized surface over a constant-color background on both backends. Its buffers need only small alignment padding for output scale. Keep swaybg's memfd allocation checks too, including its fallback paths for compositors without the required protocols.
+# The upstream release and archive checksum are pinned here. The X11 client uses Cairo/Xlib, replacing the resident Python PNG decoding process.
+FROM ubuntu:26.04 AS swaybg-build
+ARG DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates gcc libc6-dev \
+        libcairo2-dev libwayland-dev libx11-dev libxext-dev meson ninja-build pkg-config wayland-protocols patch && \
+    curl -fsSL --retry 3 -o /tmp/swaybg.tar.gz \
+        https://github.com/swaywm/swaybg/archive/refs/tags/v1.2.1.tar.gz && \
+    echo '45c4a1a3b83c86ddc321a6136402b708f195a022d0ccee4641b23d14c3a3c25e  /tmp/swaybg.tar.gz' | sha256sum -c - && \
+    mkdir /src && tar -xzf /tmp/swaybg.tar.gz -C /src --strip-components=1
+COPY patches/swaybg-memfd.patch patches/swaybg-center-surfaces.patch /tmp/
+COPY entrypoint/helpers/x11-desktop-background.c /src/x11-desktop-background.c
+# The shipped asset is PNG; Cairo reads it without GDK's extra loaders.
+RUN patch --batch --fuzz=0 -d /src -p1 < /tmp/swaybg-memfd.patch && \
+    patch --batch --fuzz=0 -d /src -p1 < /tmp/swaybg-center-surfaces.patch && \
+    meson setup /src/build /src --buildtype=release -Dgdk-pixbuf=disabled -Dman-pages=disabled && \
+    meson compile -C /src/build && \
+    x11_flags="$(pkg-config --cflags --libs cairo-xlib xext)" && \
+    read -r -a x11_build_flags <<< "${x11_flags}" && \
+    cc -O2 -Wall -Wextra -Werror /src/x11-desktop-background.c -o /src/build/x11-desktop-background \
+        "${x11_build_flags[@]}"
+
 FROM ubuntu:26.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -182,13 +207,13 @@ RUN apt-get update && \
 # default): labwc is
 # the headless Wayland compositor + window manager Selkies captures (it
 # maximizes the browser windows), wlr-randr sizes its output at startup and
-# wlrctl raises a window for the CDP console.
+# wlrctl raises a window for the CDP console. The background clients built above paint the desktop (entrypoint/lib/desktop-background.sh).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 xvfb x11-xserver-utils picom python3-xlib \
     labwc wlr-randr wlrctl pulseaudio \
     libx11-xcb1 libegl1 libgl1 libva2 libva-drm2 libvulkan1 \
-    libwayland-server0 \
+    libwayland-client0 libwayland-server0 \
     mesa-va-drivers libgl1-mesa-dri intel-media-va-driver-non-free \
     mesa-vulkan-drivers mesa-utils vainfo vulkan-tools && \
     rm -rf /var/lib/apt/lists/*
@@ -289,6 +314,10 @@ COPY cdp-gateway/src/ /usr/local/lib/cdp-gateway/src/
 # console's login + API key controls (ui.js).
 COPY auth-server/server.mjs auth-server/page.html auth-server/ui.js auth-server/keepalive.js /usr/local/lib/auth-server/
 COPY auth-server/src/ /usr/local/lib/auth-server/src/
+
+# Keep background rebuilds independent of the service dependency layers.
+COPY --from=swaybg-build /src/build/swaybg /src/build/x11-desktop-background /usr/local/bin/
+COPY --from=swaybg-build /src/LICENSE /usr/local/share/licenses/swaybg/LICENSE
 
 # The supervisor: a thin docker-entrypoint.sh that sources its stage modules
 # (lib/*.sh) and runs the helper scripts (helpers/*) from

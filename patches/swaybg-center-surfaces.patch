@@ -1,0 +1,172 @@
+--- a/main.c
++++ b/main.c
+@@ -44,6 +44,7 @@
+ struct swaybg_state {
+ 	struct wl_display *display;
+ 	struct wl_compositor *compositor;
++	struct wl_subcompositor *subcompositor;
+ 	struct wl_shm *shm;
+ 	struct zwlr_layer_shell_v1 *layer_shell;
+ 	struct wp_viewporter *viewporter;
+@@ -80,6 +81,11 @@
+ 
+ 	struct wl_surface *surface;
+ 	struct zwlr_layer_surface_v1 *layer_surface;
++	struct wp_viewport *background_viewport;
++	struct wl_surface *image_surface;
++	struct wl_subsurface *image_subsurface;
++	int image_width, image_height;
++	double image_x, image_y;
+ 
+ 	uint32_t width, height;
+ 	int32_t scale;
+@@ -91,9 +97,114 @@
+ 	struct wl_list link;
+ };
+ 
++// A centered image only needs its own pixels. Stretch a single color pixel over the output, then position an image-sized synchronized subsurface above it.
++static void render_center(struct swaybg_output *output, cairo_surface_t *image) {
++	if (!image || output->scale <= 0 || !output->width || !output->height) {
++		return;
++	}
++	int scale = output->scale;
++	int image_width = cairo_image_surface_get_width(image);
++	int image_height = cairo_image_surface_get_height(image);
++	// One logical pixel of padding preserves upstream's half-pixel centering at odd sizes. Crop to the output so a small screen cannot spill the picture onto an adjacent output.
++	int width = (image_width + scale - 1) / scale + 1;
++	int height = (image_height + scale - 1) / scale + 1;
++	if ((uint32_t)width > output->width) {
++		width = output->width;
++	}
++	if ((uint32_t)height > output->height) {
++		height = output->height;
++	}
++	int x = (output->width - width) / 2;
++	int y = (output->height - height) / 2;
++	int pixel_width = width * scale, pixel_height = height * scale;
++	double image_x = ((double)output->width * scale - image_width) / 2 - x * scale;
++	double image_y = ((double)output->height * scale - image_height) / 2 - y * scale;
++	bool repaint = output->image_width != pixel_width || output->image_height != pixel_height ||
++		output->image_x != image_x || output->image_y != image_y;
++	struct pool_buffer buffer = {0};
++	if (repaint) {
++		if (!create_buffer(&buffer, output->state->shm, pixel_width, pixel_height, WL_SHM_FORMAT_ARGB8888)) {
++			return;
++		}
++		cairo_set_source_u32(buffer.cairo, output->config->color);
++		cairo_set_operator(buffer.cairo, CAIRO_OPERATOR_SOURCE);
++		cairo_paint(buffer.cairo);
++		cairo_set_operator(buffer.cairo, CAIRO_OPERATOR_OVER);
++		cairo_set_source_surface(buffer.cairo, image, image_x, image_y);
++		cairo_paint(buffer.cairo);
++		if (cairo_status(buffer.cairo) != CAIRO_STATUS_SUCCESS) {
++			swaybg_log(LOG_ERROR, "Painting centered image failed: %s", cairo_status_to_string(cairo_status(buffer.cairo)));
++			destroy_buffer(&buffer);
++			return;
++		}
++	}
++
++	struct wl_buffer *solid = NULL;
++	if (!output->background_viewport) {
++		output->background_viewport = wp_viewporter_get_viewport(output->state->viewporter, output->surface);
++		output->image_surface = wl_compositor_create_surface(output->state->compositor);
++		if (!output->background_viewport || !output->image_surface) {
++			swaybg_log(LOG_ERROR, "Creating centered background surfaces failed");
++			exit(EXIT_FAILURE);
++		}
++		output->image_subsurface = wl_subcompositor_get_subsurface(output->state->subcompositor,
++			output->image_surface, output->surface);
++		struct wl_region *input = wl_compositor_create_region(output->state->compositor);
++		if (!output->image_subsurface || !input) {
++			swaybg_log(LOG_ERROR, "Creating centered image subsurface failed");
++			exit(EXIT_FAILURE);
++		}
++		wl_surface_set_input_region(output->image_surface, input);
++		wl_region_destroy(input);
++		uint32_t color = output->config->color;
++		uint32_t factor = UINT32_MAX / UINT8_MAX;
++		solid = wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer(
++			output->state->single_pixel_buffer_manager, ((color >> 24) & 0xff) * factor,
++			((color >> 16) & 0xff) * factor, ((color >> 8) & 0xff) * factor, (color & 0xff) * factor);
++		if (!solid) {
++			swaybg_log(LOG_ERROR, "Creating background color buffer failed");
++			exit(EXIT_FAILURE);
++		}
++		wl_surface_attach(output->surface, solid, 0, 0);
++		wl_surface_damage_buffer(output->surface, 0, 0, INT32_MAX, INT32_MAX);
++	}
++
++	wl_subsurface_set_position(output->image_subsurface, x, y);
++	wl_surface_set_buffer_scale(output->image_surface, scale);
++	if (repaint) {
++		wl_surface_attach(output->image_surface, buffer.buffer, 0, 0);
++		wl_surface_damage_buffer(output->image_surface, 0, 0, INT32_MAX, INT32_MAX);
++	}
++	wl_surface_commit(output->image_surface);
++	wp_viewport_set_destination(output->background_viewport, output->width, output->height);
++	wl_surface_commit(output->surface);
++	if (solid) {
++		wl_buffer_destroy(solid);
++	}
++	if (repaint) {
++		destroy_buffer(&buffer);
++	}
++	output->image_width = pixel_width;
++	output->image_height = pixel_height;
++	output->image_x = image_x;
++	output->image_y = image_y;
++	output->committed_width = output->width * scale;
++	output->committed_height = output->height * scale;
++	output->committed_scale = scale;
++}
++
+ static void render_frame(struct swaybg_output *output, cairo_surface_t *surface) {
+ 	int buffer_width = output->width * output->scale,
+ 		buffer_height = output->height * output->scale;
++
++	if (output->config->mode == BACKGROUND_MODE_CENTER && output->config->image && output->state->subcompositor &&
++			output->state->viewporter && output->state->single_pixel_buffer_manager) {
++		if (output->committed_width != buffer_width || output->committed_height != buffer_height ||
++				output->committed_scale != output->scale) {
++			render_center(output, surface);
++		}
++		return;
++	}
+ 
+ 	// If the last committed buffer has the same size as this one would, do
+ 	// not render a new buffer, because it will be identical to the old one
+@@ -197,6 +308,15 @@
+ 		return;
+ 	}
+ 	wl_list_remove(&output->link);
++	if (output->image_subsurface) {
++		wl_subsurface_destroy(output->image_subsurface);
++	}
++	if (output->image_surface) {
++		wl_surface_destroy(output->image_surface);
++	}
++	if (output->background_viewport) {
++		wp_viewport_destroy(output->background_viewport);
++	}
+ 	if (output->layer_surface != NULL) {
+ 		zwlr_layer_surface_v1_destroy(output->layer_surface);
+ 	}
+@@ -354,6 +474,8 @@
+ 	if (strcmp(interface, wl_compositor_interface.name) == 0) {
+ 		state->compositor =
+ 			wl_registry_bind(registry, name, &wl_compositor_interface, 4);
++	} else if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
++		state->subcompositor = wl_registry_bind(registry, name, &wl_subcompositor_interface, 1);
+ 	} else if (strcmp(interface, wl_shm_interface.name) == 0) {
+ 		state->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
+ 	} else if (strcmp(interface, wl_output_interface.name) == 0) {
+@@ -593,7 +715,8 @@
+ 				buffer_height = output->height * output->scale;
+ 			bool buffer_change =
+ 				output->committed_height != buffer_height ||
+-				output->committed_width != buffer_width;
++				output->committed_width != buffer_width ||
++				output->committed_scale != output->scale;
+ 			if (output->dirty && output->config->image && buffer_change) {
+ 				output->config->image->load_required = true;
+ 			}

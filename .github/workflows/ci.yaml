@@ -82,6 +82,7 @@ jobs:
           for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
           for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
           python3 -m py_compile entrypoint/helpers/*.py
+          python3 -m py_compile .github/tests/*.py
 
       - name: CDP gateway unit tests
         run: |
@@ -111,6 +112,43 @@ jobs:
           tags: localhost/ci:${{ env.IMAGE_NAME }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Smoke test — context hibernation with real Playwright CLI
+        run: |
+          set -euo pipefail
+          deps="$RUNNER_TEMP/context-hibernation"
+          npm install --prefix "$deps" --ignore-scripts --no-audit --no-fund \
+            cli-current@npm:@playwright/cli@0.1.24 cli-previous@npm:@playwright/cli@0.1.23
+          trap 'if docker inspect hibernation-smoke >/dev/null 2>&1; then docker logs hibernation-smoke; docker exec hibernation-smoke tail -200 /tmp/cdp-gateway.log || true; docker rm -f hibernation-smoke >/dev/null; fi' EXIT
+          for backend in headless wayland x11; do
+            headless=0
+            # Headed cases need the desktop stack to avoid falling back to headless.
+            selkies=true
+            display_backend="$backend"
+            if [ "$backend" = headless ]; then headless=1; selkies=false; display_backend=wayland; fi
+            # Built-in extension workers generate Playwright setup traffic at
+            # arbitrary times, changing LRU order even when test tabs are idle.
+            docker run -d --name hibernation-smoke --shm-size=1g \
+              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" -e CHROMIUM_AUTOSTART=false \
+              -e CHROMIUM_HEADLESS="$headless" -e DISPLAY_BACKEND="$display_backend" \
+              -e CHROMIUM_EXTRA_ARGS=--disable-component-extensions-with-background-pages \
+              -e CDP_CONTEXTS_MAX=2 -e CDP_CONTEXTS_HIBERNATED_MAX=2 \
+              -v "$PWD/.github/tests:/tests:ro" -v "$deps/node_modules:/test-deps/node_modules:ro" \
+              localhost/ci:${{ env.IMAGE_NAME }}
+            for _ in $(seq 1 60); do
+              docker exec hibernation-smoke curl -sf http://127.0.0.1:9222/json/list >/dev/null && break
+              sleep 1
+            done
+            docker logs hibernation-smoke 2>&1 | grep "starting CDP gateway .*headless=$headless," >/dev/null
+            for cli in cli-current cli-previous; do
+              echo "Context hibernation: backend=$backend cli=$cli"
+              docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 \
+                -e PLAYWRIGHT_CLI_JS="/test-deps/node_modules/$cli/playwright-cli.js" \
+                hibernation-smoke node /tests/context-hibernation.mjs
+            done
+            docker exec hibernation-smoke sh -c 'test -z "$(ls -A /browser/contexts)"'
+            docker rm -f hibernation-smoke >/dev/null
+          done
 
       - name: Smoke test — chromium CDP endpoint
         run: |
@@ -756,6 +794,32 @@ jobs:
           docker exec x11-smoke pgrep -x Xvfb >/dev/null
           docker exec x11-smoke sh -c '! pgrep -x labwc'
           echo "X11 smoke test OK"
+
+      - name: Smoke test — bounded desktop background buffers, resizing and input
+        run: |
+          set -euo pipefail
+          for backend in wayland x11; do
+            name="background-${backend}-smoke"
+            docker run -d --name "$name" --shm-size=64m \
+              -e DISPLAY_BACKEND="$backend" -e ENABLE_CDP=false -e ENABLE_AUTH=false -e WAYLAND_DEBUG=client \
+              localhost/ci:${{ env.IMAGE_NAME }}
+            trap 'docker logs "$name" || true; docker cp "$name":/tmp/desktop-background.log /tmp/background-smoke.log && cat /tmp/background-smoke.log; docker rm -f "$name" >/dev/null' EXIT
+            for _ in $(seq 1 60); do
+              docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
+                http://selkies/ >/dev/null 2>&1 && break
+              sleep 1
+            done
+            if [ "$backend" = wayland ]; then
+              # Read back real pixels as well as protocol buffer sizes. This capture tool is installed only in the disposable test container.
+              docker exec -e DEBIAN_FRONTEND=noninteractive "$name" sh -c 'apt-get update >/dev/null && apt-get install -y --no-install-recommends grim >/dev/null'
+            fi
+            docker exec -i "$name" python3 - < .github/tests/desktop-background.py
+            docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
+              http://selkies/ >/dev/null
+            [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$name")" = 'true 0' ]
+            docker rm -f "$name" >/dev/null
+            trap - EXIT
+          done
 
   release-tag:
     # Two kinds of release, told apart by what a merge to main changed:

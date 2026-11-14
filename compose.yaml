@@ -206,8 +206,12 @@ services:
       # "isolated": true) gets its own chromium on a clone of the profile above:
       # inherits its logins, shares nothing back; destroyed when the context
       # closes. Dashboard: http://host:${CDP_PORT}/console/
-      # Most isolated contexts alive at once (each is a whole browser)
+      # Running/starting isolated browsers; main and sleeping browsers excluded
       CDP_CONTEXTS_MAX: "${CDP_CONTEXTS_MAX:-4}"
+      # At capacity, hibernate eligible browsers with no tabs first, then LRU within each group; or reject
+      CDP_CONTEXTS_OVERFLOW: "${CDP_CONTEXTS_OVERFLOW:-hibernate}"
+      # Retained sleeping browsers (not bytes); evict the oldest above this cap
+      CDP_CONTEXTS_HIBERNATED_MAX: "${CDP_CONTEXTS_HIBERNATED_MAX:-16}"
       # Web page origins that may use the CDP API (comma-separated, * = any),
       # like chromium's --remote-allow-origins; empty = none: any request
       # with an Origin header (a page's WebSocket or fetch) is refused.

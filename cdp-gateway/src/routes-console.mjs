@@ -15,7 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { notifyChange } from './changes.mjs';
 import { pipeOf } from './browsers.mjs';
-import { CONSOLE_ACTIONS, MAX_CONTEXTS, ROOT } from './config.mjs';
+import { CONSOLE_ACTIONS, ROOT } from './config.mjs';
 import { consoleDenied } from './console-auth.mjs';
 import { contexts } from './contexts.mjs';
 import { focus } from './desktop.mjs';
@@ -70,16 +70,13 @@ export async function consoleRoute(req, res, url) {
     } else if (!CONSOLE_ACTIONS) {
       send(res, 403, { error: 'console browser actions are disabled' });
     } else {
-      if (contexts.size >= MAX_CONTEXTS) {
-        throw new HttpError(409, 'Browser limit reached; delete an isolated browser before creating another.');
-      }
-      const context = await contexts.create('console');
+      const context = await contexts.create('console', {}, { hold: true });
       try {
         await context.pipe.call('Target.createTarget', { url: 'about:blank' });
       } catch (err) {
         await context.destroy('console creation failed');
         throw err;
-      }
+      } finally { context.holds--; }
       notifyChange();
       send(res, 201, { name: context.name });
     }
@@ -91,7 +88,9 @@ export async function consoleRoute(req, res, url) {
     else if (!CONSOLE_ACTIONS) send(res, 403, { error: 'console browser actions are disabled' });
     else {
       const pipe = pipeOf(closing[1]);
-      const targetId = decodeURIComponent(closing[2]);
+      const context = contexts.get(closing[1]);
+      if (context && context.state !== 'running') throw new HttpError(409, 'wake this browser before closing a saved tab');
+      const targetId = context?.physicalTarget(decodeURIComponent(closing[2])) ?? decodeURIComponent(closing[2]);
       const info = await pipe?.call('Target.getTargetInfo', { targetId }).catch(() => null);
       if (info?.targetInfo?.type !== 'page') send(res, 404, { error: 'tab not found in this browser' });
       else {
@@ -102,9 +101,18 @@ export async function consoleRoute(req, res, url) {
     }
     return true;
   }
-  const a = p.match(/^\/console\/api\/([\w.-]+)(?:\/(focus|start|stop)(?:\/([^/]+))?)?$/);
+  const a = p.match(/^\/console\/api\/([\w.-]+)(?:\/(focus|start|stop|wake|hibernate)(?:\/([^/]+))?)?$/);
   if (!a) return false;
   const [, name, action, targetId] = a;
+  if (['wake', 'hibernate'].includes(action) && req.method === 'POST' && !targetId) {
+    const context = contexts.get(name);
+    if (!context) throw new HttpError(404, 'context not found');
+    if (!CONSOLE_ACTIONS) throw new HttpError(403, 'console browser actions are disabled');
+    try { await (action === 'wake' ? context.wake() : context.hibernate()); }
+    catch (err) { throw new HttpError(409, err.message); }
+    send(res, 200, { ok: true, state: context.state });
+    return true;
+  }
   if ((action === 'start' || action === 'stop') && req.method === 'POST' && !targetId) {
     if (name !== 'main') send(res, 404, { error: 'only the main browser can be started or stopped' });
     else {
@@ -115,6 +123,8 @@ export async function consoleRoute(req, res, url) {
     return true;
   }
   if (action === 'focus' && req.method === 'POST') {
+    const context = contexts.get(name);
+    if (context) { await context.wake(); context.touch(); }
     if (name === 'main' && !mainBrowser.running) {
       send(res, 409, { error: `the main browser is ${mainBrowser.state}` });
     } else if (!(await focus(name, targetId))) {

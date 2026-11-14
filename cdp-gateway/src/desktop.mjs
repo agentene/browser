@@ -7,6 +7,7 @@ import { browserPid, pipeOf } from './browsers.mjs';
 import { notifyChange } from './changes.mjs';
 import { CONTEXTS_HEADLESS, RAISE_SWITCH, ROOT, WAYLAND, appId } from './config.mjs';
 import { mainBrowser } from './main-browser.mjs';
+import { contexts } from './contexts.mjs';
 import { pageInfos } from './targets.mjs';
 import { output, run, sleep } from './util.mjs';
 
@@ -112,7 +113,9 @@ export function unwatchFront() {
 export async function focus(name, targetId) {
   const pipe = pipeOf(name);
   if (!pipe) return false;
-  let id = targetId;
+  const context = contexts.get(name);
+  let id = targetId && (context?.physicalTarget(targetId) ?? targetId);
+  if (context && targetId) context.selected = targetId;
   const opened = !id && !(await pageInfos(pipe)).length;
   if (opened) ({ targetId: id } = await pipe.call('Target.createTarget', { url: 'about:blank' }));
   if (id) {

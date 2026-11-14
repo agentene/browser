@@ -22,7 +22,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
 node --check update-chrome-node.mjs
 for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
-python3 -m py_compile entrypoint/helpers/*.py
+python3 -m py_compile entrypoint/helpers/*.py .github/tests/*.py
 docker build --check .                        # Dockerfile lint (BuildKit)
 
 # full build + runtime smoke tests
@@ -32,17 +32,18 @@ docker run -d --name cdp-smoke -p 9222:9222 -e ENABLE_SELKIES=false \
 curl -sf http://127.0.0.1:9222/json/version   # then: docker rm -f cdp-smoke
 ```
 
-CI's `verify` job additionally smoke-tests the web UI, the CDP gateway and
-the Wayland (default) and X11 desktops (see `.github/workflows/ci.yaml`).
+CI's `verify` job additionally smoke-tests the web UI, the CDP gateway and the Wayland (default) and X11 desktops, including bounded background buffers, repeated 4K resizes, fractional Wayland scales and X11 input/stacking with 64 MiB `/dev/shm` (see `.github/workflows/ci.yaml` and `.github/tests/desktop-background.py`). The Wayland pixel check installs `grim` only in its disposable test container; the production image does not include it.
 
 ## Repo layout
 
 | Path | Purpose |
 | --- | --- |
-| `Dockerfile` | single-stage Ubuntu image: Node.js, Chrome for Testing, nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, the Selkies release wheels |
+| `Dockerfile` | Ubuntu runtime image (separate interposer and native background build stages): Node.js, Chrome for Testing, nginx, Xvfb/picom/labwc/PulseAudio, the CDP gateway's npm deps, the Selkies release wheels |
 | `docker-entrypoint.sh` | PID-1 supervisor: Xvfb + picom (or labwc), PulseAudio, Selkies, Chromium (+ CDP gateway), nginx — a thin `main()` over the modules below |
 | `entrypoint/lib/` | supervisor modules, one per concern (`config.sh` holds the env knob reference + defaults, `nginx.sh` generates the nginx config) |
-| `entrypoint/helpers/` | scripts the services run (labwc helpers, window lock, screen follower, profile seeding) |
+| `entrypoint/helpers/` | service helpers (labwc helpers, window lock, screen follower, profile seeding); `x11-desktop-background.c` is compiled with warnings as errors in the Dockerfile |
+| `patches/` | Build-time swaybg fixes (`swaybg-memfd.patch`: checked anonymous buffers; `swaybg-center-surfaces.patch`: a solid color and image-sized subsurface instead of a full-screen bitmap; upstream archive + checksum pinned in `Dockerfile`) |
+| `entrypoint/assets/` | static files the services use (`desktop-background.png`, the desktop background picture) |
 | `compose.yaml` | base compose file |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | opt-in overlays: HTTPS, Intel/AMD GPU, NVIDIA GPU, host networking |
 | `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |

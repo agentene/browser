@@ -20,6 +20,10 @@ export function intEnv(name, fallback, source = env) {
 export const SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
 export const CONSOLE_ACTIONS = env.CDP_CONSOLE_ACTIONS !== 'false';
 export const MAX_CONTEXTS = intEnv('CDP_CONTEXTS_MAX', 4);
+if (MAX_CONTEXTS < 1) throw new Error('CDP_CONTEXTS_MAX must be positive');
+export const CONTEXTS_OVERFLOW = env.CDP_CONTEXTS_OVERFLOW || 'hibernate';
+if (!['hibernate', 'reject'].includes(CONTEXTS_OVERFLOW)) throw new Error('CDP_CONTEXTS_OVERFLOW must be hibernate or reject');
+export const HIBERNATED_MAX = intEnv('CDP_CONTEXTS_HIBERNATED_MAX', 16);
 export const CONTEXTS_DIR = env.CDP_CONTEXTS_DIR || '/browser/contexts';
 export const MAIN_PROFILE = env.CHROMIUM_USER_DATA_DIR || '/browser/user-data';
 export const CHROME_BIN = env.CHROME_BIN;

@@ -1,0 +1,121 @@
+--- a/pool-buffer.c
++++ b/pool-buffer.c
+@@ -1,5 +1,4 @@
+-#define _POSIX_C_SOURCE 200809
+-#include <assert.h>
++#define _GNU_SOURCE
+ #include <cairo.h>
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -7,61 +6,73 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/mman.h>
+-#include <time.h>
+ #include <unistd.h>
+ #include <wayland-client.h>
+ #include "pool-buffer.h"
+-
+-static int anonymous_shm_open(void) {
+-	int retries = 100;
+-
+-	do {
+-		// try a probably-unique name
+-		struct timespec ts;
+-		clock_gettime(CLOCK_MONOTONIC, &ts);
+-		pid_t pid = getpid();
+-		char name[50];
+-		snprintf(name, sizeof(name), "/swaybg-%x-%x",
+-			(unsigned int)pid, (unsigned int)ts.tv_nsec);
+-
+-		// shm_open guarantees that O_CLOEXEC is set
+-		int fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+-		if (fd >= 0) {
+-			shm_unlink(name);
+-			return fd;
+-		}
+-
+-		--retries;
+-	} while (retries > 0 && errno == EEXIST);
+-
+-	return -1;
+-}
++#include "log.h"
+ 
+ bool create_buffer(struct pool_buffer *buf, struct wl_shm *shm,
+ 		int32_t width, int32_t height, uint32_t format) {
+-	uint32_t stride = width * 4;
+-	size_t size = stride * height;
++	*buf = (struct pool_buffer){0};
++	int32_t stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
++	// wl_shm_pool sizes are signed 32-bit; reject overflow before allocating.
++	if (stride <= 0 || height <= 0 || height > INT32_MAX / stride) {
++		swaybg_log(LOG_ERROR, "Invalid background buffer size: %dx%d", width, height);
++		return false;
++	}
++	size_t size = (size_t)stride * height;
+ 
+-	int fd = anonymous_shm_open();
+-	assert(fd != -1);
+-
++	// A memfd is shared with the compositor by fd, without consuming Docker's
++	// small /dev/shm mount. Old and new buffers can coexist during a resize;
++	// fractional output scaling can also make one buffer larger than 64 MiB.
++	int fd = memfd_create("swaybg", MFD_CLOEXEC);
++	if (fd < 0) {
++		swaybg_log_errno(LOG_ERROR, "Creating background memfd failed");
++		return false;
++	}
+ 	if (ftruncate(fd, size) < 0) {
++		swaybg_log_errno(LOG_ERROR, "Sizing background memfd failed");
+ 		close(fd);
+ 		return false;
+ 	}
+-
++	// ftruncate alone creates a sparse file: mmap may succeed but painting
++	// can SIGBUS when backing storage runs out. Reserve it before mapping.
++	int error = posix_fallocate(fd, 0, size);
++	if (error != 0) {
++		swaybg_log(LOG_ERROR, "Allocating background buffer failed: %s", strerror(error));
++		close(fd);
++		return false;
++	}
+ 	void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+-	struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, size);
+-	buf->buffer = wl_shm_pool_create_buffer(pool, 0,
+-			width, height, stride, format);
+-	wl_shm_pool_destroy(pool);
+-	close(fd);
+-
++	if (data == MAP_FAILED) {
++		swaybg_log_errno(LOG_ERROR, "Mapping background buffer failed");
++		close(fd);
++		return false;
++	}
+ 	buf->size = size;
+ 	buf->data = data;
+ 	buf->surface = cairo_image_surface_create_for_data(data,
+ 			CAIRO_FORMAT_ARGB32, width, height, stride);
+ 	buf->cairo = cairo_create(buf->surface);
++	if (cairo_status(buf->cairo) != CAIRO_STATUS_SUCCESS) {
++		swaybg_log(LOG_ERROR, "Creating background Cairo surface failed: %s",
++			cairo_status_to_string(cairo_status(buf->cairo)));
++		close(fd);
++		destroy_buffer(buf);
++		return false;
++	}
++	struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, size);
++	close(fd);
++	if (pool) {
++		buf->buffer = wl_shm_pool_create_buffer(pool, 0,
++				width, height, stride, format);
++		wl_shm_pool_destroy(pool);
++	}
++	if (!buf->buffer) {
++		swaybg_log(LOG_ERROR, "Creating Wayland background buffer failed");
++		destroy_buffer(buf);
++		return false;
++	}
+ 	return true;
+ }
+ 

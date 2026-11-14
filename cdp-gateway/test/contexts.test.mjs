@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
+import { execFileSync } from 'node:child_process';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cdp-contexts-'));
 const fakeChrome = path.join(tmp, 'chrome.mjs');
@@ -17,7 +18,9 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 const args = process.argv.slice(2);
+if (fs.existsSync(${JSON.stringify(path.join(tmp, 'fail-start'))})) process.exit(1);
 const dir = args.find((a) => a.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+const targetsFile = path.join(dir, 'test-targets.json');
 fs.writeFileSync(path.join(${JSON.stringify(tmp)}, 'args-' + path.basename(path.dirname(dir))), args.join('\\n'));
 // sockets, not fs streams: a blocking read of a pipe in the thread pool
 // would hold up process.exit
@@ -30,8 +33,10 @@ new net.Socket({ fd: 3, writable: false }).on('data', (d) => {
     const msg = JSON.parse(buf.slice(0, i));
     buf = buf.slice(i + 1);
     const result = msg.method === 'Browser.getVersion' ? { product: 'Fake/1', revision: '@fake' }
-      : msg.method === 'Storage.getCookies' ? { cookies: [] } : {};
+      : msg.method === 'Storage.getCookies' ? { cookies: [] }
+      : msg.method === 'Target.getTargets' ? { targetInfos: fs.existsSync(targetsFile) ? JSON.parse(fs.readFileSync(targetsFile, 'utf8')) : [] } : {};
     out.write(JSON.stringify({ id: msg.id, result, sessionId: msg.sessionId }) + '\\0');
+    if (msg.method === 'Browser.close' && !fs.existsSync(${JSON.stringify(path.join(tmp, 'hang-close'))})) setImmediate(() => process.exit(0));
   }
 });
 const exitAfter = path.join(${JSON.stringify(tmp)}, 'exit-after');
@@ -52,6 +57,8 @@ before(async () => {
     CDP_GATEWAY_FLAGS_FILE: path.join(tmp, 'flags'),
     CDP_GATEWAY_SETTINGS_FILE: path.join(tmp, 'settings.json'),
     CDP_CONTEXTS_MAX: '2',
+    CDP_CONTEXTS_OVERFLOW: 'hibernate',
+    CDP_CONTEXTS_HIBERNATED_MAX: '2',
   });
   ({ contexts } = await import('../src/contexts.mjs'));
   ({ mainBrowser } = await import('../src/main-browser.mjs'));
@@ -59,6 +66,7 @@ before(async () => {
 
 // The command line the fake chromium of a context was started with.
 const argsOf = (context) => fs.readFileSync(path.join(tmp, `args-${context.name}`), 'utf8').split('\n');
+const setTargets = (context, types) => fs.writeFileSync(path.join(context.profile, 'test-targets.json'), JSON.stringify(types.map((type, i) => ({ targetId: `target-${i}`, type, title: type, url: 'about:blank' }))));
 
 after(async () => {
   await Promise.all(contexts.values().map((c) => c.destroy('test over')));
@@ -142,8 +150,206 @@ test('a context browser is driven over its pipe: no DevTools port, webdriver hid
     assert.ok(!args.some((a) => a.startsWith('--remote-debugging-port')));
     assert.ok(args.includes('--disable-blink-features=AutomationControlled'));
     assert.equal(c.pipe.version.product, 'Fake/1');
-    assert.deepEqual(await c.pipe.call('Target.getTargets'), {});
+    assert.deepEqual(await c.pipe.call('Target.getTargets'), { targetInfos: [] });
   } finally {
     await c.destroy('test');
   }
+});
+
+test('LRU releases a real process before replacement; waking reuses its profile', async () => {
+  const a = await contexts.create('a');
+  const b = await contexts.create('b');
+  a.lastUsedAt = 1; b.lastUsedAt = 2;
+  fs.writeFileSync(path.join(a.profile, 'kept'), 'context data');
+  const c = await contexts.create('c');
+  assert.equal(a.state, 'hibernated');
+  assert.equal(a.proc, null);
+  assert.equal(contexts.running, 2);
+  assert.equal(contexts.size, 3);
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) fs.symlinkSync(path.join(tmp, 'flags'), path.join(a.profile, name));
+  await Promise.all([a.wake(), a.wake(), a.wake()]);
+  assert.equal(a.state, 'running');
+  assert.equal(b.state, 'hibernated');
+  assert.equal(contexts.running, 2);
+  assert.equal(fs.readFileSync(path.join(a.profile, 'kept'), 'utf8'), 'context data');
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) assert.equal(fs.lstatSync(path.join(a.profile, name), { throwIfNoEntry: false }), undefined);
+  await Promise.all([a, b, c].map((c) => c.destroy('test')));
+});
+
+for (const { name, targets, ages, blocked, victim } of [
+  { name: 'a newer empty browser is hibernated before an older browser with tabs', targets: [['page'], []], ages: [1, 2], victim: 1 },
+  { name: 'multiple empty browsers are ordered by activity, not creation', targets: [[], []], ages: [2, 1], victim: 1 },
+  { name: 'browsers with tabs use LRU regardless of their tab counts', targets: [['page', 'page'], ['page']], ages: [1, 2], victim: 0 },
+  { name: 'worker and iframe targets do not count as open tabs', targets: [['page'], ['service_worker', 'iframe']], ages: [1, 2], victim: 1 },
+  { name: 'an empty browser with a direct page connection remains ineligible', targets: [['page'], []], ages: [2, 1], blocked: 1, victim: 0 },
+]) {
+  test(name, async () => {
+    const made = [await contexts.create('a'), await contexts.create('b')];
+    try {
+      for (const [i, c] of made.entries()) { setTargets(c, targets[i]); c.lastUsedAt = ages[i]; }
+      if (blocked !== undefined) made[blocked].relays = 1;
+      const survivorPid = made[1 - victim].proc.pid;
+      made.push(await contexts.create('c'));
+      assert.equal(made[victim].state, 'hibernated');
+      assert.equal(made[victim].proc, null);
+      assert.equal(made[1 - victim].state, 'running');
+      assert.equal(made[1 - victim].proc.pid, survivorPid);
+      assert.deepEqual(made.slice(0, 2).map((c) => c.lastUsedAt), ages, 'internal tab queries must not change LRU activity');
+      assert.equal(contexts.running, 2);
+    } finally { await Promise.all(made.map((c) => c.destroy('test'))); }
+  });
+}
+
+for (const change of ['query failure', 'new blocker', 'disconnect']) {
+  test(`tab selection handles ${change} while probing a candidate`, async (t) => {
+    const made = [await contexts.create('a'), await contexts.create('b')];
+    const [a, b] = made;
+    setTargets(a, ['page']);
+    a.lastUsedAt = 1; b.lastUsedAt = 2;
+    const call = b.pipe.call.bind(b.pipe);
+    t.mock.method(b.pipe, 'call', async (method, ...args) => {
+      if (method !== 'Target.getTargets') return call(method, ...args);
+      if (change === 'query failure') throw new Error('target query failed');
+      if (change === 'new blocker') b.relays = 1;
+      if (change === 'disconnect') await b.destroy('owner disconnected while probing');
+      return { targetInfos: [] };
+    });
+    try {
+      made.push(await contexts.create('c'));
+      assert.equal(a.state, change === 'disconnect' ? 'running' : 'hibernated');
+      assert.equal(b.state, change === 'disconnect' ? 'destroying' : 'running');
+      assert.equal(contexts.running, 2);
+      assert.equal(made[2].state, 'running');
+    } finally { await Promise.all(made.map((c) => c.destroy('test'))); }
+  });
+}
+
+test('concurrent creation respects running and retained limits; deletion removes sleepers', async () => {
+  let peak = 0;
+  const sample = setInterval(() => { peak = Math.max(peak, contexts.running); }, 1);
+  const made = await Promise.all(Array.from({ length: 6 }, () => contexts.create('concurrent')));
+  clearInterval(sample);
+  assert.ok(peak <= 2, `peak occupied slots: ${peak}`);
+  assert.equal(contexts.running, 2);
+  assert.equal(contexts.size, 4);
+  assert.equal(made.filter((c) => c.destroyed).length, 2);
+  for (const c of made.filter((c) => c.destroyed)) assert.equal(fs.existsSync(c.dir), false);
+  await Promise.all(made.map((c) => c.destroy('test')));
+  assert.equal(contexts.busy, false);
+});
+
+test('inner incognito contexts prevent hibernation and do not lose a slot', async () => {
+  const a = await contexts.create('a');
+  const b = await contexts.create('b');
+  for (const c of [a, b]) c.mux = { innerContexts: new Set(['inner']), contextGone() {} };
+  await assert.rejects(contexts.create('blocked'), /no hibernatable browser/);
+  await assert.rejects(a.hibernate(), /incognito/);
+  assert.equal(contexts.running, 2);
+  await Promise.all([a, b].map((c) => c.destroy('test')));
+});
+
+test('delete wins over a queued wake and never resurrects a removed profile', async () => {
+  const c = await contexts.create('a');
+  await c.hibernate();
+  const waking = c.wake();
+  const deleting = c.destroy('test');
+  await assert.rejects(waking, /gone|deleted/);
+  await deleting;
+  assert.equal(fs.existsSync(c.dir), false);
+  assert.equal(contexts.size, 0);
+});
+
+test('forced hibernation retains its profile and reports reduced durability after waking', async () => {
+  const c = await contexts.create('forced-close');
+  const marker = path.join(tmp, 'hang-close');
+  fs.writeFileSync(marker, '1');
+  try {
+    await c.hibernate();
+    assert.equal(c.state, 'hibernated');
+    assert.equal(c.snapshot.forced, true);
+    assert.match(c.restoreWarning, /signal/);
+    assert.ok(fs.existsSync(c.profile));
+    fs.rmSync(marker);
+    await c.wake();
+    assert.match(c.restoreWarning, /signal/);
+  } finally {
+    fs.rmSync(marker, { force: true });
+    await c.destroy('test');
+  }
+});
+
+test('reject restores the original capacity error; a zero sleep limit deletes the victim', () => {
+  for (const mode of ['reject', 'hibernate']) {
+    const code = `
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs';
+      import { contexts } from ${JSON.stringify(new URL('../src/contexts.mjs', import.meta.url).href)};
+      try {
+        const a = await contexts.create('a');
+        if (process.env.CDP_CONTEXTS_OVERFLOW === 'reject') {
+          await assert.rejects(contexts.create('b'), /CDP context limit reached/);
+          assert.equal(a.state, 'running');
+        } else {
+          await contexts.create('b');
+          assert.equal(a.destroyed, true);
+          assert.equal(fs.existsSync(a.dir), false);
+          assert.equal(contexts.size, 1);
+        }
+      } finally { await Promise.all(contexts.values().map(c => c.destroy('test'))); }
+    `;
+    execFileSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env,
+      CDP_CONTEXTS_DIR: path.join(tmp, mode), CDP_CONTEXTS_MAX: '1', CDP_CONTEXTS_OVERFLOW: mode, CDP_CONTEXTS_HIBERNATED_MAX: '0',
+    }, timeout: 15000 });
+  }
+});
+
+test('a failed wake keeps its profile while enforcing the retained sleep limit', async () => {
+  const made = [];
+  for (let i = 0; i < 4; i++) made.push(await contexts.create('failure'));
+  const [a, b] = made;
+  fs.writeFileSync(path.join(tmp, 'fail-start'), '');
+  try {
+    await assert.rejects(a.wake());
+    assert.equal(a.state, 'hibernated');
+    assert.ok(fs.existsSync(a.profile));
+    assert.equal(contexts.values().filter((c) => c.state === 'hibernated').length, 2);
+    assert.equal(b.destroyed, true);
+    fs.rmSync(path.join(tmp, 'fail-start'));
+    await a.wake();
+    assert.equal(a.state, 'running');
+  } finally {
+    fs.rmSync(path.join(tmp, 'fail-start'), { force: true });
+    await Promise.all(made.map((c) => c.destroy('test')));
+  }
+});
+
+test('evicting a queued wake cancels it without deadlocking the registry', { timeout: 10000 }, async () => {
+  const made = [];
+  for (let i = 0; i < 4; i++) made.push(await contexts.create('queued'));
+  const next = contexts.create('newer request');
+  const wake = made[0].wake();
+  const settled = await Promise.allSettled([next, wake]);
+  assert.equal(settled[0].status, 'fulfilled');
+  assert.equal(settled[1].status, 'rejected');
+  assert.equal(made[0].destroyed, true);
+  assert.equal(contexts.size, 4);
+  await Promise.all([...made, settled[0].value].map((c) => c.destroy('test')));
+});
+
+test('disconnected queued owners and shutdown never launch new browsers', async () => {
+  let alive = true;
+  const queued = contexts.create('departed', {}, { alive: () => alive });
+  alive = false;
+  await assert.rejects(queued, /disconnected/);
+  assert.equal(contexts.size, 0);
+  const { ContextRegistry } = await import('../src/contexts.mjs');
+  const registry = new ContextRegistry();
+  const c = await registry.create('shutdown');
+  try {
+    await c.hibernate();
+    registry.close();
+    await assert.rejects(registry.create('too late'), /shutting down/);
+    await assert.rejects(c.wake(), /shutting down/);
+    assert.equal(c.proc, null);
+  } finally { await c.destroy('test'); }
 });

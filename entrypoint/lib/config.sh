@@ -111,13 +111,16 @@
 #                                CDP_FILE_DIRS. The CDP endpoint itself is not
 #                                affected
 #   (the CDP gateway always sits between nginx and chromium: every isolated
-#   CDP context — Target.createBrowserContext, e.g. a playwright-cli session
+#   connection's first context — Target.createBrowserContext, a playwright-cli session
 #   with isolated: true — gets its own chromium on a clone of the main
 #   profile, so it inherits the main browser's logins without sharing state;
 #   destroyed when the context closes. Dashboard: /console/ on the CDP port.
 #   Clients need no changes.)
-#   CDP_CONTEXTS_MAX=4           most isolated contexts alive at once (each is
-#                                a whole browser); more get a CDP error
+#   CDP_CONTEXTS_MAX=4           most isolated browsers running/starting at once;
+#                                main and hibernated browsers are excluded
+#   CDP_CONTEXTS_OVERFLOW=hibernate  at capacity, hibernate eligible browsers with no tabs first, then LRU within each group; reject = previous behavior
+#   CDP_CONTEXTS_HIBERNATED_MAX=16  retained sleeping browsers (not a byte quota);
+#                                delete the oldest beyond this cap; 0 keeps none
 #   CDP_ALLOW_ORIGINS=""         web page origins allowed to use the CDP API
 #                                (comma-separated, * = any), like chromium's
 #                                --remote-allow-origins: the gateway refuses
@@ -406,6 +409,15 @@ config_cdp_gateway() {
     CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX:-4}"
     case "${CDP_CONTEXTS_MAX}" in
         ''|*[!0-9]*|0) die "CDP_CONTEXTS_MAX='${CDP_CONTEXTS_MAX}' must be a positive number" ;;
+    esac
+    CDP_CONTEXTS_OVERFLOW="${CDP_CONTEXTS_OVERFLOW:-hibernate}"
+    case "${CDP_CONTEXTS_OVERFLOW}" in
+        hibernate|reject) : ;;
+        *) die "CDP_CONTEXTS_OVERFLOW='${CDP_CONTEXTS_OVERFLOW}' must be hibernate or reject" ;;
+    esac
+    CDP_CONTEXTS_HIBERNATED_MAX="${CDP_CONTEXTS_HIBERNATED_MAX:-16}"
+    case "${CDP_CONTEXTS_HIBERNATED_MAX}" in
+        ''|*[!0-9]*) die "CDP_CONTEXTS_HIBERNATED_MAX must be a non-negative integer" ;;
     esac
     # The profile clones (wiped on every start) sit on the /browser mount next
     # to the profile, so they are reflinks where the filesystem supports it.
