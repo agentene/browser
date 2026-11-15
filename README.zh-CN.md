@@ -303,7 +303,7 @@ location /desk/ {
 
 关闭 CDP（`ENABLE_CDP=false`）仍保留 Web 侧栏桌面配置入口，不启动 Chromium、不开放 CDP。关闭 Selkies 后，CDP 浏览器仍使用虚拟桌面，桌面设置继续可用；AI 操作展示因没有串流而不可用。音频默认开启，观看端仍可通过 Selkies 的音频按钮关闭或重新开启。浏览器语言与控制台界面语言分别设置。
 
-降低休眠保留上限时先显示将删除的实例，确认后才保存并删除；列表变化需要重新确认。其他页面修改配置会触发版本冲突，保留当前草稿供重新核对。写盘失败不应用任何修改；应用失败时页面分别显示已保存和未生效项目。重启会删除全部隔离实例，包括休眠实例。
+休眠浏览器保留上限仅在运行容量满时选择**休眠可休眠的浏览器**时显示；选择**拒绝新建浏览器**会隐藏该项，并保留其已保存的值。降低休眠保留上限时先显示将删除的实例，确认后才保存并删除；列表变化需要重新确认。其他页面修改配置会触发版本冲突，保留当前草稿供重新核对。写盘失败不应用任何修改；应用失败时页面分别显示已保存和未生效项目。重启会删除全部隔离实例，包括休眠实例。
 
 配置 API：`GET /console/api/settings` 返回 `values`、`effective`、`revision`、`pendingRestart`、`errors`、`capabilities`、`fields`；`PATCH` 提交 `{ "revision": "<GET 返回的值>", "patch": { "browser": { "language": "zh-CN" } } }`，需要登录会话和 `X-CDP-Console: 1`。版本冲突为 409；清理确认也为 409（`code: confirm_evictions`），包含实例列表和需随重试请求提交的 `confirmation`。Web 端口的对应入口为 `<subfolder>/cdp-console/api/settings`。
 

@@ -30,7 +30,7 @@
     style.textContent = `
       .config-form { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:24px; min-width:0; }
       .config-section { display:grid; align-content:start; gap:14px; min-width:0; }
-      .config-section[hidden] { display:none; }
+      .config-section[hidden], .config-row[hidden] { display:none; }
       .config-section h4 { margin:0; font-size:14px; }
       .config-row { display:grid; gap:5px; min-width:0; font-size:13px; }
       .config-row input:not([type=checkbox]), .config-row select { box-sizing:border-box; width:100%; max-width:360px; min-width:0; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); font:inherit; }
@@ -89,10 +89,11 @@
             draft[section][key] = field.type === 'boolean' ? input.checked : field.type === 'number' ? input.valueAsNumber : input.value;
             if (draft[section][key] === state.values[section][key]) dirty.delete(name); else dirty.add(name);
             if (!dirty.size) baseRevision = state.revision;
+            if (name === 'contexts.overflow') render();
             onDirty();
           });
           row.append(title, input, hint); group.append(row);
-          rows.set(name, { section, key, input, title, hint });
+          rows.set(name, { section, key, element: row, input, title, hint });
         }
         root.append(group);
       }
@@ -104,7 +105,8 @@
         const field = state.fields[row.section][row.key];
         const value = (draft || state.values)[row.section][row.key];
         row.title.textContent = label(name);
-        row.input.disabled = !field.available;
+        row.element.hidden = name === 'contexts.maxHibernated' && (draft || state.values).contexts.overflow === 'reject';
+        row.input.disabled = !field.available || row.element.hidden;
         if (name === 'browser.language' || name === 'desktop.resolution') {
           for (const option of [...row.input.options]) if (!field.options.includes(option.value) && option.value !== value) option.remove();
           if (![...row.input.options].some((option) => option.value === value)) {
@@ -128,9 +130,6 @@
       const messages = [];
       if (state?.pendingRestart?.length) messages.push((zh() ? '待重启生效：' : 'Restart required: ') + state.pendingRestart.map(label).join('、'));
       for (const [name, error] of Object.entries(state?.errors || {})) messages.push(`${label(name)}: ${error}`);
-      if (state?.capabilities.browser) messages.push(zh()
-        ? `GPU：${state.capabilities.gpuDevice || '未检测到硬件设备'}（自动选择渲染方式）`
-        : `GPU: ${state.capabilities.gpuDevice || 'no hardware device detected'} (automatic rendering)`);
       result.textContent = messages.join('\n');
     }
     function update(view) {
@@ -146,16 +145,21 @@
       if (!view?.values) return;
       draft = structuredClone(view.values); baseRevision = view.revision; dirty.clear(); update(view);
     }
+    // Keep hidden edits in the draft for switching back, but do not apply them.
+    const editedFields = () => [...dirty].filter((name) => !rows.get(name).element.hidden);
     return {
       update, open, render,
       close() { draft = null; dirty.clear(); onDirty(); },
       ready: () => !!state?.revision,
-      dirty: () => dirty.size > 0 || Object.keys(state?.errors || {}).length > 0,
+      dirty: () => editedFields().length > 0 || Object.keys(state?.errors || {}).length > 0,
       async save(call, ask) {
         if (!draft || !state) throw new Error(zh() ? '配置尚未加载' : 'Settings have not loaded yet');
         const patch = {};
-        const changed = new Set([...dirty, ...Object.keys(state.errors || {})]);
-        for (const name of changed) { const [s, k] = name.split('.'); (patch[s] ??= {})[k] = draft[s][k]; }
+        const changed = new Set([...editedFields(), ...Object.keys(state.errors || {})]);
+        for (const name of changed) {
+          const [s, k] = name.split('.');
+          (patch[s] ??= {})[k] = rows.get(name)?.element.hidden ? state.values[s][k] : draft[s][k];
+        }
         if (!changed.size) return state;
         let confirmation;
         for (;;) {
