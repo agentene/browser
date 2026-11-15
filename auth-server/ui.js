@@ -10,7 +10,7 @@
 //         login (Change…), the CDP API key (Change…), Log out
 // root    where its dialogs go: document.body, or the panel's shadow root
 // onError shows an error (null clears it)
-// and AgenteneAuth.setLang('en' | 'zh') whenever the page's language changes.
+// and AgenteneAuth.setLang('en-US' | 'zh-CN') whenever the page's language changes.
 // The rows use the page's .setting / .setting-hint / button styles; the
 // dialogs bring their own, on the page's color variables.
 (() => {
@@ -97,10 +97,7 @@
       saved: '已保存',
     },
   };
-  const LANG_KEY = 'cdp-console-lang';
-  let lang = '';
-  try { lang = localStorage.getItem(LANG_KEY) || ''; } catch { /* storage blocked */ }
-  if (!STRINGS[lang]) lang = navigator.languages?.find((l) => /^(zh|en)\b/i.test(l))?.slice(0, 2).toLowerCase() || 'en';
+  let lang = 'en'; // set by the console from its saved language
   function t(key, ...args) {
     const s = STRINGS[lang][key];
     return typeof s === 'function' ? s(...args) : s;
@@ -373,8 +370,7 @@
   }
 
   function setLang(next) {
-    if (!STRINGS[next]) return;
-    lang = next;
+    lang = next === 'zh-CN' ? 'zh' : 'en';
     render();
   }
 

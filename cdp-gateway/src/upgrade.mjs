@@ -23,6 +23,7 @@ import { Mux } from './mux.mjs';
 import { relay } from './relay.mjs';
 import { requestPath, viaWeb } from './respond.mjs';
 import { log } from './util.mjs';
+import { withRequestLanguage } from './language.mjs';
 
 const wss = new WebSocketServer({ noServer: true, ...WS_OPTIONS });
 // the console's WebSockets, the only ones the web UI port may open
@@ -79,7 +80,11 @@ async function resolveTarget(req, p) {
   return { refuse: 404 };
 }
 
-export async function handleUpgrade(req, socket, head) {
+export function handleUpgrade(req, socket, head) {
+  return withRequestLanguage(req.headers['accept-language'], () => upgrade(req, socket, head));
+}
+
+async function upgrade(req, socket, head) {
   // node's HTTP server drops its own error listener from an upgraded socket,
   // and resolving the target may take a while (a stopped main browser
   // starts): a connection reset meanwhile would be an unhandled 'error'

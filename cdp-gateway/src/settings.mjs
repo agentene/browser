@@ -14,6 +14,7 @@ import { log } from './util.mjs';
 export { SCHEMA, resolve };
 
 const capabilities = {
+  console: true,
   browser: BROWSER_ENABLED, desktop: DESKTOP_ENABLED, stream: STREAM_ENABLED, overlay: OVERLAY_AVAILABLE,
   gpuDevice: process.env.CDP_GATEWAY_GPU_DEVICE || '',
 };

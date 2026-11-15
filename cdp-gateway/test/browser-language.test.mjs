@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { withRequestLanguage } from '../src/language.mjs';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-language-'));
 process.env.CDP_GATEWAY_SETTINGS_FILE = path.join(dir, 'settings.json');
@@ -19,6 +20,22 @@ const prefsFile = (profile) => path.join(profile, 'Default', 'Preferences');
 const readPrefs = (profile) => JSON.parse(fs.readFileSync(prefsFile(profile), 'utf8'));
 
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+test('Auto resolves independently for concurrent callers and explicit languages override their headers', async () => {
+  setLanguage('auto');
+  await Promise.all(['zh-CN', 'fr-FR'].map((language) => withRequestLanguage(`${language},en-US;q=0.9`, async () => {
+    const profile = path.join(dir, `auto-${language}`);
+    await new Promise((done) => setImmediate(done));
+    const env = await prepareBrowserLaunch(profile);
+    assert.equal(env.LANG, `${language.replace('-', '_')}.UTF-8`);
+    assert.ok(readPrefs(profile).intl.accept_languages.startsWith(language));
+  })));
+  assert.equal((await prepareBrowserLaunch(path.join(dir, 'auto-no-header'))).LANG, 'en_US.UTF-8');
+  setLanguage('ja-JP');
+  await withRequestLanguage('zh-CN', async () => {
+    assert.equal((await prepareBrowserLaunch(path.join(dir, 'explicit'))).LANG, 'ja_JP.UTF-8');
+  });
+});
 
 test('new launches use the current language without rewriting another running profile or the gateway environment', async () => {
   const main = path.join(dir, 'main');

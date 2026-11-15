@@ -1,19 +1,6 @@
 // Shared configuration form for the standalone console and the shadow-root panel.
 (() => {
   'use strict';
-  const LABELS = {
-    browser: ['Browser', '浏览器'], contexts: ['Browser capacity', '实例容量'], desktop: ['Desktop', '桌面'], overlay: ['AI input', 'AI 操作展示'],
-    'browser.language': ['Browser language', '浏览器语言'],
-    'contexts.maxRunning': ['Maximum running isolated browsers', '隔离浏览器运行上限'],
-    'contexts.overflow': ['When running capacity is full', '运行容量满时'],
-    'contexts.maxHibernated': ['Maximum retained hibernated browsers', '休眠浏览器保留上限'],
-    'desktop.raiseNewWindows': ['New windows to the front', '新窗口切到最前'],
-    'desktop.resolution': ['Initial resolution', '初始分辨率'],
-    'overlay.mode': ['AI input display', 'AI 操作展示'],
-    off: ['Off', '关闭'],
-    hibernate: ['Hibernate eligible browsers', '休眠可休眠的浏览器'], reject: ['Reject new browsers', '拒绝新建浏览器'],
-    keys: ['Keys and text length', '按键与文本长度'], text: ['Keys and typed text', '按键与输入文本'],
-  };
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -43,31 +30,32 @@
     `;
     root.append(style, result);
     container.append(root);
-    const zh = () => getLang() === 'zh';
-    const label = (key) => LABELS[key]?.[zh() ? 1 : 0] || key;
+    const t = (key, ...args) => window.AgenteneI18n.t(getLang(), key, ...args);
+    const label = (key) => t(key === 'hibernate' ? 'hibernatePolicy' : key);
     function optionLabel(field, value, name) {
-      const translated = field.optionLabels?.[value]?.[zh() ? 1 : 0];
+      if (value === 'auto') return t('auto');
+      const translated = field.optionLabels?.[value]?.[getLang() === 'zh-CN' ? 1 : getLang() === 'en-US' ? 0 : -1];
       if (translated) return translated;
       if (name === 'desktop.resolution') return value.replace('x', ' × ')
-        + (field.options.includes(value) ? '' : (zh() ? '（已保存）' : ' (saved)'));
+        + (field.options.includes(value) ? '' : t('savedChoice'));
       if (name === 'browser.language') {
         // An older settings file may contain a valid locale outside the common
         // choices. Keep it selected and show its name instead of resetting it.
         try {
-          const translatedName = new Intl.DisplayNames([zh() ? 'zh-CN' : 'en'], { type: 'language', fallback: 'none' }).of(value);
+          const translatedName = new Intl.DisplayNames([getLang()], { type: 'language', fallback: 'none' }).of(value);
           if (translatedName) return translatedName;
         } catch { /* unknown locale */ }
-        return zh() ? '已保存的语言' : 'Saved language';
+        return t('savedLanguage');
       }
       return label(value);
     }
-    const textValue = (v, field, name) => typeof v === 'boolean' ? (v ? (zh() ? '开启' : 'On') : (zh() ? '关闭' : 'Off'))
+    const textValue = (v, field, name) => typeof v === 'boolean' ? t(v ? 'on' : 'off')
       : field.type === 'select' ? optionLabel(field, String(v), name) : label(String(v));
     function build() {
       if (!state?.fields || rows.size) return;
       for (const [section, fields] of Object.entries(state.fields)) {
         const group = el('section', 'config-section');
-        group.hidden = !state.capabilities.browser && ['browser', 'contexts', 'overlay'].includes(section);
+        group.hidden = !state.capabilities.browser && ['contexts', 'overlay'].includes(section);
         const heading = el('h4');
         headings.set(section, heading);
         group.append(heading);
@@ -116,19 +104,17 @@
         if (field.type === 'boolean') row.input.checked = value;
         else if (document.activeElement !== row.input && row.input.getRootNode().activeElement !== row.input) row.input.value = value;
         if (field.options) for (const option of row.input.options) option.textContent = optionLabel(field, option.value, name);
-        row.hint.textContent = !field.available ? (zh() ? '当前运行模式下不可用' : 'Unavailable in this service mode')
-          : field.apply === 'restart' ? (zh() ? '保存后需重启容器生效' : 'Requires a container restart after saving')
-          : name === 'browser.language' ? (zh() ? '保存后新启动的浏览器进程生效，已运行的浏览器不受影响' : 'Applies to newly started browser processes after saving; running browsers keep their language')
-          : field.apply === 'next-start' ? (zh() ? '用于下次启动，不改变当前浏览器' : 'Used on the next startup; leaves current browsers running')
-          : (zh() ? '保存后在线应用' : 'Applies live after saving');
-        if (dirty.has(name)) row.hint.textContent += (zh() ? ' · 当前保存值：' : ' · Currently saved: ') + textValue(state.values[row.section][row.key], field, name);
-        if (field.available && name === 'desktop.resolution') row.hint.textContent += zh()
-          ? '；启动及无人观看时新建浏览器使用此尺寸，观看时自动适应窗口'
-          : '; used at startup and when launching without viewers; viewing adapts to the window';
-        if (field.available && name === 'overlay.mode') row.hint.textContent += zh() ? '，对所有观看端生效' : ' for all viewers';
+        row.hint.textContent = !field.available ? t('settingUnavailable')
+          : field.apply === 'restart' ? t('settingRestart')
+          : name === 'browser.language' ? t(state.capabilities.browser ? 'settingLanguage' : 'settingLanguageOnly')
+          : field.apply === 'next-start' ? t('settingNextStart') : t('settingLive');
+        if (name === 'browser.language') row.hint.textContent += ` · ${t('settingLanguageAuto')}`;
+        if (dirty.has(name)) row.hint.textContent += t('currentlySaved', textValue(state.values[row.section][row.key], field, name));
+        if (field.available && name === 'desktop.resolution') row.hint.textContent += t('settingResolution');
+        if (field.available && name === 'overlay.mode') row.hint.textContent += t('settingAllViewers');
       }
       const messages = [];
-      if (state?.pendingRestart?.length) messages.push((zh() ? '待重启生效：' : 'Restart required: ') + state.pendingRestart.map(label).join('、'));
+      if (state?.pendingRestart?.length) messages.push(t('restartRequired', state.pendingRestart.map(label).join(', ')));
       for (const [name, error] of Object.entries(state?.errors || {})) messages.push(`${label(name)}: ${error}`);
       result.textContent = messages.join('\n');
     }
@@ -153,7 +139,7 @@
       ready: () => !!state?.revision,
       dirty: () => editedFields().length > 0 || Object.keys(state?.errors || {}).length > 0,
       async save(call, ask) {
-        if (!draft || !state) throw new Error(zh() ? '配置尚未加载' : 'Settings have not loaded yet');
+        if (!draft || !state) throw new Error(t('settingsNotLoaded'));
         const patch = {};
         const changed = new Set([...editedFields(), ...Object.keys(state.errors || {})]);
         for (const name of changed) {
@@ -169,15 +155,15 @@
             return view;
           } catch (err) {
             if (err.code === 'confirm_evictions') {
-              const names = err.evictions.map((v) => `${v.name} (${v.tabs} ${zh() ? '个标签页' : 'tabs'})`).join(', ');
-              if (!await ask((zh() ? '保存这些修改将删除以下休眠浏览器及其副本：' : 'Saving will delete these hibernated browsers and their profiles: ') + names, zh() ? '保存并删除' : 'Save and delete')) return null;
+              const names = err.evictions.map((v) => `${v.name} (${t('tabs', v.tabs)})`).join(', ');
+              if (!await ask(t('confirmEvictions', names), t('saveAndDelete'))) return null;
               confirmation = err.confirmation;
               continue;
             }
             if (err.code === 'settings_conflict') {
               update(err.settings);
               baseRevision = err.settings.revision;
-              err.message = zh() ? '配置已被其他页面修改。已更新当前保存值，请核对保留的草稿后再次保存。' : 'Settings changed elsewhere. Review the current saved values and your retained draft, then save again.';
+              err.message = t('settingsConflict');
             }
             throw err;
           }

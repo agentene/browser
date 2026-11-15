@@ -45,6 +45,7 @@ import { forward } from './flow.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { log } from './util.mjs';
 import { knownVersion } from './version.mjs';
+import { bindRequestLanguage } from './language.mjs';
 
 const muxes = new Set();
 
@@ -166,7 +167,7 @@ export class Mux {
 
     if (main) this.adoptMain(main);
 
-    client.on('message', (data) => this.fromClient(data));
+    client.on('message', bindRequestLanguage((data) => this.fromClient(data)));
     client.on('close', () => this.close('client disconnected'));
     client.on('error', (err) => log(`mux ${clientAddr}: client error: ${err.message}`));
   }

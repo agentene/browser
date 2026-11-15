@@ -23,8 +23,10 @@ import { focus } from './desktop.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { HttpError, readJson, send } from './respond.mjs';
 import { closeSettings, settingsView, updateSettings } from './settings.mjs';
+import { requestLanguage } from './language.mjs';
 
 const FILES = {
+  '/console/i18n.js': ['i18n.js', 'text/javascript; charset=UTF-8'],
   '/console/settings-ui.js': ['settings-ui.js', 'text/javascript; charset=UTF-8'],
   '/console/': ['dashboard.html', 'text/html; charset=UTF-8'],
   '/console/panel.js': ['panel.js', 'text/javascript; charset=UTF-8'],
@@ -64,10 +66,10 @@ export async function consoleRoute(req, res, url, restart) {
   }
   if (p === '/console/api/settings') {
     if (req.method === 'GET') {
-      send(res, 200, settingsView());
+      send(res, 200, { ...settingsView(), autoLanguage: requestLanguage() });
     } else if (req.method === 'PATCH') {
       try {
-        send(res, 200, await updateSettings(await readJson(req)));
+        send(res, 200, { ...await updateSettings(await readJson(req)), autoLanguage: requestLanguage() });
       } catch (err) {
         send(res, err.status ?? 500, { error: err.message, ...err.details });
       }

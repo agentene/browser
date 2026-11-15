@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-US">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -85,12 +85,6 @@
   .setting { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:default; }
   label.setting { cursor:pointer; }
   .setting-hint { display:block; margin-top:2px; color:var(--muted); font-size:12px; }
-  .seg { display:inline-flex; flex:none; gap:2px; padding:2px; border-radius:8px; background:var(--chip); }
-  .seg button { border:none; border-radius:6px; padding:2px 10px; color:var(--muted); }
-  .seg button:hover { background:transparent; color:var(--text); }
-  .seg button[aria-pressed="true"], .seg button[aria-pressed="true"]:hover {
-    background:var(--card); color:var(--text); box-shadow:0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 8%);
-  }
   .switch {
     appearance:none; -webkit-appearance:none; flex:none; position:relative; width:34px; height:20px; margin:0;
     border-radius:999px; background:color-mix(in srgb, var(--muted) 40%, transparent); cursor:pointer; transition:background .15s;
@@ -241,10 +235,6 @@
   <fieldset class="settings-fields">
     <div class="settings-content">
       <h3 class="settings-title" id="settings-heading" tabindex="-1"></h3>
-      <div class="setting">
-        <span class="lang-label"></span>
-        <span class="seg" role="group"><button type="button" data-lang="en" lang="en">English</button><button type="button" data-lang="zh" lang="zh-CN">中文</button></span>
-      </div>
     </div>
   </fieldset>
   <footer class="settings-footer">
@@ -252,6 +242,7 @@
     <div class="settings-buttons"><button class="settings-save primary" type="submit"></button><button class="settings-cancel" type="button"></button></div>
   </footer>
 </form>
+<script src="i18n.js"></script>
 <script src="settings-ui.js"></script>
 <script>
   const cards = document.getElementById('cards');
@@ -271,135 +262,16 @@
   const closingTabs = new Set();
   let serverSettings = {}; // the server-side settings on offer (settings.mjs): {section: {key: value}}
 
-  // UI strings, English and Simplified Chinese: the viewer's choice (the
-  // settings page, remembered per browser), else the browser's languages.
-  const STRINGS = {
-    en: {
-      title: 'CDP Console',
-      loading: 'loading…',
-      newBrowser: 'New browser',
-      hibernate: 'Hibernate',
-      wake: 'Wake',
-      stateHibernated: 'hibernated',
-      stateHibernating: 'hibernating',
-      stateWaking: 'waking',
-      stateDestroying: 'deleting',
-      hibernateConfirm: 'Hibernate this browser? Pages reload when woken; unsaved page memory is lost.',
-      browserLimit: 'Browser limit reached — delete an isolated browser to make room',
-      creatingBrowser: 'Creating…',
-      newBrowserHint: 'Open an independent browser with a copy of the main profile',
-      closeTab: (title) => `Close tab: ${title}`,
-      mainBrowser: 'Main browser',
-      startTitle: 'Start the main browser on the desktop',
-      starting: 'Starting…',
-      startBrowser: 'Start browser',
-      stateStarting: 'starting',
-      stateStopped: 'stopped',
-      notRunning: 'Not running. It starts on demand: with this button.',
-      frontTitle: 'This browser window is in front on the desktop',
-      showing: 'Showing',
-      showTitle: 'Bring this browser window to the front of the desktop',
-      show: 'Show',
-      stopTitle: 'Close the main browser; the container keeps running',
-      stopConfirm: 'Stop the main browser? Its CDP clients get disconnected.',
-      stop: 'Stop',
-      deleteTitle: 'Close the context and disconnect its client',
-      deleteConfirm: (name) => `Delete ${name}? Its client gets disconnected.`,
-      delete: 'Delete',
-      cancel: 'Cancel',
-      shotTitle: 'Show this tab on the desktop',
-      noTabs: 'No open tabs.',
-      untitled: '(untitled)',
-      aiWorking: (c) => `AI #${c} is working in this tab`,
-      aiShow: (c) => `AI #${c} is working here: show its tab`,
-      tabs: (n) => `${n} tab${n === 1 ? '' : 's'}`,
-      mainMeta: 'The persistent profile every isolated context is cloned from. Isolated contexts show up on the desktop with their card color as browser frame color.',
-      contextMeta: (client, since, pid) => `client ${client} · since ${since} · pid ${pid}`,
-      summary: (n, max, sleeping) => `${n} / ${max} running · ${sleeping} hibernated`,
-      reconnecting: (s) => `Lost the connection to the CDP gateway, reconnecting in ${s}s…`,
-      settings: 'Settings',
-      saveSettings: 'Save and apply',
-      savingSettings: 'Saving settings…',
-      restartContainer: 'Restart',
-      restartHint: 'Restart the entire container without saving pending changes',
-      restartingContainer: 'Restarting the container… This page will reload when it is ready.',
-      restartTimeout: 'The service has not recovered yet. Check the container and its restart policy, then reload this page.',
-      language: 'Language',
-      raiseNew: 'New windows to the front',
-      raiseNewHint: 'Off: windows that open later (e.g. a new isolated context) stay behind the one in front; Show brings one forward.',
-    },
-    zh: {
-      title: 'CDP 控制台',
-      loading: '加载中…',
-      newBrowser: '新建浏览器',
-      hibernate: '休眠',
-      wake: '唤醒',
-      stateHibernated: '已休眠',
-      stateHibernating: '正在休眠',
-      stateWaking: '正在唤醒',
-      stateDestroying: '正在删除',
-      hibernateConfirm: '休眠此浏览器？唤醒后页面会重新加载，未保存的页面内存状态会丢失。',
-      browserLimit: '浏览器数量已达上限，请先删除一个独立浏览器',
-      creatingBrowser: '正在创建…',
-      newBrowserHint: '复制主浏览器配置，打开独立浏览器',
-      closeTab: (title) => `关闭标签页：${title}`,
-      mainBrowser: '主浏览器',
-      startTitle: '在桌面上启动主浏览器',
-      starting: '启动中…',
-      startBrowser: '启动浏览器',
-      stateStarting: '启动中',
-      stateStopped: '已停止',
-      notRunning: '未运行。按需启动：点击此按钮。',
-      frontTitle: '此浏览器窗口位于桌面最前',
-      showing: '显示中',
-      showTitle: '将此浏览器窗口切到桌面最前',
-      show: '显示',
-      stopTitle: '关闭主浏览器，容器继续运行',
-      stopConfirm: '停止主浏览器？它的 CDP 客户端将断开连接。',
-      stop: '停止',
-      deleteTitle: '关闭此上下文并断开其客户端',
-      deleteConfirm: (name) => `删除 ${name}？它的客户端将断开连接。`,
-      delete: '删除',
-      cancel: '取消',
-      shotTitle: '在桌面上显示此标签页',
-      noTabs: '没有打开的标签页。',
-      untitled: '（无标题）',
-      aiWorking: (c) => `AI #${c} 正在此标签页中操作`,
-      aiShow: (c) => `AI #${c} 正在这里操作：显示它所在的标签页`,
-      tabs: (n) => `${n} 个标签页`,
-      mainMeta: '持久化的浏览器配置，每个隔离上下文都从它克隆。隔离上下文在桌面上以卡片颜色作为浏览器边框颜色。',
-      contextMeta: (client, since, pid) => `客户端 ${client} · 创建于 ${since} · pid ${pid}`,
-      summary: (n, max, sleeping) => `运行 ${n} / ${max} · 休眠 ${sleeping}`,
-      reconnecting: (s) => `与 CDP 网关的连接已断开，${s} 秒后重连…`,
-      settings: '配置',
-      saveSettings: '保存并应用',
-      savingSettings: '正在保存配置…',
-      restartContainer: '重启',
-      restartHint: '重启整个容器，不保存尚未提交的修改',
-      restartingContainer: '正在重启容器…服务恢复后此页面将自动刷新。',
-      restartTimeout: '服务尚未恢复，请检查容器及其重启策略，然后刷新此页面。',
-      language: '语言',
-      raiseNew: '新窗口切到最前',
-      raiseNewHint: '关闭后，之后新打开的窗口（如新的隔离上下文）留在当前窗口之后，可用“显示”切过去。',
-    },
-  };
-  const LANG_KEY = 'cdp-console-lang';
-  let lang = '';
-  try { lang = localStorage.getItem(LANG_KEY) || ''; } catch { /* storage blocked */ }
-  if (!STRINGS[lang]) lang = navigator.languages?.find((l) => /^(zh|en)\b/i.test(l))?.slice(0, 2).toLowerCase() || 'en';
-  const locale = () => (lang === 'zh' ? 'zh-CN' : 'en');
-
-  function t(key, ...args) {
-    const s = STRINGS[lang][key];
-    return typeof s === 'function' ? s(...args) : s;
-  }
+  // The one saved language controls both this interface and browser launches.
+  const i18n = window.AgenteneI18n;
+  let lang = 'en-US';
+  let autoLanguage = 'en-US'; // supplied by the gateway from this viewer's header
+  const locale = () => lang;
+  const t = (key, ...args) => i18n.t(lang, key, ...args);
 
   // Static texts here; the cards are rebuilt in the new language.
-  function setLang(next, save) {
-    lang = next;
-    if (save) {
-      try { localStorage.setItem(LANG_KEY, lang); } catch { /* storage blocked */ }
-    }
+  function setLang(next) {
+    lang = i18n.locale(next);
     document.documentElement.lang = locale();
     document.title = t('title');
     document.getElementById('heading').textContent = t('title');
@@ -411,8 +283,6 @@
     $('.settings-cancel').textContent = t('cancel');
     $('.settings-restart').textContent = t('restartContainer');
     $('.settings-restart').title = t('restartHint');
-    $('.lang-label').textContent = t('language');
-    renderLanguageChoice();
     settingsEditor.render();
     window.AgenteneAuth?.setLang(lang);
     renderSummary();
@@ -426,18 +296,21 @@
   const settingsBtn = $('.settings .settings-btn');
   const settingsPage = $('.settings-page');
   const settingsContent = $('.settings-content');
-  let settingsDraft = null;
+  let settingsOpen = false;
   let settingsBusy = false;
   let settingsOnlyOpened = false;
   const settingsEditor = window.AgenteneSettings.mount({ container: settingsContent, getLang: () => lang, onDirty: renderSave });
   function renderSave() {
-    const localChange = settingsDraft && settingsDraft.language !== lang;
-    $('.settings-save').disabled = settingsBusy || !settingsEditor.ready() || !(settingsEditor.dirty() || localChange);
+    $('.settings-save').disabled = settingsBusy || !settingsEditor.ready() || !settingsEditor.dirty();
   }
   function receiveSettings(view) {
+    if (view.autoLanguage) autoLanguage = view.autoLanguage;
     const first = !settingsEditor.ready();
     serverSettings = view;
-    if (first && settingsDraft) settingsEditor.open(view); else settingsEditor.update(view);
+    if (first && settingsOpen) settingsEditor.open(view); else settingsEditor.update(view);
+    const selected = view.values?.browser.language;
+    const nextLang = i18n.locale(selected === 'auto' ? autoLanguage : selected);
+    if (nextLang !== lang) setLang(nextLang);
     max = view.effective?.contexts.maxRunning ?? max;
     overflow = view.effective?.contexts.overflow ?? overflow;
     if (view.capabilities?.browser === false && !settingsOnlyOpened) {
@@ -452,15 +325,9 @@
   let restartReady = false;
   let restartTimer = 0;
 
-  function renderLanguageChoice() {
-    for (const b of settingsContent.querySelectorAll('[data-lang]')) {
-      b.setAttribute('aria-pressed', String(b.dataset.lang === (settingsDraft?.language ?? lang)));
-    }
-  }
-
   function setSettings(open) {
     if (settingsBusy) return;
-    settingsDraft = open ? { language: lang } : null;
+    settingsOpen = open;
     if (open) settingsEditor.open(serverSettings); else settingsEditor.close();
     settingsPage.hidden = !open;
     cards.hidden = open;
@@ -468,7 +335,6 @@
     settingsBtn.setAttribute('aria-pressed', String(open));
     showError(null);
     $('.settings-status').textContent = '';
-    renderLanguageChoice();
     settingsEditor.update(serverSettings);
     if (open) $('.settings-title').focus();
     else settingsBtn.focus();
@@ -496,17 +362,9 @@
     e.stopPropagation(); // return to the list before closing the sidebar
     setSettings(false);
   });
-  for (const b of settingsContent.querySelectorAll('[data-lang]')) b.addEventListener('click', () => {
-    if (!settingsDraft || settingsBusy) return;
-    settingsDraft.language = b.dataset.lang;
-    renderLanguageChoice();
-    renderSave();
-  });
-
   settingsPage.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!settingsDraft || settingsBusy) return;
-    const draft = settingsDraft;
+    if (!settingsOpen || settingsBusy) return;
     let savedOk = false;
     setSettingsBusy(true);
     showError(null);
@@ -515,14 +373,13 @@
       const view = await settingsEditor.save((body) => call('PATCH', 'api/settings', body), ask);
       if (!view) return;
       receiveSettings(view);
-      if (Object.keys(view.errors).length) throw new Error(lang === 'zh' ? '配置已保存，但部分设置未生效，请查看下方详情。' : 'Settings saved, but some changes could not be applied. See the details below.');
-      setLang(draft.language, true);
+      if (Object.keys(view.errors).length) throw new Error(t('settingsApplyFailed'));
       savedOk = true;
     } catch (err) {
       showError(err);
     } finally {
       setSettingsBusy(false);
-      $('.settings-status').textContent = savedOk ? (lang === 'zh' ? '配置已保存。' : 'Settings saved.') : '';
+      $('.settings-status').textContent = savedOk ? t('settingsSaved') : '';
     }
   });
 
@@ -544,7 +401,7 @@
     try {
       await call('POST', 'api/restart');
       restartAccepted = true;
-      settingsDraft = null; // restarting never saves the draft
+      settingsOpen = false; // restarting never saves the draft
       finishRestart();
     } catch (err) {
       if (!err.status) {
@@ -956,7 +813,7 @@
     ws.onopen = () => {
       retry = 1000;
       renderRestart();
-      if (!restarting && (connectionError || !settingsDraft)) showError(null);
+      if (!restarting && (connectionError || !settingsOpen)) showError(null);
     };
     ws.onmessage = (e) => {
       const touched = new Set();
@@ -1002,6 +859,12 @@
     }
   });
 
+  // Resolve Auto from HTTP, just like the browser launch actions. A WebSocket
+  // may send a different header. Keep any newer live state when this read ends.
+  call('GET', 'api/settings').then((view) => {
+    receiveSettings(settingsEditor.ready() ? { ...serverSettings, autoLanguage: view.autoLanguage } : view);
+  }).catch(showError);
+
   call('GET', 'api/browsers').then((data) => {
     actionsEnabled = data.enabled;
     renderNewBrowser();
@@ -1013,7 +876,7 @@
     renderRestart();
   }).catch(showError);
 
-  setLang(lang, false);
+  setLang(lang);
   connect();
 </script>
 </body>

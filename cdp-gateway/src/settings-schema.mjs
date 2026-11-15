@@ -1,10 +1,12 @@
 // Shared by the console and the entrypoint's read-only startup adapter.
 // Browser preferences are persisted settings, never environment defaults.
+import { canonicalLanguage } from './language.mjs';
 const bool = (value, scope, apply = 'restart') => ({ default: value, type: 'boolean', scope, apply, valid: (v) => typeof v === 'boolean' });
 const number = (value, min, max, scope, apply = 'live') => ({ default: value, type: 'number', min, max, scope, apply, valid: (v) => Number.isSafeInteger(v) && v >= min && v <= max });
 const choice = (value, options, scope, apply = 'live') => ({ default: value, type: 'select', options, scope, apply, valid: (v) => options.includes(v) });
-// Values stay BCP-47 tags; the console displays localized language names.
+// Auto follows the caller's Accept-Language; explicit values stay BCP-47 tags.
 const languageLabels = {
+  auto: ['Auto', '自动'],
   'en-US': ['English (United States)', '英语 (美国)'],
   'en-GB': ['English (United Kingdom)', '英语 (英国)'],
   'zh-CN': ['Chinese (Simplified)', '中文 (简体)'],
@@ -30,12 +32,8 @@ const languageLabels = {
 };
 export const SCHEMA = {
   browser: {
-    language: { default: 'en-US', type: 'select', options: Object.keys(languageLabels), optionLabels: languageLabels,
-      scope: 'browser', apply: 'next-start', valid: (v) => {
-      // Preserve valid locales saved before the dropdown was introduced.
-      if (typeof v !== 'string' || !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(v)) return false;
-      try { return Intl.getCanonicalLocales(v).length === 1; } catch { return false; }
-    } },
+    language: { default: 'auto', type: 'select', options: Object.keys(languageLabels), optionLabels: languageLabels,
+      scope: 'console', apply: 'next-start', valid: (v) => v === 'auto' || canonicalLanguage(v) !== null },
   },
   contexts: {
     maxRunning: number(4, 1, 10000, 'browser'),

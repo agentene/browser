@@ -343,7 +343,7 @@ EOF
 nginx_web_entry_locations() {
     local scripts="" entry
     if [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ]; then
-        scripts='<script src="cdp-console/settings-ui.js" defer></script><script src="cdp-console/panel.js" defer></script>'
+        scripts='<script src="cdp-console/i18n.js" defer></script><script src="cdp-console/settings-ui.js" defer></script><script src="cdp-console/panel.js" defer></script>'
     fi
     if [ "${ENABLE_SELKIES}" = "true" ] && [ "${ENABLE_CDP}" = "true" ]; then
         scripts="${scripts}"'<script src="cdp-console/overlay.js" defer></script>'

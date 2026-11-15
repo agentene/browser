@@ -19,7 +19,6 @@
 
   const WS = new URL('cdp-console/overlay', document.baseURI);
   WS.protocol = WS.protocol === 'https:' ? 'wss:' : 'ws:';
-  const LANG_KEY = 'cdp-console-lang'; // the sidebar's language
   // The input arrives before the frames that show its effect: hold each op
   // back about the stream's latency so pointer and picture move together.
   const DELAY_MS = 120;
@@ -61,11 +60,7 @@
       where: { background: '后台标签页' },
     },
   };
-  const read = (key) => {
-    try { return localStorage.getItem(key); } catch { return null; } // storage blocked
-  };
-  let lang = read(LANG_KEY) || '';
-  if (!STRINGS[lang]) lang = navigator.languages?.find((l) => /^(zh|en)\b/i.test(l))?.slice(0, 2).toLowerCase() || 'en';
+  let lang = 'en'; // set by the sidebar from its saved language
 
   // --- the layer ------------------------------------------------------------
   const host = document.createElement('div');
@@ -564,7 +559,7 @@
   // for the sidebar's settings (panel.js)
   window.AgenteneInputOverlay = {
     setLang(next) {
-      if (STRINGS[next]) lang = next;
+      lang = next === 'zh-CN' ? 'zh' : 'en';
     },
   };
   window.dispatchEvent(new Event('agentene-input-overlay'));

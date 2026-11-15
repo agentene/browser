@@ -148,7 +148,7 @@ test('lowering the sleeper cap confirms an exact list, and stale confirmation ne
     try { await patch({ contexts: { maxHibernated: 1 }, browser: { language: 'zh-CN' } }); } catch (e) { preview = e.details; }
     assert.equal(preview.code, 'confirm_evictions');
     assert.deepEqual(preview.evictions.map((c) => c.name), ['a', 'b']);
-    assert.equal(settingsView().values.browser.language, 'en-US');
+    assert.equal(settingsView().values.browser.language, 'auto');
     assert.deepEqual(deleted, []);
     sleepers[0].state = 'running';
     let updated;
@@ -162,10 +162,13 @@ test('lowering the sleeper cap confirms an exact list, and stale confirmation ne
   `);
 });
 
-test('desktop-only settings permit desktop edits and refuse browser changes', () => {
+test('desktop-only settings permit the shared language and desktop edits, but refuse capacity changes', () => {
   settingsProcess(`
     assert.equal(settingsView().capabilities.browser, false);
-    await assert.rejects(patch({ browser: { language: 'zh-CN' } }), { status: 409 });
+    assert.equal(settingsView().fields.browser.language.available, true);
+    assert.equal((await patch({ browser: { language: 'zh-CN' } })).values.browser.language, 'zh-CN');
+    assert.equal((await patch({ browser: { language: 'auto' } })).values.browser.language, 'auto');
+    await assert.rejects(patch({ contexts: { maxRunning: 2 } }), { status: 409 });
     assert.deepEqual((await patch({ desktop: { resolution: '1280x720' } })).pendingRestart, ['desktop.resolution']);
   `, {}, { CDP_GATEWAY_BROWSER_ENABLED: 'false' });
 });

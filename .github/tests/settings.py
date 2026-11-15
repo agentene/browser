@@ -66,8 +66,10 @@ def run(backend, cdp=True, stream=True):
             api = base + ("/cdp-console/api" if stream else "/console/api")
             opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
-            def request(url, method="GET", body=None, status=200):
+            def request(url, method="GET", body=None, status=200, language=None):
                 headers = {"X-CDP-Console": "1"}
+                if language is not None:
+                    headers["Accept-Language"] = language
                 if body is not None:
                     headers["Content-Type"] = "application/json"
                 req = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode(), headers=headers, method=method)
@@ -91,6 +93,11 @@ def run(backend, cdp=True, stream=True):
             request(api + "/settings", status=401)
             request(base + "/__auth/api/setup", "POST", {"code": "settings-smoke-code", "username": "admin", "password": "settings-test-password"})
             initial = request(api + "/settings")
+            assert initial["values"]["browser"]["language"] == "auto"
+            assert initial["fields"]["browser"]["language"]["options"][0] == "auto"
+            assert initial["fields"]["browser"]["language"]["available"] is True
+            assert request(api + "/settings", language="zh-CN;q=0.2,en-US;q=1")["autoLanguage"] == "zh-CN"
+            assert request(api + "/settings", language="ja-JP,zh-CN;q=0.9")["autoLanguage"] == "ja-JP"
             assert set(initial["fields"]["browser"]) == {"language"}
             assert set(initial["fields"]["desktop"]) == {"raiseNewWindows", "resolution"}
             assert initial["values"]["desktop"]["resolution"] == "1600x900"
@@ -122,9 +129,9 @@ def run(backend, cdp=True, stream=True):
                 target = next(t for t in targets if t["url"].startswith("chrome://version"))
                 return target
 
-            def new_browser():
+            def new_browser(language=None):
                 existing = {t["id"] for t in request(browser + "/json/list")}
-                created = request(api + "/browsers", "POST", status=201)["name"]
+                created = request(api + "/browsers", "POST", status=201, language=language)["name"]
                 target = next(t for t in request(browser + "/json/list") if t["type"] == "page" and t["id"] not in existing)
                 assert target["url"] == "about:blank", target
                 return created, target
@@ -177,6 +184,23 @@ def run(backend, cdp=True, stream=True):
                 request(api + "/" + new_name, "DELETE")
                 print(f"Browser language applies on new/woken/restarted processes without a container restart: {backend}", flush=True)
 
+                patch({"browser": {"language": "auto"}})
+                chinese, chinese_target = new_browser("zh-CN;q=0.2,en-US;q=1")
+                french, french_target = new_browser("fr-FR,zh-CN;q=0.9")
+                assert page_language(chinese_target) == "zh-CN"
+                assert page_language(french_target) == "fr-FR"
+                request(api + "/" + chinese + "/hibernate", "POST")
+                request(api + "/" + chinese + "/wake", "POST", language="ja-JP,en-US;q=0.9")
+                assert page_language(chinese_target) == "ja-JP"
+                assert page_language(french_target) == "fr-FR"
+                request(api + "/main/stop", "POST")
+                request(api + "/main/start", "POST", language="zh-CN,en-US;q=0.9")
+                assert main_language() == "zh-CN"
+                request(api + "/" + chinese, "DELETE")
+                request(api + "/" + french, "DELETE")
+                assert request(api + "/settings")["values"]["browser"]["language"] == "auto"
+                print(f"Auto language follows each creation/wake/start request header: {backend}", flush=True)
+
             if cdp:
                 result = patch({"contexts": {"maxRunning": 2}})
                 assert result["effective"]["contexts"]["maxRunning"] == 2
@@ -194,6 +218,8 @@ def run(backend, cdp=True, stream=True):
                 pending = patch({"browser": {"language": "zh-CN"}})
                 assert "browser.language" not in pending["pendingRestart"]
             else:
+                assert patch({"browser": {"language": "zh-CN"}})["values"]["browser"]["language"] == "zh-CN"
+                assert patch({"browser": {"language": "auto"}})["values"]["browser"]["language"] == "auto"
                 request(api + "/main/start", "POST", status=403)
                 assert request(api + "/browsers")["enabled"] is False
                 # The browser API is also refused on the internal socket.

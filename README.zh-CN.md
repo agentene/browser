@@ -288,7 +288,7 @@ location /desk/ {
 
 | 已移除的环境变量 | Web 配置项 | 默认值 | 生效方式 |
 | --- | --- | --- | --- |
-| `CHROMIUM_LANG` | 浏览器语言 | `en-US` | 保存后新启动的浏览器进程生效，无需重启容器 |
+| `CHROMIUM_LANG` | 语言（界面与浏览器） | 自动 | 保存后应用于界面及新启动的浏览器进程，无需重启容器 |
 | `CDP_CONTEXTS_MAX` | 隔离浏览器运行上限 | `4` | 在线；保存时不停止现有运行实例 |
 | `CDP_CONTEXTS_OVERFLOW` | 运行容量满时的策略 | `hibernate` | 在线；hibernate / reject |
 | `CDP_CONTEXTS_HIBERNATED_MAX` | 休眠浏览器保留上限 | `16` | 在线；低于当前数量时先确认删除列表 |
@@ -301,11 +301,13 @@ location /desk/ {
 
 **初始分辨率**改为单一下拉框，用于容器启动及无人观看时启动浏览器。有观看者时，共享桌面自动跟随观看窗口，页面布局和截图尺寸可能随之改变。自动调整始终开启并锁定，手动分辨率覆盖（包括 `SELKIES_MANUAL_*` 和对应额外参数）不再生效。旧配置中有效的宽高会迁移到新的分辨率设置，原有自定义尺寸保留为已保存选项。废弃设置不再生效，并在下次保存时从文件中清理。
 
-关闭 CDP（`ENABLE_CDP=false`）仍保留 Web 侧栏桌面配置入口，不启动 Chromium、不开放 CDP。关闭 Selkies 后，CDP 浏览器仍使用虚拟桌面，桌面设置继续可用；AI 操作展示因没有串流而不可用。音频默认开启，观看端仍可通过 Selkies 的音频按钮关闭或重新开启。浏览器语言与控制台界面语言分别设置。
+关闭 CDP（`ENABLE_CDP=false`）仍保留 Web 侧栏语言和桌面配置入口，不启动 Chromium、不开放 CDP。关闭 Selkies 后，CDP 浏览器仍使用虚拟桌面，桌面设置继续可用；AI 操作展示因没有串流而不可用。音频默认开启，观看端仍可通过 Selkies 的音频按钮关闭或重新开启。
+
+**语言**使用一个下拉框统一控制 console / panel 界面与 Chrome；第一项为**自动**，也是尚未保存语言时的默认选项。自动模式读取发起请求的浏览器的 `Accept-Language` 首项，不向后查找已支持的翻译，也不按质量权重重排。界面目前支持 `en-US` 和 `zh-CN`，其他语言显示英语文案，但 Chrome 仍使用所选语言。每次新建或唤醒浏览器进程时，自动模式均按触发该操作的请求或 CDP 连接解析；请求头缺失、首项为通配符或无效语言时使用 `en-US`。已运行的浏览器保持原语言。保存指定语言后，已打开的控制台同步更新；选择自动时，各观看端分别跟随自己的请求头。已有浏览器语言配置继续保留，旧的本机界面语言偏好不再生效。共享界面翻译集中维护在 [`cdp-gateway/i18n.js`](cdp-gateway/i18n.js)。
 
 休眠浏览器保留上限仅在运行容量满时选择**休眠可休眠的浏览器**时显示；选择**拒绝新建浏览器**会隐藏该项，并保留其已保存的值。降低休眠保留上限时先显示将删除的实例，确认后才保存并删除；列表变化需要重新确认。其他页面修改配置会触发版本冲突，保留当前草稿供重新核对。写盘失败不应用任何修改；应用失败时页面分别显示已保存和未生效项目。重启会删除全部隔离实例，包括休眠实例。
 
-配置 API：`GET /console/api/settings` 返回 `values`、`effective`、`revision`、`pendingRestart`、`errors`、`capabilities`、`fields`；`PATCH` 提交 `{ "revision": "<GET 返回的值>", "patch": { "browser": { "language": "zh-CN" } } }`，需要登录会话和 `X-CDP-Console: 1`。版本冲突为 409；清理确认也为 409（`code: confirm_evictions`），包含实例列表和需随重试请求提交的 `confirmation`。Web 端口的对应入口为 `<subfolder>/cdp-console/api/settings`。
+配置 API：`GET /console/api/settings` 返回 `values`、`effective`、`revision`、`pendingRestart`、`errors`、`capabilities`、`fields` 及当前请求检测到的 `autoLanguage`；`PATCH` 提交 `{ "revision": "<GET 返回的值>", "patch": { "browser": { "language": "zh-CN" } } }`，需要登录会话和 `X-CDP-Console: 1`。版本冲突为 409；清理确认也为 409（`code: confirm_evictions`），包含实例列表和需随重试请求提交的 `confirmation`。Web 端口的对应入口为 `<subfolder>/cdp-console/api/settings`。
 
 部署参数通过环境变量配置，运行偏好通过 Web 配置页管理；使用 Compose 时将部署变量写入 `.env`(模板见 [.env.example](.env.example))。未在 `compose.yaml` 里显式列出的变量也会经 `env_file` 直通进容器 —— 包括 Selkies 原生设置,如 `SELKIES_FRAMERATE=30`、`SELKIES_TURN_URL=...`。
 

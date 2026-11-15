@@ -1,5 +1,5 @@
 // Console live state (WebSocket /console/ws), the console pages' only source
-// of state. A new subscriber gets a snapshot, then only what changed,
+// of live state. A new subscriber gets a snapshot, then only what changed,
 // batched per tick as {ops: [...]}:
 //   {t:'snapshot', max, settings, browsers:[{name, ...fields, tabs, current, thumb}], ai}
 //   {t:'settings', settings}               the server-side settings changed

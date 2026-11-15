@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { BROWSER_LANGUAGE, CHROME_BIN } from './config.mjs';
 import { CdpPipe } from './pipe.mjs';
 import { prepareLanguage } from './profile.mjs';
+import { resolveLanguage } from './language.mjs';
 import { rememberVersion } from './version.mjs';
 
 const HIDE_WEBDRIVER = 'AutomationControlled';
@@ -48,7 +49,7 @@ export function launchChromium(flags, output, label, env) {
 // Capture one language for both the profile and child environment. The gateway
 // keeps its environment; each new browser process adopts the current setting.
 export async function prepareBrowserLaunch(profile) {
-  const language = BROWSER_LANGUAGE;
+  const language = resolveLanguage(BROWSER_LANGUAGE);
   await prepareLanguage(profile, language);
   const locale = `${language.replaceAll('-', '_')}.UTF-8`;
   return { ...process.env, LANG: locale, LC_ALL: locale };

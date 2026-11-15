@@ -36,7 +36,8 @@
 //
 // Also serves /json/* (made from CDP, with URLs on the public host:port the
 // client dialed) and a small dashboard under /console/: its state (a
-// snapshot, then changes) comes only over the /console/ws WebSocket, its
+// snapshot, then changes) comes over the /console/ws WebSocket; settings are
+// also read once on load so a closed sidebar uses the saved language. Its
 // actions are POST/DELETE /console/api/<name>… and PATCH /console/api/settings; plus the sidebar script
 // nginx injects into the Selkies page (panel.js; nginx proxies /cdp-console/
 // on the web port to /console/ here).
@@ -47,6 +48,7 @@
 //   http.mjs            HTTP dispatch -> routes-json.mjs (/json/*),
 //                       routes-console.mjs (/console/*), respond.mjs
 //   upgrade.mjs         WebSocket dispatch -> mux.mjs, relay.mjs, console-live.mjs
+//   language.mjs        per-request/connection Accept-Language for Auto
 //   cdp-origin.mjs      who may use the CDP API from a web page (CDP_ALLOW_ORIGINS)
 //   mux.mjs             per-connection CDP multiplexer (main <-> context routing)
 //   relay.mjs           /devtools/page/<id> pass-through

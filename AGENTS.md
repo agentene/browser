@@ -50,7 +50,7 @@ docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
   docker-entrypoint.sh entrypoint/lib/*.sh entrypoint/helpers/*.sh
 grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION                   # X.Y.Z, one line
 node --check update-chrome-node.mjs
-for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js; do node --check "$f"; done
+for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js cdp-gateway/i18n.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
 npm test --prefix auth-server                                  # auth server unit tests (no deps)

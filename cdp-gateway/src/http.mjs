@@ -5,8 +5,13 @@ import { log } from './util.mjs';
 import { HttpError, requestPath, send, viaWeb } from './respond.mjs';
 import { consoleRoute } from './routes-console.mjs';
 import { jsonRoute } from './routes-json.mjs';
+import { withRequestLanguage } from './language.mjs';
 
-export async function handleHttp(req, res, restart) {
+export function handleHttp(req, res, restart) {
+  return withRequestLanguage(req.headers['accept-language'], () => handleRequest(req, res, restart));
+}
+
+async function handleRequest(req, res, restart) {
   if (requestPath(req) === null) {
     send(res, 400, { error: 'malformed request path' });
     return;
