@@ -7,7 +7,7 @@
 // nginx injects it into the Selkies entry page next to panel.js
 // (CDP_INPUT_OVERLAY, entrypoint/lib/nginx.sh); same origin and auth as the
 // sidebar: nginx checks the built-in login before serving this script.
-// The gateway streams the input over cdp-console/overlay
+// The gateway streams the input over /console/overlay
 // (cdp-gateway/src/input-overlay.mjs — the op format is documented there)
 // while this page is visible. The server controls display and detail for
 // every viewer through the shared AI input setting.
@@ -17,7 +17,7 @@
   'use strict';
   if (window.AgenteneInputOverlay) return;
 
-  const WS = new URL('cdp-console/overlay', document.baseURI);
+  const WS = new URL('overlay', document.currentScript.src);
   WS.protocol = WS.protocol === 'https:' ? 'wss:' : 'ws:';
   // The input arrives before the frames that show its effect: hold each op
   // back about the stream's latency so pointer and picture move together.

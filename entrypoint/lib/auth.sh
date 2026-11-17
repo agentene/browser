@@ -3,7 +3,7 @@
 #
 # A small Node service on a unix socket (/usr/local/lib/auth-server/server.mjs)
 # that nginx asks about every request (auth_request, nginx.sh):
-#   * the web UI and the CDP console (on either port) need a session cookie;
+#   * the desktop and console on the web listeners need a session cookie;
 #     until the first visitor sets up the administrator login (or skips it)
 #     every page shows the setup form, then the login form in place;
 #   * the CDP API needs the API key once one is set (Authorization: Bearer

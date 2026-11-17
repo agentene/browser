@@ -54,7 +54,7 @@ test('concurrent shutdowns drain connections once and wait for every browser', a
   const main = new Promise((r) => { finishMain = r; });
   const context = new Promise((r) => { finishContext = r; });
   const shutdown = createShutdown({
-    server: { close() { calls.push('server'); } },
+    servers: ['console', 'cdp'].map((name) => ({ listening: true, close(done) { calls.push(name); done(); } })),
     sockets: new Set([{ destroy() { calls.push('socket'); } }]),
     contexts: {
       size: 1,
@@ -66,19 +66,19 @@ test('concurrent shutdowns drain connections once and wait for every browser', a
   });
   const first = shutdown('console restart');
   assert.equal(shutdown('SIGTERM'), first);
-  assert.deepEqual(calls, ['contexts', 'main', 'server', 'socket']);
+  assert.deepEqual(calls, ['contexts', 'main', 'console', 'cdp', 'socket']);
   finishContext();
   await Promise.resolve();
   assert.equal(calls.includes(0), false);
   finishMain();
   await first;
-  assert.deepEqual(calls, ['contexts', 'main', 'server', 'socket', 0]);
+  assert.deepEqual(calls, ['contexts', 'main', 'console', 'cdp', 'socket', 0]);
 });
 
 test('a failed context cleanup does not skip the main browser or prevent exit', async () => {
   let mainClosed = false, exitCode;
   const shutdown = createShutdown({
-    server: { close() {} }, sockets: [],
+    servers: [{ listening: true, close(done) { done(); } }], sockets: [],
     contexts: { size: 1, close() {}, values: () => [{ destroy: async () => { throw new Error('cleanup failed'); } }] },
     mainBrowser: { async close() { mainClosed = true; } },
     exit: (code) => { exitCode = code; },

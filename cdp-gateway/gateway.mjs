@@ -35,15 +35,17 @@
 // taking the container down — the next client starts it again.
 //
 // Also serves /json/* (made from CDP, with URLs on the public host:port the
-// client dialed) and a small dashboard under /console/: its state (a
-// snapshot, then changes) comes over the /console/ws WebSocket; settings are
+// client dialed). Its separate console socket serves a dashboard at the web
+// listener's /console/: its state (a snapshot, then changes) comes over the /console/ws WebSocket; settings are
 // also read once on load so a closed sidebar uses the saved language. Its
 // actions are POST/DELETE /console/api/<name>… and PATCH /console/api/settings; plus the sidebar script
-// nginx injects into the Selkies page (panel.js; nginx proxies /cdp-console/
-// on the web port to /console/ here).
+// nginx injects into the Selkies page (panel.js). All console requests use
+// the web listener at CONSOLE_SUBFOLDER and its dedicated Unix socket.
+// nginx maps that public prefix to the internal /console/ routes below.
 //
 // The modules, in src/:
-//   server.mjs          startup, the HTTP server (unix socket), shutdown
+//   server.mjs          startup, dedicated CDP and console HTTP servers
+//   listeners.mjs       bind both Unix sockets, roll back failures, close connections
 //   shutdown.mjs        orderly exit for signals and console container restart
 //   http.mjs            HTTP dispatch -> routes-json.mjs (/json/*),
 //                       routes-console.mjs (/console/*), respond.mjs

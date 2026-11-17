@@ -22,8 +22,8 @@
 #     are on unix sockets inside the container and the browsers have no
 #     DevTools port, so nothing of it sits on the host's loopback.
 #   * nginx listens on ALL host interfaces unless NGINX_LISTEN_ADDR is set;
-#     the CDP endpoint has no authentication, so on a machine reachable from
-#     an untrusted network set NGINX_LISTEN_ADDR=127.0.0.1 in .env.
+#     the CDP endpoint uses its configured API key. Set
+#     NGINX_LISTEN_ADDR=127.0.0.1 to keep web and CDP listeners host-local.
 #   * the docker network settings (NETWORK_NAME / NETWORK_EXTERNAL) do not
 #     apply, and PORT_FORWARDS peers are resolved through the host's DNS
 #     (there is no docker embedded DNS; container names do not resolve).
@@ -42,15 +42,4 @@ services:
       NGINX_LISTEN_HTTP_PORT: "${NGINX_LISTEN_HTTP_PORT:-${NGINX_HTTP_PORT:-8080}}"
       NGINX_LISTEN_HTTPS_PORT: "${NGINX_LISTEN_HTTPS_PORT:-${NGINX_HTTPS_PORT:-8443}}"
       CDP_LISTEN_PORT: "${CDP_LISTEN_PORT:-${CDP_PORT:-9222}}"
-    healthcheck:
-      # same probe as compose.yaml, on the host-mode listen port defaults
-      test:
-        - CMD-SHELL
-        - >-
-          if [ "$${ENABLE_SELKIES:-true}" = false ]; then
-          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${CDP_LISTEN_PORT:-${CDP_PORT:-9222}}/json/version)" in
-          2??|401) true ;; *) false ;; esac;
-          else
-          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-${NGINX_HTTP_PORT:-8080}}/)" in
-          2??|3??|401) true ;; *) false ;; esac;
-          fi
+    # The base healthcheck uses these container-side ports and normalized prefixes.

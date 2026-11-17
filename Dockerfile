@@ -298,7 +298,7 @@ ENV PULSE_SERVER="unix:/tmp/pulse/native"
 # docker run -p / compose ports.
 EXPOSE 80 443 9222
 
-# CDP gateway (always on with the CDP endpoint): a Node service between
+# Browser manager and console (always on): a Node service between
 # nginx and chromium that gives every isolated CDP context its own browser on
 # a clone of the main profile. Its single dependency (ws) is pinned in
 # package-lock.json and installed reproducibly with npm ci.
@@ -312,7 +312,7 @@ COPY cdp-gateway/src/ /usr/local/lib/cdp-gateway/src/
 # dependency-free Node service nginx checks every web UI / console request
 # and every CDP request with; it also serves the setup/login forms and the
 # console's login + API key controls (ui.js).
-COPY auth-server/server.mjs auth-server/page.html auth-server/ui.js auth-server/keepalive.js /usr/local/lib/auth-server/
+COPY auth-server/server.mjs auth-server/page.html auth-server/ui.js auth-server/client.js /usr/local/lib/auth-server/
 COPY auth-server/src/ /usr/local/lib/auth-server/src/
 
 # Keep background rebuilds independent of the service dependency layers.

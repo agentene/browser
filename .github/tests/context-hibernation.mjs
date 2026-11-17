@@ -12,7 +12,8 @@ import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 
 const endpoint = process.env.CDP_ENDPOINT;
-if (!endpoint || !process.env.PLAYWRIGHT_CLI_JS) throw new Error('CDP_ENDPOINT and PLAYWRIGHT_CLI_JS are required');
+const consoleEndpoint = process.env.CONSOLE_ENDPOINT;
+if (!endpoint || !consoleEndpoint || !process.env.PLAYWRIGHT_CLI_JS) throw new Error('CDP_ENDPOINT, CONSOLE_ENDPOINT and PLAYWRIGHT_CLI_JS are required');
 const cliFile = path.resolve(process.env.PLAYWRIGHT_CLI_JS);
 const require = createRequire(cliFile);
 const { chromium } = require('playwright');
@@ -23,7 +24,7 @@ const cliName = `hibernate-${process.pid}`;
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function listing() {
-  const ws = new WebSocket(endpoint.replace(/^http/, 'ws') + '/console/ws');
+  const ws = new WebSocket(consoleEndpoint.replace(/^http/, 'ws') + '/console/ws');
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { ws.close(); reject(new Error('console snapshot timed out')); }, 10000);
     ws.onerror = reject;
@@ -44,7 +45,7 @@ async function state(name, expected) {
 }
 
 async function action(name, verb) {
-  const r = await fetch(`${endpoint}/console/api/${name}/${verb}`, { method: 'POST', headers: { 'X-CDP-Console': '1' } });
+  const r = await fetch(`${consoleEndpoint}/console/api/${name}/${verb}`, { method: 'POST', headers: { 'X-CDP-Console': '1' } });
   const body = await r.json();
   assert.equal(r.status, 200, JSON.stringify(body));
   return body;
@@ -195,7 +196,7 @@ try {
   const target = (await (await fetch(endpoint + '/json/list')).json()).find((t) => t.url === 'http://restore.test/page');
   const direct = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { direct.onopen = resolve; direct.onerror = reject; });
-  const denied = await fetch(`${endpoint}/console/api/${routed.name}/hibernate`, { method: 'POST', headers: { 'X-CDP-Console': '1' } });
+  const denied = await fetch(`${consoleEndpoint}/console/api/${routed.name}/hibernate`, { method: 'POST', headers: { 'X-CDP-Console': '1' } });
   assert.equal(denied.status, 409, 'a direct page relay pins its browser');
   direct.close();
   await routed.b.close(); await state(routed.name, null);

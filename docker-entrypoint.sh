@@ -16,7 +16,7 @@
 #                       own child on demand; it speaks CDP on a pipe to
 #                       the gateway only, no DevTools port
 #      CDP gateway     the gateway in front of it (always on with the CDP
-#                       endpoint, settings-only without it, on its unix socket); the
+#                       endpoint, settings-only without it, on separate console and CDP sockets); the
 #                       supervised service — the browser may exit and be
 #                       started again without the container
 #      auth service    the built-in login + CDP API key nginx checks every

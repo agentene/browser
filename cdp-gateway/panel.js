@@ -3,12 +3,11 @@
 // delete; start/stop of the main browser) next to the live desktop.
 //
 // nginx injects it into the Selkies entry page (sub_filter before </head>,
-// entrypoint/lib/nginx.sh) and proxies cdp-console/ — relative to the page,
-// so SELKIES_SUBFOLDER works — to /console/ on the gateway. Same origin as
+// entrypoint/lib/nginx.sh) and maps CONSOLE_SUBFOLDER to the console socket.
+// Its script URL supplies the API base, independently of SELKIES_SUBFOLDER. Same origin as
 // Selkies on purpose: nginx checks the built-in login's session cookie
 // (ENABLE_AUTH). Its settings page also carries the built-in
-// login's controls (login, CDP API key, log out): __auth/ui.js, served by
-// the auth service next to the page.
+// login's controls through the shared AgenteneAuthClient injected by nginx.
 //
 // Keyboard: the Selkies core grabs keys in the window capture phase and only
 // leaves those whose target sits under an `allow-native-input` element;
@@ -20,8 +19,9 @@
   if (window.__cdpConsolePanel) return;
   window.__cdpConsolePanel = true;
 
-  const API = new URL('cdp-console/api', document.baseURI).href;
-  const WS = new URL('cdp-console/ws', document.baseURI);
+  const BASE = new URL('./', document.currentScript.src);
+  const API = new URL('api', BASE).href;
+  const WS = new URL('ws', BASE);
   WS.protocol = WS.protocol === 'https:' ? 'wss:' : 'ws:';
   const PANEL_WIDTH = 380; // until the viewer drags the panel's left edge
   const MIN_WIDTH = 300;
@@ -342,7 +342,7 @@
     $('.settings-restart').title = t('restartHint');
     settingsEditor.render();
     window.AgenteneInputOverlay?.setLang(lang);
-    window.AgenteneAuth?.setLang(lang);
+    window.AgenteneAuthClient?.setLang(lang);
     for (const v of views.values()) v.card.remove();
     views.clear();
     browsers.forEach((b, name) => update(name));
@@ -478,16 +478,8 @@
     }
   });
 
-  // The built-in login's rows in the settings page and their dialogs (in the shadow
-  // root, so the panel's keyboard rules cover them); absent without
-  // ENABLE_AUTH.
-  const authUi = document.createElement('script');
-  authUi.src = new URL('__auth/ui.js', document.baseURI).href;
-  authUi.onload = () => {
-    window.AgenteneAuth?.setLang(lang);
-    window.AgenteneAuth?.mount({ menu: settingsContent, root, onError: showError });
-  };
-  document.head.append(authUi);
+  // Shared account controls render their dialogs inside the panel's shadow root.
+  window.AgenteneAuthClient?.mount({ menu: settingsContent, root, onError: showError, language: lang });
 
   // --- open / close ----------------------------------------------------------
   // The live state streams in only while the panel is open.
@@ -917,7 +909,7 @@
     return [op.name];
   }
 
-  // --- live state: WebSocket to the gateway (cdp-console/ws) -----------------
+  // --- live state: WebSocket to the gateway (/console/ws) -----------------
   // A snapshot, then only changes. Reconnects with backoff while open and
   // the page is visible: a subscriber keeps the gateway's once-a-second tick
   // and the thumbnail screencasts going, so a Selkies page left open with the

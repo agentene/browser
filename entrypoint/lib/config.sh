@@ -17,7 +17,8 @@
 #   NGINX_LISTEN_ADDR=""           listener address; empty = all interfaces
 #   ALLOWED_HOSTS=""               accepted host names (IP addresses/localhost always work)
 #   PORT_FORWARDS=""               extra nginx proxies: LISTEN=HOST:PORT, space/comma separated
-#   SELKIES_SUBFOLDER=""           web UI path prefix, e.g. /desk
+#   SELKIES_SUBFOLDER=""           desktop path prefix, e.g. /desk
+#   CONSOLE_SUBFOLDER=/console    console path prefix; explicit empty = site root
 #   SELKIES_EXTRA_ARGS=""          extra Selkies arguments (selkies.sh)
 #   DISPLAY_BACKEND=wayland       wayland (labwc) or x11 (Xvfb/picom)
 #   TZ=UTC                        container timezone, inherited by processes
@@ -41,7 +42,7 @@ config_load() {
     settings_load
     config_sockets
     config_display
-    config_selkies
+    config_web_paths
     config_nginx
     config_tls
     config_chromium
@@ -67,6 +68,7 @@ config_sockets() {
     SOCKET_DIR=/tmp/agentene
     SELKIES_SOCKET="${SOCKET_DIR}/selkies.sock"
     CDP_GATEWAY_SOCKET="${SOCKET_DIR}/cdp-gateway.sock"
+    CONSOLE_SOCKET="${SOCKET_DIR}/console.sock"
     AUTH_SOCKET="${SOCKET_DIR}/auth.sock"
 }
 
@@ -94,20 +96,48 @@ config_display() {
     esac
 }
 
-config_selkies() {
-    # URL path prefix of the web UI (empty = root). Normalized to the form both
-    # selkies and the nginx locations expect: "/a/b" — leading slash, no
-    # trailing one. Restricted to URL-safe path characters, as the value lands
-    # verbatim in nginx location/return directives.
-    SELKIES_SUBFOLDER="${SELKIES_SUBFOLDER:-}"
-    SELKIES_SUBFOLDER="${SELKIES_SUBFOLDER#"${SELKIES_SUBFOLDER%%[!/]*}"}"   # strip leading /
-    SELKIES_SUBFOLDER="${SELKIES_SUBFOLDER%"${SELKIES_SUBFOLDER##*[!/]}"}"   # strip trailing /
-    case "${SELKIES_SUBFOLDER:+/${SELKIES_SUBFOLDER}/}" in   # empty = root, nothing to check
+# config_subfolder <variable> <default>: both web applications use the same
+# URL-safe normalization. An explicitly empty value means the site root.
+config_subfolder() {
+    local name="$1" value="$2"
+    if [ -v "${name}" ]; then value="${!name}"; fi
+    value="${value#"${value%%[!/]*}"}"
+    value="${value%"${value##*[!/]}"}"
+    case "${value:+/${value}/}" in
         *[!A-Za-z0-9._~/-]*|*//*|*/./*|*/../*)
-            die "SELKIES_SUBFOLDER='${SELKIES_SUBFOLDER}' must be a plain URL path like /desk or /a/b" ;;
+            die "${name}='${value}' must be a plain URL path like /desk or /a/b" ;;
     esac
-    [ -n "${SELKIES_SUBFOLDER}" ] && SELKIES_SUBFOLDER="/${SELKIES_SUBFOLDER}"
-    return 0
+    printf -v "${name}" '%s' "${value:+/${value}}"
+}
+
+# Sets SELKIES_SUBFOLDER / CONSOLE_SUBFOLDER and the derived AUTH_SUBFOLDER.
+# Nested application prefixes are fine; they must not shadow the containing
+# application's own resources, API or WebSocket paths.
+config_web_paths() {
+    config_subfolder SELKIES_SUBFOLDER ""
+    config_subfolder CONSOLE_SUBFOLDER /console
+    AUTH_SUBFOLDER="${CONSOLE_SUBFOLDER}/__auth"
+    [ "${ENABLE_SELKIES}" = "true" ] || return 0
+    if [ "${SELKIES_SUBFOLDER}" = "${CONSOLE_SUBFOLDER}" ]; then
+        die "SELKIES_SUBFOLDER and CONSOLE_SUBFOLDER must use different paths"
+    fi
+    local child
+    case "${SELKIES_SUBFOLDER}" in
+        "${CONSOLE_SUBFOLDER}/"*)
+            child="${SELKIES_SUBFOLDER#"${CONSOLE_SUBFOLDER}/"}"
+            case "${child}" in
+                api|api/*|ws|ws/*|overlay|overlay/*|__auth|__auth/*|i18n.js|i18n.js/*|settings-ui.js|settings-ui.js/*|panel.js|panel.js/*|overlay.js|overlay.js/*)
+                    die "SELKIES_SUBFOLDER='${SELKIES_SUBFOLDER}' overlaps a console resource" ;;
+            esac ;;
+    esac
+    case "${CONSOLE_SUBFOLDER}" in
+        "${SELKIES_SUBFOLDER}/"*)
+            child="${CONSOLE_SUBFOLDER#"${SELKIES_SUBFOLDER}/"}"
+            case "${child}" in
+                api|api/*|assets|assets/*|index.html|index.html/*)
+                    die "CONSOLE_SUBFOLDER='${CONSOLE_SUBFOLDER}' overlaps a desktop resource" ;;
+            esac ;;
+    esac
 }
 
 config_nginx() {
@@ -223,9 +253,6 @@ config_cdp_gateway() {
         true|false) ;;
         *) die "CDP_CONSOLE_RESTART='${CDP_CONSOLE_RESTART}' must be true or false" ;;
     esac
-    # The settings sidebar remains available in desktop-only mode.
-    CDP_CONSOLE_PANEL_ACTIVE="${ENABLE_SELKIES}"
-
 }
 
 config_auth() {

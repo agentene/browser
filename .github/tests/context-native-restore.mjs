@@ -6,7 +6,8 @@ import http from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const endpoint = process.env.CDP_ENDPOINT;
-if (!endpoint) throw new Error('CDP_ENDPOINT is required');
+const consoleEndpoint = process.env.CONSOLE_ENDPOINT;
+if (!endpoint || !consoleEndpoint) throw new Error('CDP_ENDPOINT and CONSOLE_ENDPOINT are required');
 let slowPath = null;
 let delayedRequests = 0;
 const fixture = http.createServer(async (req, res) => {
@@ -53,7 +54,7 @@ function send(method, params = {}, sessionId) {
 }
 
 async function listing() {
-  const socket = new WebSocket(endpoint.replace(/^http/, 'ws') + '/console/ws');
+  const socket = new WebSocket(consoleEndpoint.replace(/^http/, 'ws') + '/console/ws');
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { socket.close(); reject(new Error('console snapshot timed out')); }, 10000);
     socket.onerror = (err) => { clearTimeout(timer); reject(err); };
@@ -111,7 +112,7 @@ async function checkWindows(titles, windowSize, selections, slow = false) {
       loads.set(page.title, state.loads);
     }
     assert.deepEqual(before, selected, 'fixture must have one selected tab in each window');
-    const response = await fetch(`${endpoint}/console/api/${name}/hibernate`, {
+    const response = await fetch(`${consoleEndpoint}/console/api/${name}/hibernate`, {
       method: 'POST', headers: { 'X-CDP-Console': '1' },
     });
     assert.equal(response.status, 200, await response.text());

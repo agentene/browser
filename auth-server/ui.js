@@ -3,8 +3,8 @@
 // (cdp-gateway/panel.js) and the account page (page.html).
 //
 // Served by the auth service next to its API (…/__auth/ui.js), so it only
-// loads where the built-in login is on (ENABLE_AUTH=true). A page loads it
-// and calls
+// loads where the built-in login is on (ENABLE_AUTH=true). The shared client
+// loads it for both console views; the account page also calls
 //   AgenteneAuth.mount({ menu, root, onError })
 // menu    the element its rows go into (the console's settings page): the
 //         login (Change…), the CDP API key (Change…), Log out

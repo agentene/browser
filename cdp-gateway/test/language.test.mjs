@@ -11,21 +11,26 @@ import { firstLanguage, requestLanguage } from '../src/language.mjs';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'console-language-'));
 process.env.CDP_GATEWAY_SETTINGS_FILE = path.join(dir, 'settings.json');
-const { handleHttp } = await import('../src/http.mjs');
-const { handleUpgrade } = await import('../src/upgrade.mjs');
+const { handleCdpHttp, handleConsoleHttp } = await import('../src/http.mjs');
+const { handleCdpUpgrade, handleConsoleUpgrade } = await import('../src/upgrade.mjs');
 const { mainBrowser } = await import('../src/main-browser.mjs');
 const { SCHEMA, resolve } = await import('../src/settings-schema.mjs');
-const gateway = http.createServer(handleHttp);
-gateway.on('upgrade', handleUpgrade);
-let base;
+const gateway = http.createServer(handleConsoleHttp);
+gateway.on('upgrade', handleConsoleUpgrade);
+const cdp = http.createServer(handleCdpHttp);
+cdp.on('upgrade', handleCdpUpgrade);
+let base, cdpBase;
 
 before(async () => {
   gateway.listen(0, '127.0.0.1');
   await once(gateway, 'listening');
   base = `http://127.0.0.1:${gateway.address().port}`;
+  cdp.listen(0, '127.0.0.1');
+  await once(cdp, 'listening');
+  cdpBase = `ws://127.0.0.1:${cdp.address().port}`;
 });
 after(async () => {
-  await new Promise((done) => gateway.close(done));
+  await Promise.all([gateway, cdp].map((server) => new Promise((done) => server.close(done))));
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -85,7 +90,7 @@ test('later CDP messages retain each handshake language when starting a browser'
   };
   t.after(() => { mainBrowser.ensure = ensure; });
   await Promise.all(['zh-CN', 'fr-FR'].map(async (language) => {
-    const ws = new WebSocket(`${base.replace('http:', 'ws:')}/devtools/browser/test`, { headers: { 'Accept-Language': `${language},en-US;q=0.9` } });
+    const ws = new WebSocket(`${cdpBase}/devtools/browser/test`, { headers: { 'Accept-Language': `${language},en-US;q=0.9` } });
     t.after(async () => { const closed = once(ws, 'close'); ws.close(); await closed; });
     await once(ws, 'open');
     const response = once(ws, 'message');

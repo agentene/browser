@@ -1,5 +1,5 @@
 // /console/*: the dashboard, the sidebar and input overlay scripts nginx
-// injects into the Selkies page (nginx proxies /cdp-console/ on the web port here), and the
+// injects into the Selkies page (all served on the web port), and the
 // console's actions, POST/DELETE /console/api/<name>… (its state comes over
 // the /console/ws WebSocket, console-live.mjs):
 //   GET/POST /console/api/browsers          capabilities / create a console-owned browser

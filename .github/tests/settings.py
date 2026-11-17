@@ -60,10 +60,10 @@ def run(backend, cdp=True, stream=True):
         docker(*args, IMAGE)
         try:
             ports = json.loads(docker("inspect", name))[0]["NetworkSettings"]["Ports"]
-            web = f"http://127.0.0.1:{ports['80/tcp'][0]['HostPort']}/desk"
+            web = f"http://127.0.0.1:{ports['80/tcp'][0]['HostPort']}"
             browser = f"http://127.0.0.1:{ports['9222/tcp'][0]['HostPort']}"
-            base = web if stream else browser
-            api = base + ("/cdp-console/api" if stream else "/console/api")
+            base = web
+            api = base + "/console/api"
             opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
             def request(url, method="GET", body=None, status=200, language=None):
@@ -85,13 +85,13 @@ def run(backend, cdp=True, stream=True):
             def ready():
                 # PID 1 logs readiness just after starting nginx; its listener
                 # and auth upstream can still be opening on a fast CDP-only boot.
-                with opener.open(base + "/__auth/api/state", timeout=5) as response:
+                with opener.open(base + "/console/__auth/api/state", timeout=5) as response:
                     return response.status == 200
 
             wait_for(lambda: "all services up" in docker("logs", name))
             wait_for(ready)
             request(api + "/settings", status=401)
-            request(base + "/__auth/api/setup", "POST", {"code": "settings-smoke-code", "username": "admin", "password": "settings-test-password"})
+            request(base + "/console/__auth/api/setup", "POST", {"code": "settings-smoke-code", "username": "admin", "password": "settings-test-password"})
             initial = request(api + "/settings")
             assert initial["values"]["browser"]["language"] == "auto"
             assert initial["fields"]["browser"]["language"]["options"][0] == "auto"
@@ -223,8 +223,9 @@ def run(backend, cdp=True, stream=True):
                 request(api + "/main/start", "POST", status=403)
                 assert request(api + "/browsers")["enabled"] is False
                 # The browser API is also refused on the internal socket.
-                code = docker("exec", name, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--unix-socket", "/tmp/agentene/cdp-gateway.sock", "http://gateway/json/version")
+                code = docker("exec", name, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--unix-socket", "/tmp/agentene/console.sock", "http://gateway/json/version")
                 assert code == "404"
+                docker("exec", name, "test", "!", "-S", "/tmp/agentene/cdp-gateway.sock")
                 assert "cdp:9222" not in docker("logs", name)
             pending = patch({"desktop": {"resolution": "1280x720"}})
             assert pending["pendingRestart"] == ["desktop.resolution"]
@@ -232,17 +233,17 @@ def run(backend, cdp=True, stream=True):
                 if cdp:
                     for mode in ["off", "keys", "text"]:
                         assert patch({"overlay": {"mode": mode}})["effective"]["overlay"]["mode"] == mode
-                    assert b"cdp-console/overlay.js" in request(web + "/")
+                    assert b"/console/overlay.js" in request(web + "/desk/")
             else:
                 assert initial["fields"]["desktop"]["resolution"]["available"]
                 assert not initial["fields"]["overlay"]["mode"]["available"]
             desired = request(api + "/settings")["values"]
             docker("restart", name)
             ports = json.loads(docker("inspect", name))[0]["NetworkSettings"]["Ports"]
-            web = f"http://127.0.0.1:{ports['80/tcp'][0]['HostPort']}/desk"
+            web = f"http://127.0.0.1:{ports['80/tcp'][0]['HostPort']}"
             browser = f"http://127.0.0.1:{ports['9222/tcp'][0]['HostPort']}"
-            base = web if stream else browser
-            api = base + ("/cdp-console/api" if stream else "/console/api")
+            base = web
+            api = base + "/console/api"
             wait_for(ready)
             restored = request(api + "/settings")
             assert restored["values"] == desired

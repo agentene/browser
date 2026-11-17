@@ -33,7 +33,7 @@ give_to_run_user() {
 }
 
 # sockets_init: SOCKET_DIR (config.sh) afresh — the unix sockets nginx
-# reaches Selkies, the CDP gateway and the auth service on. /tmp survives
+# reaches Selkies, the console, CDP and the auth service on. /tmp survives
 # `docker restart`, and a socket left from an earlier start would make its
 # service fail to bind. The run user's: its services create the sockets.
 sockets_init() {

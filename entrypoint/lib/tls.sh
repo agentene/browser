@@ -49,7 +49,7 @@ tls_log_reuse() {
 tls_prepare() {
     TLS_CERT=""
     TLS_KEY=""
-    if [ "${ENABLE_SELKIES}" != "true" ] || [ "${ENABLE_HTTPS}" != "true" ]; then
+    if [ "${ENABLE_HTTPS}" != "true" ]; then
         return 0
     fi
 

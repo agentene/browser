@@ -140,11 +140,14 @@ services:
 
       # --- Selkies ---
       # Authentication is managed by ENABLE_AUTH and the console.
-      # URL path prefix the web UI is served under, e.g. "/desk" ->
+      # URL path prefix the desktop is served under, e.g. "/desk" ->
       # http://host:port/desk/ (slashes optional; empty = site root). An
       # outer reverse proxy mounting it at a subpath must forward the path
       # UNCHANGED (no prefix stripping). / and /desk redirect to /desk/.
+      # Also forward CONSOLE_SUBFOLDER, including its shared __auth/ routes.
       SELKIES_SUBFOLDER: "${SELKIES_SUBFOLDER:-}"
+      # Console prefix: slashes optional; an explicit empty value means root.
+      CONSOLE_SUBFOLDER: "${CONSOLE_SUBFOLDER-/console}"
       # Extra CLI flags passed to `selkies`
       SELKIES_EXTRA_ARGS: "${SELKIES_EXTRA_ARGS:-}"
       # Browser/desktop preferences are configured in the web Settings page,
@@ -177,7 +180,7 @@ services:
       # Every isolated CDP context (browser.newContext(), playwright-cli
       # "isolated": true) gets its own chromium on a clone of the profile above:
       # inherits its logins, shares nothing back; destroyed when the context
-      # closes. Dashboard: http://host:${CDP_PORT}/console/
+      # closes. Dashboard: http://host:${NGINX_HTTP_PORT}${CONSOLE_SUBFOLDER}/
       # Web page origins that may use the CDP API (comma-separated, * = any),
       # like chromium's --remote-allow-origins; empty = none: any request
       # with an Origin header (a page's WebSocket or fetch) is refused.
@@ -212,25 +215,10 @@ services:
       RUN_USER: "${RUN_USER:-browser}"
 
     healthcheck:
-      # The web UI on container port NGINX_LISTEN_HTTP_PORT counts as healthy
-      # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
-      # or 401 when a login is on (502 = Selkies not up). With
-      # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
-      # probed instead — /json/list, which does not
-      # start a stopped main browser; 401 there means a CDP API key is set
-      # (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
-      # exits and docker restarts the container). $$ = evaluated in the
-      # container at check time, not by compose.
-      test:
-        - CMD-SHELL
-        - >-
-          if [ "$${ENABLE_SELKIES:-true}" = false ]; then
-          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/json/list)" in
-          2??|401) true ;; *) false ;; esac;
-          else
-          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}/)" in
-          2??|3??|401) true ;; *) false ;; esac;
-          fi
+      # Probe the console and every enabled public service without starting
+      # Chromium. A protected endpoint's 401 counts as ready. Container-side
+      # listen ports are independent of Docker's host-side published ports.
+      test: ["CMD", "/usr/local/lib/docker-entrypoint/helpers/healthcheck.sh"]
       interval: 30s
       timeout: 5s
       retries: 3

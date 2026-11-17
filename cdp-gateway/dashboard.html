@@ -284,7 +284,7 @@
     $('.settings-restart').textContent = t('restartContainer');
     $('.settings-restart').title = t('restartHint');
     settingsEditor.render();
-    window.AgenteneAuth?.setLang(lang);
+    window.AgenteneAuthClient?.setLang(lang);
     renderSummary();
     for (const v of views.values()) v.card.remove();
     views.clear();
@@ -419,20 +419,8 @@
     }
   });
 
-  // The built-in login's rows in the settings page (login, CDP API key, log out) and
-  // their dialogs: served by the auth service next to the console
-  // (ENABLE_AUTH=true; without it the script is not there).
-  const authUi = document.createElement('script');
-  authUi.src = new URL('../__auth/ui.js', location.href).href;
-  authUi.onload = () => {
-    window.AgenteneAuth?.setLang(lang);
-    window.AgenteneAuth?.mount({ menu: settingsContent, root: document.body, onError: showError });
-  };
-  document.head.append(authUi);
-  // ...and the session keepalive, so an idle console tab stays signed in
-  const authKeepalive = document.createElement('script');
-  authKeepalive.src = new URL('../__auth/keepalive.js', location.href).href;
-  document.head.append(authKeepalive);
+  // nginx supplies the same authentication client to both console interfaces.
+  window.AgenteneAuthClient?.mount({ menu: settingsContent, root: document.body, onError: showError, language: lang });
 
   function el(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);

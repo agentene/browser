@@ -46,7 +46,7 @@ CI's `verify` job additionally smoke-tests the web UI, the CDP gateway and the W
 | `entrypoint/assets/` | static files the services use (`desktop-background.png`, the desktop background picture) |
 | `compose.yaml` | base compose file |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | opt-in overlays: HTTPS, Intel/AMD GPU, NVIDIA GPU, host networking |
-| `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + `/console/` dashboard |
+| `cdp-gateway/` | CDP gateway (always in front of the CDP port): Node service (`gateway.mjs` entry, modules in `src/`, unit tests in `test/`) + web `/console/` dashboard on a separate Unix socket |
 | `.env.example` | documented deployment configuration template (runtime preferences live in web Settings) |
 | `update-chrome-node.mjs` | version-sync helper (Chrome for Testing ↔ Node) |
 | `VERSION` | the project version `X.Y.Z` (semver, bumped by hand); code releases are git-tagged `v<VERSION>` (e.g. `v0.1.0`), daily Chrome bumps publish image tag `<VERSION>-<chrome-version>` (e.g. `0.1.0-150.0.7871.100`) without a git tag |

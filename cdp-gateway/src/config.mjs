@@ -17,9 +17,10 @@ export function intEnv(name, fallback, source = env) {
   return n;
 }
 
-// The gateway's own unix socket (nginx proxies the CDP port here): no TCP
-// port a page in the browser could open (pipe.mjs)
-export const SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
+// Separate listeners for CDP and web management, in the same process. Neither
+// exposes a TCP port a page in the browser could open (pipe.mjs).
+export const CDP_SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
+export const CONSOLE_SOCKET_PATH = env.CONSOLE_SOCKET || '/tmp/agentene/console.sock';
 export const CONSOLE_ACTIONS = env.CDP_CONSOLE_ACTIONS !== 'false';
 export const CONSOLE_RESTART = env.CDP_CONSOLE_RESTART !== 'false';
 export const SETTINGS_FILE = env.CDP_GATEWAY_SETTINGS_FILE || '/browser/settings/settings.json';
