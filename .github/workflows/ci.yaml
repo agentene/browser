@@ -79,7 +79,7 @@ jobs:
       - name: syntax check (node scripts, entrypoint python helpers)
         run: |
           node --check update-chrome-node.mjs
-          for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js; do node --check "$f"; done
+          for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js cdp-gateway/i18n.js; do node --check "$f"; done
           for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
           python3 -m py_compile entrypoint/helpers/*.py
           python3 -m py_compile .github/tests/*.py
@@ -120,26 +120,26 @@ jobs:
           npm install --prefix "$deps" --ignore-scripts --no-audit --no-fund \
             cli-current@npm:@playwright/cli@0.1.24 cli-previous@npm:@playwright/cli@0.1.23
           trap 'if docker inspect hibernation-smoke >/dev/null 2>&1; then docker logs hibernation-smoke; docker exec hibernation-smoke tail -200 /tmp/cdp-gateway.log || true; docker rm -f hibernation-smoke >/dev/null; fi' EXIT
-          for backend in headless wayland x11; do
-            headless=0
-            # Headed cases need the desktop stack to avoid falling back to headless.
+          for backend in cdp-wayland cdp-x11 wayland x11; do
             selkies=true
-            display_backend="$backend"
-            if [ "$backend" = headless ]; then headless=1; selkies=false; display_backend=wayland; fi
+            display_backend="${backend#cdp-}"
+            if [[ "$backend" = cdp-* ]]; then selkies=false; fi
             # Built-in extension workers generate Playwright setup traffic at
             # arbitrary times, changing LRU order even when test tabs are idle.
+            settings_dir="$(mktemp -d)"
+            printf '%s\n' '{"contexts":{"maxRunning":2,"maxHibernated":2}}' > "$settings_dir/settings.json"
             docker run -d --name hibernation-smoke --shm-size=1g \
-              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" -e CHROMIUM_AUTOSTART=false \
-              -e CHROMIUM_HEADLESS="$headless" -e DISPLAY_BACKEND="$display_backend" \
+              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" \
+              -e DISPLAY_BACKEND="$display_backend" \
               -e CHROMIUM_EXTRA_ARGS=--disable-component-extensions-with-background-pages \
-              -e CDP_CONTEXTS_MAX=2 -e CDP_CONTEXTS_HIBERNATED_MAX=2 \
+              -v "$settings_dir:/browser/settings" \
               -v "$PWD/.github/tests:/tests:ro" -v "$deps/node_modules:/test-deps/node_modules:ro" \
               localhost/ci:${{ env.IMAGE_NAME }}
             for _ in $(seq 1 60); do
               docker exec hibernation-smoke curl -sf http://127.0.0.1:9222/json/list >/dev/null && break
               sleep 1
             done
-            docker logs hibernation-smoke 2>&1 | grep "starting CDP gateway .*headless=$headless," >/dev/null
+            docker logs hibernation-smoke 2>&1 | grep "starting CDP gateway .*desktop=$display_backend," >/dev/null
             for cli in cli-current cli-previous; do
               echo "Context hibernation: backend=$backend cli=$cli"
               docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 \
@@ -148,6 +148,31 @@ jobs:
             done
             docker exec hibernation-smoke sh -c 'test -z "$(ls -A /browser/contexts)"'
             docker rm -f hibernation-smoke >/dev/null
+          done
+
+      - name: Smoke test — native restore with multiple windows and default extensions
+        run: |
+          set -euo pipefail
+          trap 'if docker inspect native-restore-smoke >/dev/null 2>&1; then docker logs native-restore-smoke; docker exec native-restore-smoke tail -200 /tmp/cdp-gateway.log || true; docker rm -f native-restore-smoke >/dev/null; fi' EXIT
+          for backend in cdp-wayland cdp-x11 wayland x11; do
+            selkies=true
+            display_backend="${backend#cdp-}"
+            if [[ "$backend" = cdp-* ]]; then selkies=false; fi
+            # Keep the default extension environment; raw CDP does not emulate
+            # focus, so this can observe each window's actual selected tab.
+            docker run -d --name native-restore-smoke --shm-size=1g \
+              -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" \
+              -e DISPLAY_BACKEND="$display_backend" \
+              -v "$PWD/.github/tests:/tests:ro" localhost/ci:${{ env.IMAGE_NAME }}
+            for _ in $(seq 1 60); do
+              docker exec native-restore-smoke curl -sf http://127.0.0.1:9222/json/list >/dev/null && break
+              sleep 1
+            done
+            docker logs native-restore-smoke 2>&1 | grep "starting CDP gateway .*desktop=$display_backend," >/dev/null
+            echo "Native multi-window restore: backend=$backend (default extensions)"
+            docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 native-restore-smoke node /tests/context-native-restore.mjs
+            docker exec native-restore-smoke sh -c 'test -z "$(ls -A /browser/contexts)"'
+            docker rm -f native-restore-smoke >/dev/null
           done
 
       - name: Smoke test — chromium CDP endpoint
@@ -559,6 +584,12 @@ jobs:
           if docker logs restart-smoke 2>&1 | grep -F '[entrypoint] ERROR'; then exit 1; fi
           echo "RUN_USER restart smoke test OK"
 
+      - name: Smoke test — persisted web settings and service modes
+        run: python3 .github/tests/settings.py localhost/ci:${{ env.IMAGE_NAME }}
+
+      - name: Smoke test — console restarts the whole container
+        run: python3 .github/tests/console-restart.py localhost/ci:${{ env.IMAGE_NAME }}
+
       - name: Smoke test — RUN_USER default (browser) and RUN_USER=0 (root)
         run: |
           set -euo pipefail
@@ -575,6 +606,7 @@ jobs:
               sleep 1
             done
             curl -sf http://127.0.0.1:$port/json/version | jq -e '.Browser' >/dev/null
+            curl -sf -X PUT "http://127.0.0.1:$port/json/new?about:blank" | jq -e '.id' >/dev/null
           done
           # the main browser's owner: unset RUN_USER = browser, 0 = root
           owner() { docker exec "$1" sh -c 'ps -o user= -p "$(pgrep -o -f -- "--user-data-dir=/browser/user-data")"'; }
@@ -620,13 +652,13 @@ jobs:
           console.log('chromium sandbox smoke test OK');
           EOF
 
-      - name: Smoke test — main browser on demand (CHROMIUM_AUTOSTART=false)
+      - name: Smoke test — main browser on demand
         run: |
           set -euo pipefail
           # CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close stands in for
           # the browser closing itself (its last window)
           docker run -d --name ondemand-smoke -p 9226:9222 \
-            -e CHROMIUM_AUTOSTART=false -e CHROMIUM_IDLE_TIMEOUT=1 -e AUTH_SETUP_CODE=ci-setup-code \
+            -e AUTH_SETUP_CODE=ci-setup-code \
             -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec ondemand-smoke cat /tmp/cdp-gateway.log || true; docker logs ondemand-smoke || true; docker rm -f ondemand-smoke >/dev/null' EXIT
@@ -710,33 +742,34 @@ jobs:
           }
           ws.close();
           EOF
-          # CHROMIUM_IDLE_TIMEOUT=1: no client, no context, no viewer -> closed
-          # again within about a minute
+          # The main browser remains running until explicitly stopped.
           [ "$(state)" = running ]
-          for i in $(seq 1 100); do [ "$(state)" = stopped ] && break; sleep 1; done
+          curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:9226/console/api/main/stop | jq -e '.state == "stopped"' >/dev/null
           [ "$(state)" = stopped ]
-          docker exec ondemand-smoke grep -q 'idle for 1 min' /tmp/cdp-gateway.log
+          up
           echo "on-demand main browser smoke test OK"
 
-      - name: Smoke test — main browser closed with CHROMIUM_AUTOSTART=true
+      - name: Smoke test — main browser close and subsequent CDP startup
         run: |
           set -euo pipefail
-          docker run -d --name autostart-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
+          docker run -d --name close-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
             -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
-          trap 'docker exec autostart-smoke cat /tmp/cdp-gateway.log || true; docker logs autostart-smoke || true; docker rm -f autostart-smoke >/dev/null' EXIT
-          nchrome() { docker exec autostart-smoke sh -c 'pgrep -c -x chrome || true'; }
-          up() { [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' autostart-smoke)" = "true 0" ]; }
-          # started with the container, by the gateway (before any client asks)
+          trap 'docker exec close-smoke cat /tmp/cdp-gateway.log || true; docker logs close-smoke || true; docker rm -f close-smoke >/dev/null' EXIT
+          nchrome() { docker exec close-smoke sh -c 'pgrep -c -x chrome || true'; }
+          up() { [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' close-smoke)" = "true 0" ]; }
+          # Listings and version discovery leave it stopped; using CDP starts it.
           for i in $(seq 1 60); do
-            [ "$(nchrome)" != 0 ] && break
+            curl -sf http://127.0.0.1:9227/json/version >/dev/null && break
             sleep 1
           done
+          [ "$(nchrome)" = 0 ]
+          curl -sf -X PUT 'http://127.0.0.1:9227/json/new?about:blank' | jq -e '.id' >/dev/null
           [ "$(nchrome)" != 0 ]
           # the browser closing itself (a client's Browser.close, allowed through
           # with CDP_ALLOW_BROWSER_CLOSE=true) leaves the container (and the
           # gateway) running
-          docker exec -i autostart-smoke node --input-type=module - <<'EOF'
+          docker exec -i close-smoke node --input-type=module - <<'EOF'
           const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
           const ws = new WebSocket(v.webSocketDebuggerUrl);
           await new Promise((r) => { ws.onopen = r; });
@@ -755,7 +788,7 @@ jobs:
           curl -sf -X PUT 'http://127.0.0.1:9227/json/new?about:blank' | jq -e '.id' >/dev/null
           [ "$(nchrome)" != 0 ]
           up
-          echo "autostart main browser smoke test OK"
+          echo "main browser close smoke test OK"
 
       - name: Smoke test — Wayland desktop (the default DISPLAY_BACKEND)
         run: |
@@ -770,10 +803,15 @@ jobs:
           done
           curl -sf http://127.0.0.1:9224/json/version | jq -e '.Browser' >/dev/null
           curl -s http://127.0.0.1:8081/ | grep -ci '<html' >/dev/null
-          # the headed main browser must be a window of labwc (no X server)
-          docker exec wayland-smoke sh -c \
-            'XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY="$(cat /tmp/labwc-display)" wlrctl toplevel list' \
-            | grep -q '^cdp-main:'
+          curl -sf -X PUT 'http://127.0.0.1:9224/json/new?about:blank' | jq -e '.id' >/dev/null
+          # the main browser must be a window of labwc (no X server)
+          main_window() {
+            docker exec wayland-smoke sh -c \
+              'XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY="$(cat /tmp/labwc-display)" wlrctl toplevel list' \
+              | grep -q '^cdp-main:'
+          }
+          for _ in $(seq 1 50); do main_window && break; sleep 0.1; done
+          main_window
           docker exec wayland-smoke sh -c '! pgrep -x Xvfb'
           echo "Wayland smoke test OK"
 
@@ -790,7 +828,8 @@ jobs:
           done
           curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser' >/dev/null
           curl -s http://127.0.0.1:8083/ | grep -ci '<html' >/dev/null
-          # the headed main browser must run on Xvfb (no labwc)
+          curl -sf -X PUT 'http://127.0.0.1:9227/json/new?about:blank' | jq -e '.id' >/dev/null
+          # the main browser must run on Xvfb (no labwc)
           docker exec x11-smoke pgrep -x Xvfb >/dev/null
           docker exec x11-smoke sh -c '! pgrep -x labwc'
           echo "X11 smoke test OK"

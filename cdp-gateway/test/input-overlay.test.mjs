@@ -8,7 +8,8 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 
-process.env.CDP_INPUT_OVERLAY = 'text';
+process.env.CDP_GATEWAY_DESKTOP_ENABLED = 'true';
+process.env.CDP_GATEWAY_STREAM_ENABLED = 'true';
 process.env.DISPLAY_BACKEND = 'wayland';
 
 const {
@@ -308,4 +309,42 @@ test('a console sees which tab each client works in, without the overlay\'s ques
   pipe.close();
   mainBrowser.state = 'stopped';
   mainBrowser.pipe = null;
+});
+
+test('live overlay modes stop observation and clear queued text on existing connections', async () => {
+  const { applyRuntimeSettings, STARTUP_SETTINGS } = await import('../src/config.mjs');
+  const { resetOverlayMode } = await import('../src/input-overlay.mjs');
+  const values = structuredClone(STARTUP_SETTINGS);
+  const mode = (value) => { values.overlay.mode = value; applyRuntimeSettings(values); resetOverlayMode(); };
+  const { pipe } = fakeChromium({ vis: 'visible', sensitive: false });
+  mainBrowser.state = 'running'; mainBrowser.pipe = pipe;
+  const conn = await pipe.connect();
+  const sessionId = await pageSession(conn, 'live-modes');
+  const viewer = fakeViewer();
+  watchInput();
+  subscribeOverlay(viewer);
+  try {
+    conn.send({ id: 2, sessionId, method: 'Input.insertText', params: { text: 'queued private text' } });
+    mode('off');
+    assert.equal(pipe.listenerCount('input'), 0);
+    const offIndex = viewer.sent.length;
+    await sleep(150);
+    assert.deepEqual(viewer.sent.slice(offIndex).flatMap((m) => m.ops ?? []).filter((m) => m.t === 'text'), []);
+    assert.deepEqual(workingTabs(), []);
+    mode('keys');
+    assert.equal(pipe.listenerCount('input'), 1, 'existing subscribers resume without reconnecting');
+    viewer.sent.length = 0;
+    conn.send({ id: 3, sessionId, method: 'Input.insertText', params: { text: 'hello' } });
+    await sleep(150);
+    assert.deepEqual(viewer.ops().filter((op) => op.t === 'text').map(({ n, s }) => ({ n, s })), [{ n: 5, s: undefined }]);
+    mode('text');
+    viewer.sent.length = 0;
+    conn.send({ id: 4, sessionId, method: 'Input.insertText', params: { text: 'world' } });
+    await sleep(150);
+    assert.deepEqual(viewer.ops().filter((op) => op.t === 'text').map((op) => op.s), ['world']);
+  } finally {
+    viewer.close(); unwatchInput(); conn.close(); pipe.close();
+    mainBrowser.state = 'stopped'; mainBrowser.pipe = null;
+    mode('text');
+  }
 });

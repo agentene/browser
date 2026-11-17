@@ -1,54 +1,24 @@
-// The console's server-side settings (its settings menu; the language is
-// per viewer and stays in the browser). Saved as a JSON object by section in
-// SETTINGS_FILE on the /browser mount, so they outlive the container:
-//   { "desktop": { "raiseNewWindows": true } }
-// No environment knobs: the console is their one place. The entrypoint
-// applies the ones the desktop needs before the gateway runs
-// (entrypoint/lib/settings.sh); here a change is applied first, then saved.
-// A new setting is one SCHEMA entry, plus its row in the console pages.
-
-import fs from 'node:fs';
-import path from 'node:path';
+// Persisted configuration, optimistic concurrency, and explicit apply results.
+// Startup uses the same schema; no migrated preference reads an environment value.
+import { randomUUID, createHash } from 'node:crypto';
 import { notifyChange } from './changes.mjs';
-import { RAISE_SWITCH, SETTINGS_FILE } from './config.mjs';
+import {
+  BROWSER_ENABLED, DESKTOP_ENABLED, STREAM_ENABLED, OVERLAY_AVAILABLE,
+  SETTINGS_FILE, STARTUP_SAVED, STARTUP_SETTINGS, applyRuntimeSettings,
+} from './config.mjs';
 import { applyRaiseNewWindows } from './desktop.mjs';
+import { writeSettings } from './settings-file.mjs';
+import { SCHEMA, isObject, resolve } from './settings-schema.mjs';
 import { HttpError } from './respond.mjs';
 import { log } from './util.mjs';
+export { SCHEMA, resolve };
 
-// section -> key -> {
-//   default    the value until one is saved
-//   valid(v)   whether v is a value it takes
-//   available  whether it is offered at all here (e.g. needs a desktop)
-//   apply(v)   make it take effect (may throw: nothing is saved then)
-// }
-export const SCHEMA = {
-  desktop: {
-    raiseNewWindows: {
-      default: true,
-      valid: (v) => typeof v === 'boolean',
-      available: () => !!RAISE_SWITCH,
-      apply: applyRaiseNewWindows,
-    },
-  },
+const capabilities = {
+  console: true,
+  browser: BROWSER_ENABLED, desktop: DESKTOP_ENABLED, stream: STREAM_ENABLED, overlay: OVERLAY_AVAILABLE,
+  gpuDevice: process.env.CDP_GATEWAY_GPU_DEVICE || '',
 };
-
-const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
-
-// Every setting's value: the saved one where it is valid, else its default.
-export function resolve(schema, saved) {
-  const values = {};
-  for (const [section, keys] of Object.entries(schema)) {
-    values[section] = {};
-    for (const [key, s] of Object.entries(keys)) {
-      const v = isObject(saved[section]) ? saved[section][key] : undefined;
-      values[section][key] = v !== undefined && s.valid(v) ? v : s.default;
-    }
-  }
-  return values;
-}
-
-// A PATCH body ({section: {key: value}}, any subset) as [section, key, value]
-// changes; throws an HttpError for anything the schema does not take.
+const available = (field) => field.available ? field.available() : !!capabilities[field.scope];
 export function parsePatch(schema, patch) {
   if (!isObject(patch)) throw new HttpError(400, 'expected a JSON object of settings by section');
   const changes = [];
@@ -56,84 +26,110 @@ export function parsePatch(schema, patch) {
     if (!Object.hasOwn(schema, section)) throw new HttpError(400, `unknown settings section "${section}"`);
     if (!isObject(keys)) throw new HttpError(400, `settings section "${section}" must be an object`);
     for (const [key, value] of Object.entries(keys)) {
-      const s = Object.hasOwn(schema[section], key) ? schema[section][key] : null;
-      if (!s) throw new HttpError(400, `unknown setting "${section}.${key}"`);
-      if (!s.valid(value)) throw new HttpError(400, `invalid value for "${section}.${key}": ${JSON.stringify(value)}`);
-      if (!s.available()) throw new HttpError(409, `"${section}.${key}" is not available here`);
+      const field = Object.hasOwn(schema[section], key) ? schema[section][key] : null;
+      if (!field) throw new HttpError(400, `unknown setting "${section}.${key}"`);
+      if (!field.valid(value)) throw new HttpError(400, `invalid value for "${section}.${key}"`);
+      if (!available(field)) throw new HttpError(409, `"${section}.${key}" is not available here`);
       changes.push([section, key, value]);
     }
   }
   return changes;
 }
 
-// The file as read; entries this version does not know are kept on save.
-let saved = readSaved();
-const values = resolve(SCHEMA, saved);
+let saved = STARTUP_SAVED;
+let values = structuredClone(STARTUP_SETTINGS);
+const effective = structuredClone(STARTUP_SETTINGS);
+const errors = {};
+const boot = randomUUID();
+let generation = 0;
+const revision = () => `${boot}:${generation}`;
+let queue = Promise.resolve();
+let closing = false;
 
-function readSaved() {
-  try {
-    const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-    if (isObject(data)) return data;
-    log(`settings: ${SETTINGS_FILE} is not a JSON object; using the defaults`);
-  } catch (err) {
-    if (err.code !== 'ENOENT') log(`settings: ${SETTINGS_FILE}: ${err.message}; using the defaults`);
-  }
-  return {};
-}
-
-// Write a temp file and rename it over, so a crash never leaves half a file.
-function save() {
-  const tmp = path.join(path.dirname(SETTINGS_FILE), `.${path.basename(SETTINGS_FILE)}.tmp`);
-  fs.writeFileSync(tmp, `${JSON.stringify(saved, null, 2)}\n`);
-  fs.renameSync(tmp, SETTINGS_FILE);
-}
-
-// What the console shows: the values of the settings on offer here.
 export function settingsView() {
-  const view = {};
+  const fields = {};
+  const pendingRestart = [];
   for (const [section, keys] of Object.entries(SCHEMA)) {
-    for (const [key, s] of Object.entries(keys)) {
-      if (s.available()) (view[section] ??= {})[key] = values[section][key];
+    fields[section] = {};
+    for (const [key, field] of Object.entries(keys)) {
+      const { valid: _valid, ...metadata } = field;
+      fields[section][key] = { ...metadata, available: available(field) };
+      if (field.apply === 'restart' && values[section][key] !== effective[section][key] && available(field)) pendingRestart.push(`${section}.${key}`);
     }
   }
-  return view;
+  return { values: structuredClone(values), effective: structuredClone(effective), revision: revision(), pendingRestart, errors: { ...errors }, capabilities, fields };
 }
 
-// Apply and save a PATCH body; one at a time. Resolves with settingsView().
-let queue = Promise.resolve();
-export function updateSettings(patch) {
-  const run = queue.then(() => update(patch));
+export function closeSettings() {
+  closing = true;
+  return queue;
+}
+
+export function updateSettings(body) {
+  if (closing) return Promise.reject(new HttpError(503, 'container is restarting'));
+  const run = queue.then(async () => {
+    const { contexts } = await import('./contexts.mjs');
+    // Share the capacity lock with create/hibernate/wake; confirmation cannot
+    // silently start deleting a different set while another request runs.
+    return contexts.serialize(() => update(body, contexts));
+  });
   queue = run.catch(() => {});
   return run;
 }
 
-async function update(patch) {
-  const changes = parsePatch(SCHEMA, patch).filter(([section, key, value]) => values[section][key] !== value);
+async function update(body, contexts) {
+  if (!isObject(body) || body.revision !== revision()) {
+    const err = new HttpError(409, 'settings changed; review the current values before saving');
+    err.details = { code: 'settings_conflict', settings: settingsView() };
+    throw err;
+  }
+  const changes = parsePatch(SCHEMA, body.patch).filter(([s, k, v]) => values[s][k] !== v || errors[`${s}.${k}`]);
   if (!changes.length) return settingsView();
-  // the changes applied before one fails stay applied, so they are saved
-  // (and shown) all the same; the failure is reported after that
-  let applied = 0;
-  let failure = null;
-  for (const [section, key, value] of changes) {
-    try {
-      await SCHEMA[section][key].apply(value);
-    } catch (err) {
-      failure = err;
-      break;
-    }
-    values[section][key] = value;
-    saved = { ...saved, [section]: { ...(isObject(saved[section]) ? saved[section] : {}), [key]: value } };
-    log(`settings: ${section}.${key} = ${JSON.stringify(value)}`);
-    applied++;
+  const next = structuredClone(values);
+  const nextSaved = structuredClone(saved);
+  for (const [s, k, v] of changes) {
+    next[s][k] = v;
+    if (!isObject(nextSaved[s])) nextSaved[s] = {};
+    nextSaved[s][k] = v;
   }
-  if (applied) {
-    notifyChange();
-    try {
-      save();
-    } catch (err) {
-      throw new HttpError(500, `applied, but not saved to ${SETTINGS_FILE}: ${err.message}`);
+  const lowering = next.contexts.maxHibernated < effective.contexts.maxHibernated || !!errors['contexts.maxHibernated'];
+  const sleepers = contexts.values().filter((c) => c.state === 'hibernated' && !c.destroyed)
+    .sort((a, b) => a.hibernatedAt.localeCompare(b.hibernatedAt));
+  const victims = lowering ? sleepers.slice(0, Math.max(0, sleepers.length - next.contexts.maxHibernated)) : [];
+  if (victims.length) {
+    const confirmation = createHash('sha256').update(JSON.stringify([revision(), next, victims.map((c) => [c.name, c.createdAt])])).digest('hex');
+    if (body.confirmation !== confirmation) {
+      const err = new HttpError(409, 'confirm removal of the oldest hibernated browsers');
+      err.details = { code: 'confirm_evictions', confirmation, evictions: victims.map((c) => ({ name: c.name, tabs: c.snapshot?.tabs?.length ?? 0 })) };
+      throw err;
     }
   }
-  if (failure) throw failure;
+  // A failed write changes neither the policy nor the desktop, and evicts nothing.
+  try { writeSettings(SETTINGS_FILE, nextSaved); }
+  catch (err) { throw new HttpError(500, `settings were not saved: ${err.message}`); }
+  saved = nextSaved;
+  values = next;
+  generation++;
+  const overlayChanged = changes.some(([s]) => s === 'overlay');
+  for (const [s, k, v] of changes) {
+    const name = `${s}.${k}`;
+    delete errors[name];
+    if (SCHEMA[s][k].apply === 'restart') continue;
+    try {
+      if (name === 'desktop.raiseNewWindows') await applyRaiseNewWindows(v);
+      effective[s][k] = v;
+    } catch (err) { errors[name] = err.message; }
+  }
+  applyRuntimeSettings(effective);
+  if (overlayChanged) {
+    const { resetOverlayMode } = await import('./input-overlay.mjs');
+    resetOverlayMode();
+  }
+  if (victims.length) {
+    try { await contexts.trim(); }
+    catch (err) { errors['contexts.maxHibernated'] = err.message; }
+  }
+  log(`settings saved: ${changes.map(([s, k]) => `${s}.${k}`).join(', ')}`);
+  notifyChange();
   return settingsView();
 }

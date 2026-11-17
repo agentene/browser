@@ -3,7 +3,7 @@
 #
 # What the Selkies stream shows where no browser window covers the screen
 # (every window is maximized, so in practice: once the browsers are closed,
-# or before the first one starts with CHROMIUM_AUTOSTART=false). The image
+# or before the first browser starts on demand). The image
 # ships with the image (entrypoint/assets/desktop-background.png) and is not
 # a knob: it is drawn at its own size, centered on a neutral gray (#9aa0a6, easy
 # on the eyes; its transparent parts show the gray too — the X11 helper

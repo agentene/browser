@@ -2,7 +2,7 @@
 # chromium.sh — the Chrome for Testing browser, driven by the CDP gateway.
 #
 # The flags are assembled in three parts — CHROMIUM_COMMON_FLAGS, the
-# headless/headed mode part (chromium_mode_flags) and CHROMIUM_TAIL_FLAGS —
+# display backend part (chromium_mode_flags) and CHROMIUM_TAIL_FLAGS —
 # so the CDP gateway (cdp-gateway.sh) launches its per-context browsers
 # with the exact same policy. New chromium flags belong in one of those.
 # Everything the entrypoint adds goes BEFORE CHROMIUM_EXTRA_ARGS, so user
@@ -10,7 +10,7 @@
 #
 # The main browser is not started here: its command line goes to
 # CHROMIUM_MAIN_FLAGS_FILE and the CDP gateway starts it as its own child —
-# right away with CHROMIUM_AUTOSTART=true, on demand with false. The gateway
+# on demand. The gateway
 # is the supervised service, so the browser closing or crashing never stops
 # the container; the next CDP client or the console starts it again. The
 # browsers open no DevTools port: the gateway adds --remote-debugging-pipe
@@ -29,7 +29,6 @@ chromium_start() {
     [ -x "${CHROME_BIN}" ] || die "chrome binary not found: ${CHROME_BIN}"
 
     chromium_resolve_gpu
-    chromium_resolve_headless
     chromium_resolve_sandbox
     chromium_write_policy
     chromium_build_flags
@@ -43,23 +42,12 @@ chromium_start() {
 # In "hw" mode chromium renders via Vulkan/ANGLE (see chromium_build_flags),
 # which needs no GL visuals from the software Xvfb display. Sets GPU_HW.
 chromium_resolve_gpu() {
-    if [ "${CHROMIUM_GPU}" = "auto" ]; then
-        if [ -n "${GPU_RENDER_NODE}" ]; then
-            CHROMIUM_GPU=hw
-        else
-            CHROMIUM_GPU=sw
-        fi
-    fi
-    # Render on the device when one is present, except in "off" mode ("off"
-    # forces the software path even with a GPU attached). "strict" keeps its
-    # name — the SwiftShader decision needs to tell it apart — but still uses
-    # a present device.
-    if [ -n "${GPU_RENDER_NODE}" ] && [ "${CHROMIUM_GPU}" != "off" ]; then
+    if [ -n "${GPU_RENDER_NODE}" ]; then
         GPU_HW=true
     else
         GPU_HW=false
     fi
-    log "chromium: GPU mode=${CHROMIUM_GPU}${GPU_RENDER_NODE:+ (${GPU_RENDER_NODE})}"
+    log "chromium: automatic rendering, hardware=${GPU_HW}${GPU_RENDER_NODE:+ (${GPU_RENDER_NODE})}"
 }
 
 # --- sandbox (CHROMIUM_SANDBOX) -------------------------------------------------
@@ -146,34 +134,10 @@ chromium_write_policy() {
         || die "cannot write the chromium policy ${policy} (read-only root filesystem?); set CHROMIUM_ALLOW_FILE_URLS=true and CDP_FILE_DIRS=* to run without it"
 }
 
-# desktop_ready: true when the display a headed browser needs exists.
-desktop_ready() {
-    if [ "${DISPLAY_BACKEND}" = "wayland" ]; then
-        [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ]
-    else
-        [ -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]
-    fi
-}
-
-# Headed is the default so the browser window is visible in the Selkies
-# stream; but a headed browser needs the desktop of display-*.sh; without it
-# (ENABLE_SELKIES=false and no external display) fall back to headless.
-chromium_resolve_headless() {
-    if [ "${CHROMIUM_HEADLESS}" = "0" ] && [ "${ENABLE_SELKIES}" != "true" ] && ! desktop_ready; then
-        log "WARNING: no ${DISPLAY_BACKEND} display for a headed chromium -> falling back to headless"
-        CHROMIUM_HEADLESS=1
-    fi
-}
-
-# chromium_mode_flags <headless 0|1>: the mode-specific part, into MODE_FLAGS
+# Display-specific flags, shared by the main and isolated browsers.
 chromium_mode_flags() {
     MODE_FLAGS=()
-    if [ "$1" = "1" ]; then
-        # --disable-gpu only without a usable device: new headless renders
-        # on the GPU when one is passed in (see gpu.sh).
-        MODE_FLAGS+=(--headless)
-        [ "${GPU_HW}" = "true" ] || MODE_FLAGS+=(--disable-gpu)
-    elif [ "${DISPLAY_BACKEND}" = "wayland" ]; then
+    if [ "${DISPLAY_BACKEND}" = "wayland" ]; then
         # Headed in labwc, which maximizes every browser window itself (see
         # its rc.xml in display-wayland.sh), so no geometry is pinned here.
         MODE_FLAGS+=(--ozone-platform=wayland --start-maximized --no-first-run)
@@ -242,12 +206,8 @@ chromium_build_flags() {
     fi
     # Software WebGL fallback: Chrome 137+ gates SwiftShader behind
     # --enable-unsafe-swiftshader; without the switch WebGL is unavailable.
-    # Allowed in every mode except "strict" — the browser must never report
-    # a SwiftShader renderer there — so WebGL works without a GPU (auto/off)
-    # and survives a device that errors out mid-run (auto with hardware).
-    if [ "${CHROMIUM_GPU}" != "strict" ]; then
-        CHROMIUM_TAIL_FLAGS+=(--enable-unsafe-swiftshader)
-    fi
+    # Keep WebGL available without hardware or after a device failure.
+    CHROMIUM_TAIL_FLAGS+=(--enable-unsafe-swiftshader)
     # Keep plain http:// pages as they are (typical for CDP automation
     # against internal or intercepted sites): no HTTPS-First / HTTPS-Upgrade.
     # Appended before CHROMIUM_EXTRA_ARGS so a --disable-features passed
@@ -257,16 +217,21 @@ chromium_build_flags() {
     if [ -n "${CHROMIUM_EXTRA_ARGS:-}" ]; then
         # split the flag string into words — same semantics as an unquoted
         # expansion, but robust for the array append
-        local extra_flags
+        local extra_flags flag
         read -r -a extra_flags <<< "${CHROMIUM_EXTRA_ARGS}"
+        for flag in "${extra_flags[@]}"; do
+            case "${flag}" in
+                --headless|--headless=*) die "headless browsers are no longer supported; remove ${flag} from CHROMIUM_EXTRA_ARGS" ;;
+            esac
+        done
         CHROMIUM_TAIL_FLAGS+=("${extra_flags[@]}")
     fi
 
-    chromium_mode_flags "${CHROMIUM_HEADLESS}"
+    chromium_mode_flags
     # The Wayland app_id the CDP console raises the main window by (the
     # gateway gives each context browser its own, cdp-<context>).
     local main_window_flags=()
-    if [ "${DISPLAY_BACKEND}" = "wayland" ] && [ "${CHROMIUM_HEADLESS}" = "0" ]; then
+    if [ "${DISPLAY_BACKEND}" = "wayland" ]; then
         main_window_flags=(--class=cdp-main)
     fi
     CHROMIUM_FLAGS=("${CHROMIUM_COMMON_FLAGS[@]}"
@@ -338,7 +303,7 @@ chromium_device_interposers() {
 # checks for a window manager once. Once started it is supervised like
 # every service. X11 only: labwc does both on the Wayland desktop.
 chromium_start_follower() {
-    if [ "${CHROMIUM_HEADLESS}" != "0" ] || [ "${DISPLAY_BACKEND}" != "x11" ]; then
+    if [ "${DISPLAY_BACKEND}" != "x11" ]; then
         return 0
     fi
     log "starting chromium screen follower on display ${DISPLAY}"
@@ -368,12 +333,8 @@ chromium_launch() {
     CHROMIUM_MAIN_FLAGS_FILE=/tmp/cdp-gateway-main-flags
     # NUL-separated, read by the gateway; the log file is pre-created for
     # the (possibly dropped) gateway, which appends a run per start
-    printf '%s\0' "${CHROMIUM_FLAGS[@]}" "${CHROMIUM_START_URL}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
+    printf '%s\0' "${CHROMIUM_FLAGS[@]}" >"${CHROMIUM_MAIN_FLAGS_FILE}"
     : >/tmp/chromium.log
     give_to_run_user /tmp/chromium.log
-    if [ "${CHROMIUM_AUTOSTART}" = "false" ]; then
-        log "chromium: on demand (CHROMIUM_AUTOSTART=false) — the CDP gateway starts it when a CDP client uses the default context or from the console"
-    else
-        log "chromium: started by the CDP gateway (headless=${CHROMIUM_HEADLESS}), CDP on its pipe to the gateway"
-    fi
+    log "chromium: on demand — the CDP gateway starts it when a CDP client uses the default context or from the console"
 }

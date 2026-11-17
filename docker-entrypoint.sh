@@ -13,11 +13,10 @@
 #   3. Selkies         HTML5 remote desktop on the unix socket
 #                       /tmp/agentene/selkies.sock
 #   4. Chromium        Chrome for Testing, launched by the CDP gateway as its
-#                       own child (at start, or on demand with
-#                       CHROMIUM_AUTOSTART=false); it speaks CDP on a pipe to
+#                       own child on demand; it speaks CDP on a pipe to
 #                       the gateway only, no DevTools port
 #      CDP gateway     the gateway in front of it (always on with the CDP
-#                       endpoint, on /tmp/agentene/cdp-gateway.sock); the
+#                       endpoint, settings-only without it, on its unix socket); the
 #                       supervised service — the browser may exit and be
 #                       started again without the container
 #      auth service    the built-in login + CDP API key nginx checks every
@@ -108,20 +107,21 @@ main() {
     supervisor_init
     gpu_detect
 
+    # Browsers always have a desktop, including the CDP-only service mode.
+    case "${DISPLAY_BACKEND}" in
+        x11) display_x11_start ;;
+        wayland) display_wayland_start ;;
+    esac
+    desktop_background_start
     if [ "${ENABLE_SELKIES}" = "true" ]; then
-        case "${DISPLAY_BACKEND}" in
-            x11) display_x11_start ;;
-            wayland) display_wayland_start ;;
-        esac
-        desktop_background_start
         audio_start
         selkies_start
     fi
 
     if [ "${ENABLE_CDP}" = "true" ]; then
         chromium_start
-        cdp_gateway_start
     fi
+    cdp_gateway_start
 
     if [ "${ENABLE_AUTH}" = "true" ]; then
         auth_start

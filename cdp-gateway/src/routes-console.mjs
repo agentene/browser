@@ -10,27 +10,31 @@
 //                                           CDP connection that owns it)
 //   GET    /console/api/settings            the server-side settings (settings.mjs)
 //   PATCH  /console/api/settings            change some: {section: {key: value}}
+//   GET/POST /console/api/restart             capability / restart the container
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { notifyChange } from './changes.mjs';
 import { pipeOf } from './browsers.mjs';
-import { CONSOLE_ACTIONS, ROOT } from './config.mjs';
+import { BROWSER_ENABLED, CONSOLE_ACTIONS, CONSOLE_RESTART, ROOT } from './config.mjs';
 import { consoleDenied } from './console-auth.mjs';
 import { contexts } from './contexts.mjs';
 import { focus } from './desktop.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { HttpError, readJson, send } from './respond.mjs';
-import { settingsView, updateSettings } from './settings.mjs';
+import { closeSettings, settingsView, updateSettings } from './settings.mjs';
+import { requestLanguage } from './language.mjs';
 
 const FILES = {
+  '/console/i18n.js': ['i18n.js', 'text/javascript; charset=UTF-8'],
+  '/console/settings-ui.js': ['settings-ui.js', 'text/javascript; charset=UTF-8'],
   '/console/': ['dashboard.html', 'text/html; charset=UTF-8'],
   '/console/panel.js': ['panel.js', 'text/javascript; charset=UTF-8'],
   '/console/overlay.js': ['overlay.js', 'text/javascript; charset=UTF-8'],
 };
 
 // Answers the request and returns true if it is one of these routes.
-export async function consoleRoute(req, res, url) {
+export async function consoleRoute(req, res, url, restart) {
   const p = url.pathname;
   if (p === '/console') {
     res.writeHead(302, { Location: '/console/' });
@@ -48,18 +52,35 @@ export async function consoleRoute(req, res, url) {
     send(res, 200, await fs.readFile(path.join(ROOT, file)), type);
     return true;
   }
+  if (p === '/console/api/restart') {
+    if (req.method === 'GET') send(res, 200, { enabled: CONSOLE_RESTART });
+    else if (req.method !== 'POST') send(res, 405, { error: 'GET or POST' });
+    else if (!CONSOLE_RESTART) send(res, 403, { error: 'console container restart is disabled' });
+    else if (!restart) send(res, 503, { error: 'container restart is unavailable' });
+    else {
+      // Finish the response before shutdown closes the public connection.
+      res.once('finish', () => closeSettings().then(restart));
+      send(res, 202, { ok: true });
+    }
+    return true;
+  }
   if (p === '/console/api/settings') {
     if (req.method === 'GET') {
-      send(res, 200, settingsView());
+      send(res, 200, { ...settingsView(), autoLanguage: requestLanguage() });
     } else if (req.method === 'PATCH') {
       try {
-        send(res, 200, await updateSettings(await readJson(req)));
+        send(res, 200, { ...await updateSettings(await readJson(req)), autoLanguage: requestLanguage() });
       } catch (err) {
-        send(res, err.status ?? 500, { error: err.message });
+        send(res, err.status ?? 500, { error: err.message, ...err.details });
       }
     } else {
       send(res, 405, { error: 'GET or PATCH' });
     }
+    return true;
+  }
+  if (!BROWSER_ENABLED && p.startsWith('/console/api/')) {
+    if (p === '/console/api/browsers' && req.method === 'GET') send(res, 200, { enabled: false });
+    else send(res, 403, { error: 'browser service is disabled' });
     return true;
   }
   if (p === '/console/api/browsers') {

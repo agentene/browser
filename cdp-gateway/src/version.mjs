@@ -6,11 +6,11 @@
 // them run the same binary with the same flags — or, before any did, the one
 // captured from the binary at image build (VERSION_FILE, chromium's own
 // /json/version). That one ran headless, so its user agent says
-// HeadlessChrome; the browsers here run headed unless CDP_CONTEXTS_HEADLESS
+// HeadlessChrome; the runtime browsers always run headed
 // (Playwright tells headed from headless by that very string).
 
 import { readFileSync } from 'node:fs';
-import { CONTEXTS_HEADLESS, VERSION_FILE } from './config.mjs';
+import { VERSION_FILE } from './config.mjs';
 
 let last = null;
 
@@ -19,9 +19,9 @@ export function rememberVersion(version) {
 }
 
 // /json/version's fields as Browser.getVersion's, or null.
-export function fromJsonVersion(json, headless = CONTEXTS_HEADLESS) {
+export function fromJsonVersion(json) {
   if (!json?.Browser || !json['User-Agent']) return null;
-  const headed = (s) => (headless ? s : s.replace('HeadlessChrome', 'Chrome'));
+  const headed = (s) => s.replace('HeadlessChrome', 'Chrome');
   return {
     protocolVersion: json['Protocol-Version'],
     product: headed(json.Browser),

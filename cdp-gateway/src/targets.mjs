@@ -53,8 +53,8 @@ export const NO_TABS = { tabs: [], current: null };
 // in front of the focused window), 1 = visible (in front of its window), 0 =
 // hidden, null = no answer.
 //   memo: what the last call saw, per browser ({ candidates, current }):
-//         headless, every window's tab in front is "focused", so of several
-//         the one that just became so is the current one.
+//         focus emulation can make several tabs "focused" at once;
+//         prefer the one that just became so.
 export function pickCurrent(memo, levels) {
   const top = Math.max(0, ...levels.map(([, level]) => level ?? 0));
   const best = top ? levels.filter(([, level]) => level === top).map(([id]) => id) : [];
@@ -167,7 +167,7 @@ export function titleRanks(pages, windowTitles) {
 // Playwright's focus emulation leaves every tab it drives visible and
 // focused. What the tabs say (pickCurrent) decides between tabs of one
 // title, and alone when no title fits (a page still loading) or there are
-// no windows (headless); it keeps its memo either way, so that a title
+// no mapped windows yet; it keeps its memo either way, so that a title
 // fitting no tab for a moment does not move the current tab. Throws when
 // the browser does not answer.
 export async function browserTabs(pipe, memo, windowTitles = []) {

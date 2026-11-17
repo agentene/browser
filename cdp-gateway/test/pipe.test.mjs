@@ -415,7 +415,7 @@ test('pickCurrent: the focused tab; of several, the one that just became so', ()
   assert.equal(pickCurrent(memo, [['A', 0], ['B', 2], ['C', 1]]), 'B');
   // the user switched tabs
   assert.equal(pickCurrent(memo, [['A', 2], ['B', 0], ['C', 1]]), 'A');
-  // headless: every window's front tab counts as focused — the new one wins,
+  // focus emulation: several tabs count as focused — the new one wins,
   // and stays current while nothing changes
   assert.equal(pickCurrent(memo, [['A', 2], ['B', 0], ['C', 2]]), 'C');
   assert.equal(pickCurrent(memo, [['A', 2], ['B', 0], ['C', 2]]), 'C');

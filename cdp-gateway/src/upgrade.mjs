@@ -14,7 +14,7 @@ import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { targetAddress } from './browsers.mjs';
 import { cdpOriginDenied } from './cdp-origin.mjs';
-import { INPUT_OVERLAY, WS_OPTIONS } from './config.mjs';
+import { BROWSER_ENABLED, OVERLAY_AVAILABLE, WS_OPTIONS } from './config.mjs';
 import { consoleDenied, consoleOriginDenied } from './console-auth.mjs';
 import { subscribe } from './console-live.mjs';
 import { subscribeOverlay } from './input-overlay.mjs';
@@ -23,6 +23,7 @@ import { Mux } from './mux.mjs';
 import { relay } from './relay.mjs';
 import { requestPath, viaWeb } from './respond.mjs';
 import { log } from './util.mjs';
+import { withRequestLanguage } from './language.mjs';
 
 const wss = new WebSocketServer({ noServer: true, ...WS_OPTIONS });
 // the console's WebSockets, the only ones the web UI port may open
@@ -51,6 +52,7 @@ async function resolveTarget(req, p) {
       return { refuse: denied[0] };
     }
   }
+  if (!BROWSER_ENABLED && p.startsWith('/devtools/')) return { refuse: 404 };
   if (p.startsWith('/devtools/browser/')) {
     if (mainBrowser.state === 'stopped' || mainBrowser.stopping) return { kind: 'browser', upstream: null };
     await mainBrowser.ensure();
@@ -66,11 +68,11 @@ async function resolveTarget(req, p) {
       if (context?.state !== undefined && context.state !== 'running') throw new Error('browser is transitioning; retry the page connection');
       const upstream = await pipe.connect({ targetId: id });
       if (context) upstream.once('close', () => { context.relays--; });
-      return { kind: 'page', upstream, onMain: !context };
+      return { kind: 'page', upstream };
     } catch (err) { if (context) context.relays--; throw err; }
   }
   if (CONSOLE_SOCKETS.has(p)) {
-    if (p === '/console/overlay' && INPUT_OVERLAY === 'off') return { refuse: 404 };
+    if (p === '/console/overlay' && !OVERLAY_AVAILABLE) return { refuse: 404 };
     const denied = (await consoleDenied(req)) ?? consoleOriginDenied(req);
     if (denied) return { refuse: denied[0] };
     return { kind: p === '/console/ws' ? 'console' : 'overlay' };
@@ -78,7 +80,11 @@ async function resolveTarget(req, p) {
   return { refuse: 404 };
 }
 
-export async function handleUpgrade(req, socket, head) {
+export function handleUpgrade(req, socket, head) {
+  return withRequestLanguage(req.headers['accept-language'], () => upgrade(req, socket, head));
+}
+
+async function upgrade(req, socket, head) {
   // node's HTTP server drops its own error listener from an upgraded socket,
   // and resolving the target may take a while (a stopped main browser
   // starts): a connection reset meanwhile would be an unhandled 'error'
@@ -111,6 +117,6 @@ export async function handleUpgrade(req, socket, head) {
     if (target.kind === 'browser') new Mux(client, clientAddress(req), target.upstream);
     else if (target.kind === 'console') subscribe(client);
     else if (target.kind === 'overlay') subscribeOverlay(client);
-    else relay(client, target.upstream, target.onMain);
+    else relay(client, target.upstream);
   });
 }

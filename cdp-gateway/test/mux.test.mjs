@@ -9,7 +9,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { REFUSED_MESSAGE } from '../src/browser-exit.mjs';
 import { INTERNAL_ID_BASE } from '../src/config.mjs';
 import { contexts } from '../src/contexts.mjs';
-import { contextWindowId, lastMainUse, mainClients, Mux, openMuxes } from '../src/mux.mjs';
+import { contextWindowId, Mux, openMuxes } from '../src/mux.mjs';
 import { fromJsonVersion, rememberVersion } from '../src/version.mjs';
 import { wsConnection } from './fake-upstream.mjs';
 
@@ -825,13 +825,11 @@ test('M3: without a main browser the handshake is answered and only a default-co
     const list = await client.command({ id: 926, method: 'Target.getTargets', params: {} });
     assert.deepEqual(list.result.targetInfos.map((t) => [t.targetId, t.browserContextId]), [['CT1', alias]]);
     assert.equal(opened.length, 0, 'the main browser was never needed');
-    assert.equal(mainClients(), 0);
     // the default context needs it
     const from = received.length;
     assert.deepEqual((await client.command({ id: 927, method: 'Target.createTarget', params: { url: 'about:blank' } })).result, { echo: 'Target.createTarget' });
     assert.equal(opened.length, 1);
     assert.deepEqual(received.slice(from).map((m) => m.method), ['Target.setAutoAttach', 'Browser.setDownloadBehavior', 'Target.createTarget']);
-    assert.ok(lastMainUse() > 0);
   } finally {
     client.close();
     stub.restore();
@@ -853,32 +851,16 @@ test('M3: commands waiting for a main browser that cannot start fail instead of 
   }
 });
 
-test('M4: a client connection keeps the main browser busy only without an isolated context', async () => {
-  const stub = stubContexts();
-  const before = mainClients();
-  const client = new FakeClient();
-  new Mux(client, 'test', await wsConnection(mainUrl));
-  try {
-    assert.equal(mainClients(), before + 1);
-    await client.command({ id: 940, method: 'Target.createBrowserContext', params: {} });
-    assert.equal(mainClients(), before);
-  } finally {
-    client.close();
-    stub.restore();
-  }
-});
-
-test('version: the build-time /json/version as Browser.getVersion, headed unless headless', () => {
+test('version: the build-time /json/version as Browser.getVersion, always headed', () => {
   const json = {
     Browser: 'HeadlessChrome/157.0.8103.78', 'Protocol-Version': '1.3',
     'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.0.0 Safari/537.36',
     'V8-Version': '15.7.1', 'WebKit-Version': '537.36 (@deadbeef)',
   };
-  assert.deepEqual(fromJsonVersion(json, false), {
+  assert.deepEqual(fromJsonVersion(json), {
     protocolVersion: '1.3', product: 'Chrome/157.0.8103.78', revision: '@deadbeef',
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36',
     jsVersion: '15.7.1',
   });
-  assert.equal(fromJsonVersion(json, true).product, 'HeadlessChrome/157.0.8103.78');
   assert.equal(fromJsonVersion({}), null);
 });

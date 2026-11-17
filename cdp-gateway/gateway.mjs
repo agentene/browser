@@ -30,24 +30,25 @@
 //     configuration and verified Playwright helpers are rebuilt; arbitrary
 //     JS memory and evaluations are never replayed. See the README limits.
 //
-// The gateway also owns the main browser: started with the gateway
-// (CHROMIUM_AUTOSTART=true) or only by the first CDP client or the console's
-// "Start" (false), and it may exit (window closed, "Stop", a crash) without
+// The gateway also owns the main browser: started on demand by the first
+// CDP client that needs it or the console's "Start", and it may exit (window closed, "Stop", a crash) without
 // taking the container down — the next client starts it again.
-// CHROMIUM_IDLE_TIMEOUT closes it after that many idle minutes.
 //
 // Also serves /json/* (made from CDP, with URLs on the public host:port the
 // client dialed) and a small dashboard under /console/: its state (a
-// snapshot, then changes) comes only over the /console/ws WebSocket, its
+// snapshot, then changes) comes over the /console/ws WebSocket; settings are
+// also read once on load so a closed sidebar uses the saved language. Its
 // actions are POST/DELETE /console/api/<name>… and PATCH /console/api/settings; plus the sidebar script
 // nginx injects into the Selkies page (panel.js; nginx proxies /cdp-console/
 // on the web port to /console/ here).
 //
 // The modules, in src/:
 //   server.mjs          startup, the HTTP server (unix socket), shutdown
+//   shutdown.mjs        orderly exit for signals and console container restart
 //   http.mjs            HTTP dispatch -> routes-json.mjs (/json/*),
 //                       routes-console.mjs (/console/*), respond.mjs
 //   upgrade.mjs         WebSocket dispatch -> mux.mjs, relay.mjs, console-live.mjs
+//   language.mjs        per-request/connection Accept-Language for Auto
 //   cdp-origin.mjs      who may use the CDP API from a web page (CDP_ALLOW_ORIGINS)
 //   mux.mjs             per-connection CDP multiplexer (main <-> context routing)
 //   relay.mjs           /devtools/page/<id> pass-through
@@ -64,8 +65,7 @@
 //   context-restore.mjs tab identity, native restore and URL fallback
 //   profile.mjs         profile cloning and the clone's Preferences
 //   storage-sync.mjs    live cookies + localStorage from main into a context
-//   main-browser.mjs    the main browser (at start, or on demand)
-//   idle.mjs            CHROMIUM_IDLE_TIMEOUT
+//   main-browser.mjs    the main browser (on demand, manually stopped)
 //   browsers.mjs        main + contexts by name (pipe, pid, target owner)
 //   screen.mjs          the desktop back to SCREEN_GEOMETRY before a context window opens unwatched
 //   desktop.mjs         the browser windows (the one in front, their titles), bringing one to the front

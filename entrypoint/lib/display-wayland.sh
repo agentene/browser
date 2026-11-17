@@ -125,7 +125,7 @@ wayland_start_labwc() {
 }
 
 # The headless output starts at 1280x720; bring it to SCREEN_GEOMETRY.
-# Selkies' browser-driven resize (SELKIES_ENABLE_RESIZE) changes it later
+# Selkies' automatic browser-driven resize changes it later
 # the same way, through labwc's output management.
 wayland_size_output() {
     local output

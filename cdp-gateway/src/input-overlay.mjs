@@ -38,7 +38,7 @@
 import WebSocket from 'ws';
 import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
-import { CONTEXTS_HEADLESS, INPUT_OVERLAY, WAYLAND } from './config.mjs';
+import { INPUT_OVERLAY, WAYLAND } from './config.mjs';
 import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
 import { readScreen } from './screen.mjs';
 import { MAX_BUFFERED, log } from './util.mjs';
@@ -226,6 +226,8 @@ const targets = new Map(); // pipe -> Map(targetId -> Target)
 const toolbars = new Map(); // pipe -> the chrome's height above the viewport, last measured (DIP)
 const clients = new Map(); // PipeConnection -> { c, shown: null | true | where it was hidden }
 const working = new Map(); // PipeConnection -> { c, name, id, at }: where its last input went
+let modeEpoch = 0;
+let overlayFront = false;
 let consoles = 0; // the consoles watching (watchInput)
 let batch = [];
 let batchTimer = null;
@@ -277,7 +279,7 @@ function clientOf(conn) {
 
 function syncPipes() {
   const live = new Map();
-  if (subscribers.size || consoles) {
+  if (INPUT_OVERLAY !== 'off' && (subscribers.size || consoles)) {
     for (const name of browserNames()) {
       const pipe = pipeOf(name);
       if (pipe && !pipe.closed) live.set(pipe, name);
@@ -336,6 +338,7 @@ function forgetSession(pipe, sessionId) {
 // --- input ------------------------------------------------------------------------
 
 function onInput(pipe, name, { conn, targetId, msg }) {
+  if (INPUT_OVERLAY === 'off') return;
   if (!targetId) return; // not a page's session: chromium refuses input there
   const params = msg.params !== null && typeof msg.params === 'object' ? msg.params : {};
   const t = targetOf(pipe, targetId);
@@ -398,6 +401,8 @@ async function drain(t) {
 }
 
 async function handle(t, item) {
+  const epoch = modeEpoch;
+  const emit = (op) => { if (epoch === modeEpoch) push(op); };
   if (item.kind === 'down' || (item.kind === 'key' && item.moves)) t.focusMoved = true;
   if (item.kind === 'key' || item.kind === 'text') {
     // text asks afresh once the focus may have moved (a sensitive field)
@@ -412,7 +417,7 @@ async function handle(t, item) {
       op = { t: 'text', c: item.c, b: item.name, ...textOp(item.text, { mode: INPUT_OVERLAY, sensitive }) };
     }
     if (away) Object.assign(op, { away }, await tabOf(t));
-    push(op);
+    emit(op);
     return;
   }
   const facts = await factsOf(t, false);
@@ -423,7 +428,7 @@ async function handle(t, item) {
     // once per place: again when it moves to another hidden tab
     const tab = await tabOf(t);
     const where = JSON.stringify([why, item.name, tab.tab, tab.host]);
-    if (client && client.shown !== where) push({ t: 'off', c: item.c, b: item.name, why, ...tab });
+    if (client && client.shown !== where) emit({ t: 'off', c: item.c, b: item.name, why, ...tab });
     if (client) client.shown = where;
     return;
   }
@@ -438,7 +443,7 @@ async function handle(t, item) {
     op.dy = item.dy;
   }
   if (facts.approx) op.approx = true;
-  push(op);
+  emit(op);
 }
 
 // What tells a tab apart in the tab strip, from the browser's page targets:
@@ -472,7 +477,6 @@ async function tabOf(t) {
 
 // Why the stream does not show this target's pointer input, or null.
 async function hiddenBecause(t, name, facts) {
-  if (name !== 'main' && CONTEXTS_HEADLESS) return 'headless';
   if (facts.vis && facts.vis !== 'visible') return 'background';
   const inFront = await frontName();
   if (inFront.known && inFront.name !== name) return 'behind';
@@ -554,7 +558,7 @@ async function noteScreen(bounds) {
 // --- the pages ------------------------------------------------------------------
 
 function push(op) {
-  if (!subscribers.size) return;
+  if (INPUT_OVERLAY === 'off' || !subscribers.size) return;
   addOp(batch, op);
   batchTimer ??= setTimeout(flush, BATCH_MS);
 }
@@ -583,12 +587,11 @@ onChange(() => {
 // A console opened / closed (console-live.mjs): while any is open the
 // pipes report input, for workingTabs().
 export function watchInput() {
-  if (INPUT_OVERLAY === 'off') return;
   if (consoles++ === 0) syncPipes();
 }
 
 export function unwatchInput() {
-  if (INPUT_OVERLAY === 'off' || consoles === 0) return;
+  if (consoles === 0) return;
   if (--consoles) return;
   syncPipes();
   if (!subscribers.size) working.clear();
@@ -617,7 +620,7 @@ export function subscribeOverlay(ws) {
     }
     syncPipes();
     if (!consoles) working.clear();
-    unwatchFront();
+    syncOverlayFront();
     clearTimeout(batchTimer);
     batchTimer = null;
     batch = [];
@@ -628,9 +631,30 @@ export function subscribeOverlay(ws) {
   if (screen) ws.send(JSON.stringify({ ops: [{ t: 'screen', ...screen }] }));
   subscribers.add(ws);
   if (subscribers.size === 1) {
-    watchFront();
+    syncOverlayFront();
     syncPipes();
   }
+}
+
+function syncOverlayFront() {
+  const want = subscribers.size > 0 && INPUT_OVERLAY !== 'off';
+  if (want === overlayFront) return;
+  overlayFront = want;
+  if (want) watchFront(); else unwatchFront();
+}
+
+export function resetOverlayMode() {
+  modeEpoch++;
+  clearTimeout(batchTimer);
+  batchTimer = null;
+  batch = [];
+  for (const byId of targets.values()) for (const t of byId.values()) releaseTarget(t);
+  targets.clear();
+  working.clear();
+  for (const client of clients.values()) client.shown = null;
+  for (const ws of subscribers) if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'hello', v: 1, mode: INPUT_OVERLAY }));
+  syncOverlayFront();
+  syncPipes();
 }
 
 // for the tests

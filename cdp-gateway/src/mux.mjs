@@ -20,7 +20,7 @@
 // disconnecting destroys the context.
 //
 // The isolated context does not hang off the main browser: when the main
-// browser exits (its window closed, Stop, idle, a crash) a connection that
+// browser exits (its window closed, Stop, a crash) a connection that
 // holds one goes on — the client is told its main pages are gone, the way
 // chromium tells a target's end, and its context keeps running. Without a
 // context the connection ends with the main browser, as it would with
@@ -45,6 +45,7 @@ import { forward } from './flow.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { log } from './util.mjs';
 import { knownVersion } from './version.mjs';
+import { bindRequestLanguage } from './language.mjs';
 
 const muxes = new Set();
 
@@ -106,22 +107,6 @@ export function openMuxes() {
   return muxes.size;
 }
 
-// For idle.mjs: the connections that keep the main browser in use — those
-// on it without an isolated context (the main browser is all they have) —,
-// and when a client last sent it a command (one with an isolated context
-// keeps it in use only that way).
-export function mainClients() {
-  let n = 0;
-  for (const mux of muxes) if (mux.main && !mux.context && !mux.attaching) n++;
-  return n;
-}
-
-export function lastMainUse() {
-  let last = 0;
-  for (const mux of muxes) last = Math.max(last, mux.mainUsedAt);
-  return last;
-}
-
 // The main browser's connection for a client: started if it is not running.
 async function connectMain() {
   await mainBrowser.ensure();
@@ -175,7 +160,6 @@ export class Mux {
     this.mainInFlight = new Map(); // client command id -> the command
     this.mainSessions = new Map(); // main sessionId -> { targetId, parent: the session it was attached on }
     this.mainTargets = new Set();
-    this.mainUsedAt = 0; // last client command sent there (lastMainUse)
     this.closingBrowser = false; // the client closed the browser (CDP_ALLOW_BROWSER_CLOSE)
     // the browser target's id while there is no main browser to ask
     this.browserTargetId = randomBytes(16).toString('hex').toUpperCase();
@@ -183,7 +167,7 @@ export class Mux {
 
     if (main) this.adoptMain(main);
 
-    client.on('message', (data) => this.fromClient(data));
+    client.on('message', bindRequestLanguage((data) => this.fromClient(data)));
     client.on('close', () => this.close('client disconnected'));
     client.on('error', (err) => log(`mux ${clientAddr}: client error: ${err.message}`));
   }
@@ -206,7 +190,6 @@ export class Mux {
       }
       return;
     }
-    this.mainUsedAt = Date.now();
     if (msg.id !== undefined) {
       this.mainInFlight.set(msg.id, msg);
       if (READ_MAIN_REPLIES.has(msg.method)) this.pending.set(msg.id, { origin: 'main', msg });

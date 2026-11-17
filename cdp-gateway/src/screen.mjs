@@ -19,7 +19,7 @@ export async function readScreen() {
 }
 
 export async function restoreScreen() {
-  if (!SCREEN_SIZE || !VIEWER_SOCKET || connectionsTo(VIEWER_SOCKET) > 0) return;
+  if (!SCREEN_SIZE || (VIEWER_SOCKET && connectionsTo(VIEWER_SOCKET) > 0)) return;
   const { current, output: name } = await readScreen();
   const resize = WAYLAND
     ? ['wlr-randr', ['--output', name, '--custom-mode', SCREEN_SIZE]]

@@ -3,29 +3,42 @@
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import {
-  CHROME_BIN, CONTEXTS_DIR, CONTEXTS_OVERFLOW, HIBERNATED_MAX, IDLE_TIMEOUT_MS, MAIN_AUTOSTART, MAIN_FLAGS_FILE, MAX_CONTEXTS, SOCKET_PATH,
+  BROWSER_ENABLED, CHROME_BIN, CONTEXTS_DIR, CONTEXTS_OVERFLOW, HIBERNATED_MAX, MAIN_FLAGS_FILE, MAX_CONTEXTS, SOCKET_PATH,
   readFlags,
 } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { handleHttp } from './http.mjs';
-import { watchIdle } from './idle.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { probeReflink } from './profile.mjs';
 import { handleUpgrade } from './upgrade.mjs';
+import { createShutdown } from './shutdown.mjs';
+import { closeSettings } from './settings.mjs';
 import { log } from './util.mjs';
 
 export async function startGateway() {
-  if (!CHROME_BIN) throw new Error('CHROME_BIN is not set');
-  // fail fast when the entrypoint did not write the flag files
-  readFlags();
-  readFlags(MAIN_FLAGS_FILE);
-  await fs.mkdir(CONTEXTS_DIR, { recursive: true });
-  log(`profile clones: ${await probeReflink()}`);
+  if (BROWSER_ENABLED && !CHROME_BIN) throw new Error('CHROME_BIN is not set');
+  if (BROWSER_ENABLED) {
+    // fail fast when the entrypoint did not write the flag files
+    readFlags();
+    readFlags(MAIN_FLAGS_FILE);
+    await fs.mkdir(CONTEXTS_DIR, { recursive: true });
+    log(`profile clones: ${await probeReflink()}`);
+  }
 
-  const server = http.createServer((req, res) => {
-    handleHttp(req, res);
+  const sockets = new Set();
+  let restartPending = false;
+  const restart = () => {
+    if (restartPending) return;
+    restartPending = true;
+    // Let nginx relay the completed 202 before closing its upstream socket.
+    setTimeout(() => shutdown('console restart'), 100);
+  };
+  const server = http.createServer((req, res) => { handleHttp(req, res, restart); });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
   });
-  watchIdle();
+  const shutdown = createShutdown({ server, sockets, contexts, mainBrowser });
   server.on('upgrade', (req, socket, head) => {
     handleUpgrade(req, socket, head);
   });
@@ -36,24 +49,10 @@ export async function startGateway() {
   // RUN_USER=0 the nginx workers are nobody, not the gateway's root.
   await fs.rm(SOCKET_PATH, { force: true });
   server.listen(SOCKET_PATH, async () => {
-    // CHROMIUM_AUTOSTART=true: up right away — 'starting' before the socket
-    // is opened to anyone, so the entrypoint's /json/version wait (and an
-    // early client) waits for it instead of being answered for a stopped
-    // browser. A failed start is no reason to exit — the next client or the
-    // console's Start tries again.
-    if (MAIN_AUTOSTART) mainBrowser.ensure().catch(() => { /* logged by launch() */ });
     await fs.chmod(SOCKET_PATH, 0o666);
-    const idle = IDLE_TIMEOUT_MS ? `, closed after ${IDLE_TIMEOUT_MS / 60_000} idle min` : '';
-    log(`listening on ${SOCKET_PATH} (main browser started ${MAIN_AUTOSTART ? 'now' : 'when a client uses it'}${idle}, max ${MAX_CONTEXTS} running contexts, overflow=${CONTEXTS_OVERFLOW}, max ${HIBERNATED_MAX} sleepers, data in ${CONTEXTS_DIR}; the browsers speak CDP on their pipes only)`);
+    log(`listening on ${SOCKET_PATH} (main browser on demand, max ${MAX_CONTEXTS} running contexts, overflow=${CONTEXTS_OVERFLOW}, max ${HIBERNATED_MAX} sleepers, data in ${CONTEXTS_DIR}; the browsers speak CDP on their pipes only)`);
   });
 
-  async function shutdown(signal) {
-    contexts.close(); // queued creation/wake requests must not spawn after shutdown starts
-    log(`${signal}: destroying ${contexts.size} context(s)`);
-    server.close();
-    await Promise.all(contexts.values().map((s) => s.destroy('gateway shutdown')).concat(mainBrowser.stop()));
-    process.exit(0);
-  }
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => closeSettings().then(() => shutdown('SIGTERM')));
+  process.on('SIGINT', () => closeSettings().then(() => shutdown('SIGINT')));
 }

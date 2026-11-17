@@ -147,40 +147,12 @@ services:
       SELKIES_SUBFOLDER: "${SELKIES_SUBFOLDER:-}"
       # Extra CLI flags passed to `selkies`
       SELKIES_EXTRA_ARGS: "${SELKIES_EXTRA_ARGS:-}"
-      # Browser-driven resize: the virtual display follows the viewer's
-      # browser window size; false = it stays at SCREEN_GEOMETRY
-      SELKIES_ENABLE_RESIZE: "${SELKIES_ENABLE_RESIZE:-true}"
-      # Media (SELKIES_*_ENABLED / SELKIES_*_ON_START), the encoder and every
-      # other native SELKIES_* setting reach selkies through the env_file
-      # pass-through; the image's media defaults live in the entrypoint
-      # (only video starts with the session, Turbo off).
+      # Browser/desktop preferences are configured in the web Settings page,
+      # persisted on /browser/settings/settings.json. No preference env vars.
+      # Other native SELKIES_* settings still use env_file pass-through.
 
-      # --- Chromium / CDP ---
-      # 0 (default) = headed on the desktop, visible in the Selkies stream;
-      # 1 = headless, desktop stays empty
-      CHROMIUM_HEADLESS: "${CHROMIUM_HEADLESS:-0}"
-      # Browser UI locale + Accept-Language (default English; e.g. zh-CN)
-      CHROMIUM_LANG: "${CHROMIUM_LANG:-en-US}"
-      # Page opened at startup, e.g. "https://example.com"
-      CHROMIUM_START_URL: "${CHROMIUM_START_URL:-about:blank}"
-      # The CDP gateway owns the main browser: true = started with the
-      # container; false = only when a CDP client uses the default context
-      # (isolated contexts never need it) or from the CDP console ("Start
-      # browser"). Either way closing it (or a crash) keeps
-      # the container running, and the next client starts it again
-      CHROMIUM_AUTOSTART: "${CHROMIUM_AUTOSTART:-true}"
-      # Minutes the main browser may sit idle (no CDP client using it,
-      # nobody watching the stream; isolated contexts do not count) before
-      # the gateway closes it again; 0 = never
-      CHROMIUM_IDLE_TIMEOUT: "${CHROMIUM_IDLE_TIMEOUT:-0}"
-      # Extra chromium flags, e.g. "--proxy-server=http://host:3128"
+      # --- Chromium advanced deployment ---
       CHROMIUM_EXTRA_ARGS: "${CHROMIUM_EXTRA_ARGS:-}"
-      # GPU/rendering policy (default owned by the entrypoint, so it also
-      # applies without compose): auto = hardware GL when a GPU is passed in
-      # via the compose.gpu.yaml / compose.gpu-nvidia.yaml overlay, else
-      # SwiftShader software; off = force software; strict = never
-      # SwiftShader (WebGL then requires the GPU).
-      CHROMIUM_GPU: "${CHROMIUM_GPU:-auto}"
       # Chromium's own sandbox: auto = on when RUN_USER is not 0 and the
       # container may create user namespaces (docker's default seccomp
       # profile forbids it: add security_opt, see the README), --no-sandbox
@@ -206,12 +178,6 @@ services:
       # "isolated": true) gets its own chromium on a clone of the profile above:
       # inherits its logins, shares nothing back; destroyed when the context
       # closes. Dashboard: http://host:${CDP_PORT}/console/
-      # Running/starting isolated browsers; main and sleeping browsers excluded
-      CDP_CONTEXTS_MAX: "${CDP_CONTEXTS_MAX:-4}"
-      # At capacity, hibernate eligible browsers with no tabs first, then LRU within each group; or reject
-      CDP_CONTEXTS_OVERFLOW: "${CDP_CONTEXTS_OVERFLOW:-hibernate}"
-      # Retained sleeping browsers (not bytes); evict the oldest above this cap
-      CDP_CONTEXTS_HIBERNATED_MAX: "${CDP_CONTEXTS_HIBERNATED_MAX:-16}"
       # Web page origins that may use the CDP API (comma-separated, * = any),
       # like chromium's --remote-allow-origins; empty = none: any request
       # with an Origin header (a page's WebSocket or fetch) is refused.
@@ -222,15 +188,10 @@ services:
       # client starts it again). false: only that client's connection (and its
       # isolated context) is closed; Browser.crash* are refused.
       CDP_ALLOW_BROWSER_CLOSE: "${CDP_ALLOW_BROWSER_CLOSE:-false}"
-      # What the Selkies page draws over the stream of the CDP clients' input
-      # (their pointer never moves the desktop's): text = pointer, clicks,
-      # wheel, key combos and the text typed (password / one-time-code / card
-      # fields and frames show as ••••); keys = only a count of the
-      # characters typed; off = no overlay. Seen by the sidebar's users (the built-in login);
-      # each can hide it in the CDP sidebar's settings.
-      CDP_INPUT_OVERLAY: "${CDP_INPUT_OVERLAY:-text}"
       # Allow creating browsers and closing individual tabs from the console/sidebar.
       CDP_CONSOLE_ACTIONS: "${CDP_CONSOLE_ACTIONS:-true}"
+      # Restart the whole container from Settings (uses restart: always above).
+      CDP_CONSOLE_RESTART: "${CDP_CONSOLE_RESTART:-true}"
 
       # --- Desktop ---
       # Desktop the headed browsers live on: wayland = labwc, a headless
@@ -238,10 +199,6 @@ services:
       # (with the compose.gpu.yaml overlay: several times less CPU for
       # animated pages); x11 = Xvfb (+ picom) — use it with NVIDIA.
       DISPLAY_BACKEND: "${DISPLAY_BACKEND:-wayland}"
-      # Xvfb screen geometry WxHxD (wayland: labwc's output size); also sizes
-      # the Selkies stream
-      SCREEN_GEOMETRY: "${SCREEN_GEOMETRY:-1920x1080x24}"
-
       # --- Privilege drop ---
       # Run the desktop stack (Xvfb/labwc, picom, PulseAudio, selkies, chromium,
       # the CDP gateway, the auth service) and the nginx WORKERS as this user.
@@ -259,7 +216,7 @@ services:
       # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
       # or 401 when a login is on (502 = Selkies not up). With
       # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
-      # probed instead — /json/list, which (unlike /json/version) does not
+      # probed instead — /json/list, which does not
       # start a stopped main browser; 401 there means a CDP API key is set
       # (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
       # exits and docker restarts the container). $$ = evaluated in the

@@ -7,22 +7,13 @@ import { guardFrame } from './client-frame.mjs';
 import { forward } from './flow.mjs';
 import { log } from './util.mjs';
 
-let relays = 0;
-
-// open relays to the main browser's pages, for idle.mjs
-export function openRelays() {
-  return relays;
-}
-
 // upstream: an open page connection (pipe.connect({ targetId })). Every
 // client frame is checked (client-frame.mjs's guardFrame, the same decision
 // as on a browser connection): a Browser.close / Browser.crash, which on a
 // page WebSocket ends the whole browser just the same, a command naming
 // local files (file-access.mjs), or one opening a CDP channel of its own.
 // What passes goes upstream as the command the check read.
-// onMain: the target is the main browser's (counted for idle.mjs).
-export function relay(client, upstream, onMain = true) {
-  if (onMain) relays++;
+export function relay(client, upstream) {
   client.on('message', (raw) => {
     const checked = guardFrame(raw);
     if (checked.notes) for (const note of checked.notes) log(`page relay: ${note}`);
@@ -41,7 +32,6 @@ export function relay(client, upstream, onMain = true) {
   const closeBoth = () => {
     if (closed) return;
     closed = true;
-    if (onMain) relays--;
     upstream.close();
     client.terminate();
   };

@@ -1,247 +1,44 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034 # the knobs set here are read by the other modules
-# config.sh — runtime knobs: defaults + validation (config_load).
+# config.sh — deployment environment: defaults and validation.
+# Browser, capacity, display size and AI input preferences come from settings_load
+# (settings.json / the web UI); their schema is cdp-gateway/src/settings-schema.mjs.
+# The former preference variables are warned about and ignored by settings.sh.
 #
-# Every knob is an environment variable; .env.example lists the commonly
-# changed ones for compose users, the READMEs document them all. The
-# reference below is the entrypoint's view of them.
-#
-#   NGINX_LISTEN_HTTP_PORT=80            container port nginx serves the web UI on (HTTP)
-#   NGINX_LISTEN_HTTPS_PORT=443          container port nginx serves the web UI on (TLS)
-#   CDP_LISTEN_PORT=9222        container port of the public CDP endpoint
-#                               (the three above are what nginx binds INSIDE the
-#                               container — useful with network_mode: host or
-#                               when sharing a network namespace)
-#   NGINX_LISTEN_ADDR=""        address every nginx listener binds to; empty =
-#                               all interfaces. With network_mode: host set
-#                               127.0.0.1 to keep the unauthenticated CDP
-#                               endpoint (and the web UI) off the network.
-#   ALLOWED_HOSTS=""            host names the web UI and the CDP port answer
-#                               to (comma-separated; a leading dot or *.
-#                               matches subdomains), besides IP addresses and
-#                               localhost: any other Host header gets 421.
-#                               Stops DNS rebinding — a site pointing its own
-#                               name at this container — from using an open
-#                               web UI / console (login skipped or
-#                               ENABLE_AUTH=false). Empty = any host name
-#   ENABLE_HTTPS=false          true = nginx also serves HTTPS on NGINX_LISTEN_HTTPS_PORT. The
-#                               certificate pair is REUSED whenever a valid one
-#                               already exists (mounted or generated on an
-#                               earlier start — self-signed counts as valid);
-#                               only when no usable pair is found is a fresh
-#                               self-signed one generated.
-#   SELKIES_SUBFOLDER=""         URL path prefix the web UI is served under
-#                                (e.g. /desk -> http://host:port/desk/); empty
-#                                = the site root. Selkies' native setting; nginx
-#                                additionally redirects / and /desk to /desk/
-#   SELKIES_ENABLE_RESIZE=true   browser-driven resize of the virtual display;
-#                                false = fixed at SCREEN_GEOMETRY
-#   SELKIES_EXTRA_ARGS=""        extra selkies CLI flags (word-split)
-#   (selkies.sh exports the image's media defaults as native SELKIES_* env
-#   vars — only video starts with the session, Turbo is off; every other
-#   native SELKIES_* setting, e.g. SELKIES_ENCODER, passes through as-is)
-#   DISPLAY_BACKEND=wayland      desktop the browser windows live on: wayland =
-#                                labwc, a headless Wayland compositor +
-#                                window manager that Selkies captures by
-#                                screencopy; x11 = Xvfb (+ picom), captured
-#                                by Selkies through XShm (pick it with an
-#                                NVIDIA GPU, see display-wayland.sh). With a GPU the
-#                                wayland frames stay on it from chromium to
-#                                the encoder (dmabuf, zero-copy) instead of
-#                                being copied through the software X server
-#                                every frame, which cuts the CPU cost of
-#                                animated pages several times over.
-#   SCREEN_GEOMETRY=1920x1080x24 Xvfb screen size (the working size; also
-#                                sizes the Selkies stream); the initial
-#                                output size with DISPLAY_BACKEND=wayland
-#   TZ=UTC                      container timezone (default UTC; -e TZ=...
-#                               overrides at runtime, no rebuild needed)
-#   CHROMIUM_LANG=en-US         browser UI locale + Accept-Language (default
-#                               system English; e.g. zh-CN for Chinese)
-#   CHROMIUM_GPU=auto            GPU/rendering policy (device detection in
-#                               gpu.sh): auto = hardware GL
-#                               when a GPU is passed into the container
-#                               (compose.gpu.yaml / compose.gpu-nvidia.yaml
-#                               overlay), SwiftShader software rendering
-#                               otherwise — WebGL always works; off = force
-#                               software rendering even with a GPU attached;
-#                               strict = never allow SwiftShader (anti-
-#                               fingerprinting): hardware GL only, WebGL
-#                               unavailable without a GPU
-#   CHROMIUM_START_URL=about:blank  page the main browser opens at startup
-#   CHROMIUM_AUTOSTART=true      the CDP gateway owns the main browser and
-#                                starts it with the container; false = only
-#                                when a CDP client uses the default context
-#                                (/json/new, a page opened there — connecting
-#                                and isolated contexts do not need it) or from
-#                                the CDP console ("Start"), so an idle
-#                                container runs no main browser at all.
-#                                Either way closing (or a crash of) the
-#                                main browser leaves the
-#                                container running; the next client or
-#                                "Start" brings it back
-#   CHROMIUM_IDLE_TIMEOUT=0      minutes the main browser may sit idle before
-#                                the gateway closes it (orderly, like Stop);
-#                                idle = no CDP client connected, no isolated
-#                                context, nobody watching the Selkies stream.
-#                                0 = never
-#   CHROMIUM_EXTRA_ARGS=""      extra chromium flags (word-split), appended
-#                               after the entrypoint's own so they win
-#   CHROMIUM_SANDBOX=auto        chromium's own sandbox (main and context
-#                                browsers): auto = on when the browsers run
-#                                unprivileged (RUN_USER not 0) AND the container
-#                                allows user namespaces (docker's default
-#                                seccomp profile does not — see the README),
-#                                --no-sandbox otherwise; off = always
-#                                --no-sandbox. Chromium cannot sandbox itself
-#                                as root.
-#   CHROMIUM_ALLOW_FILE_URLS=false  true = the browsers may open file:// URLs.
-#                                Blocked by default (managed policy
-#                                URLBlocklist): a page or CDP client could
-#                                otherwise read whatever the browser's user
-#                                can. The CDP commands that name local files
-#                                are CDP_FILE_DIRS' business, not this one's
-#   CHROMIUM_ALLOW_DEVTOOLS=true  false = the browsers open no DevTools
-#                                window (managed policy URLBlocklist:
-#                                devtools://*, chrome://inspect): a DevTools
-#                                window speaks CDP to its page on a channel of
-#                                its own, which the CDP gateway never sees, so
-#                                a CDP client that opens one (a key press, a
-#                                click in chrome://inspect) gets past
-#                                CDP_FILE_DIRS. The CDP endpoint itself is not
-#                                affected
-#   (the CDP gateway always sits between nginx and chromium: every isolated
-#   connection's first context — Target.createBrowserContext, a playwright-cli session
-#   with isolated: true — gets its own chromium on a clone of the main
-#   profile, so it inherits the main browser's logins without sharing state;
-#   destroyed when the context closes. Dashboard: /console/ on the CDP port.
-#   Clients need no changes.)
-#   CDP_CONTEXTS_MAX=4           most isolated browsers running/starting at once;
-#                                main and hibernated browsers are excluded
-#   CDP_CONTEXTS_OVERFLOW=hibernate  at capacity, hibernate eligible browsers with no tabs first, then LRU within each group; reject = previous behavior
-#   CDP_CONTEXTS_HIBERNATED_MAX=16  retained sleeping browsers (not a byte quota);
-#                                delete the oldest beyond this cap; 0 keeps none
-#   CDP_ALLOW_ORIGINS=""         web page origins allowed to use the CDP API
-#                                (comma-separated, * = any), like chromium's
-#                                --remote-allow-origins: the gateway refuses
-#                                every CDP request that carries an Origin
-#                                header (a browser page's WebSocket or fetch)
-#                                or comes cross-site, so no site a user has
-#                                open can drive the browser. CDP clients
-#                                (Playwright, Puppeteer, ...) send no Origin;
-#                                e.g. devtools://devtools for a DevTools
-#                                frontend
-#   CDP_ALLOW_BROWSER_CLOSE=false whether a CDP client's Browser.close (e.g.
-#                                Puppeteer's browser.close()) reaches the
-#                                shared main browser. false: the gateway
-#                                answers it and ends only that client's
-#                                connection (and its isolated context);
-#                                Browser.crash* are refused. true: passed
-#                                through — the browser exits (the container
-#                                keeps running; the next client restarts it)
-#   CDP_CONSOLE_ACTIONS=true     the console's / sidebar's New browser (+)
-#                                and per-tab close (×) buttons; false =
-#                                hidden, and their API routes refused
-#   CDP_INPUT_OVERLAY=text       what the Selkies page draws over the stream of
-#                                the CDP clients' input, which never moves the
-#                                desktop's own pointer: text = their pointer,
-#                                clicks, wheel, key combos and the text typed
-#                                (a password / one-time-code / card field, or
-#                                a focus inside a frame, shows as ••••); keys
-#                                = the same with only a count of the
-#                                characters typed; off = no overlay. Needs
-#                                Selkies and CDP both on; seen by the sidebar's
-#                                users (the built-in login), each can
-#                                hide it in the sidebar's settings
-#   CDP_FILE_DIRS=/browser/downloads  directories (colon-separated) CDP
-#                                clients may name local files in: file
-#                                inputs, drops, PWA launches, unpacked
-#                                extensions (DOM.setFileInputFiles, ...) read
-#                                only from them — anything else is refused —
-#                                and a download directory outside them is
-#                                redirected into the first (the gateway's
-#                                file-access.mjs; symlinks resolved). The
-#                                browsers' own download directory is the
-#                                first one too (managed policy
-#                                DownloadDirectory; created and handed to
-#                                RUN_USER at start). Otherwise a CDP client
-#                                could read any file the browser's user can
-#                                (/browser/settings/auth.json, the login's
-#                                session secret) and write new ones into its
-#                                directories. * = no check, no policy
-#   CHROMIUM_HEADLESS=1          run the browser headless instead (default 0:
-#                                the browser window opens on the desktop
-#                                and is visible live in the Selkies stream)
-#   ENABLE_SELKIES=true          set false to skip Selkies + display + audio
-#   ENABLE_CDP=true              set false to skip Chromium + the CDP gateway
-#   ENABLE_AUTH=true             built-in login (auth.sh): the web UI and the
-#                                CDP console need a session — the first visit
-#                                sets up the administrator login (or skips
-#                                it) — and the CDP API needs the API key once
-#                                one is set (Authorization: Bearer <key> or
-#                                X-API-Key). Login, skip choice and key are
-#                                changed in the console's settings and
-#                                persisted in /browser/settings/auth.json.
-#                                false = no login, no API key (the CDP
-#                                endpoint and the web UI are open, as before)
-#   AUTH_SETUP_CODE=""           the code the setup form asks for, so that
-#                                reaching the page first is not enough to
-#                                claim the browser; empty = a random one on
-#                                every start, printed in the container log
-#                                (docker logs). Set one for scripted setups
-#                                (POST <base>/__auth/api/setup {code, ...})
-#   PORT_FORWARDS=""             extra reverse proxies served by nginx, e.g.
-#                                "3080=peer:80 6080=other:6080" (space or
-#                                comma separated): each LISTEN=HOST:PORT entry
-#                                makes nginx listen on container port LISTEN
-#                                and forward it to HOST:PORT — typically a
-#                                sibling container on the same docker network.
-#                                See nginx.sh (nginx_parse_port_forwards) for
-#                                details (late peer startup, WebSocket
-#                                support, collision rules).
-#   RUN_USER=browser             (resolved in privileges.sh) the user the
-#                                desktop stack (Xvfb/labwc, picom, PulseAudio,
-#                                selkies, chromium, the CDP gateway, the auth
-#                                service) and the nginx workers run as. Unset
-#                                or empty = browser, the unprivileged user the
-#                                image ships (uid 1001). A user name that
-#                                exists in /etc/passwd or uid[:gid] (missing
-#                                passwd/group entries are synthesized at
-#                                startup) runs those daemons as that user
-#                                instead; 0 (or 0:<gid>, root) = everything
-#                                runs as root, no privilege drop. PID 1 and the
-#                                nginx master always stay root: nginx binds the
-#                                (possibly privileged) listen ports and reads the
-#                                TLS key, and the supervisor keeps preparing
-#                                the browser profile (chowned to the user on
-#                                every start).
-#
-# Removed (a value set is ignored, with a warning): SELKIES_INTERNAL_PORT,
-# CDP_INTERNAL_PORT, CDP_GATEWAY_INTERNAL_PORT, AUTH_INTERNAL_PORT and
-# SELKIES_ADDR. The services behind nginx listen on no TCP port any more —
-# a page in the browser can open a loopback port's origin and talk to what
-# listens there past nginx (and past the CDP gateway, for chromium's own
-# DevTools port): Selkies, the CDP gateway and the auth service sit on unix
-# sockets in SOCKET_DIR, and the browsers speak CDP on a pipe to the gateway
-# only (--remote-debugging-pipe, cdp-gateway/src/pipe.mjs).
-#
-# Fixed by the image (no knobs; an env value is ignored): the browser data
-# paths (profile /browser/user-data, isolated-context clones
-# /browser/contexts, the CDP console's persisted settings
-# /browser/settings/settings.json — settings.sh — and the login + API key
-# /browser/settings/auth.json — auth.sh), the TLS pair /etc/nginx/tls/{fullchain,privkey}.pem
-# (self-signed CN=localhost), the internal unix sockets (SOCKET_DIR
-# /tmp/agentene: selkies.sock, cdp-gateway.sock, auth.sock), the first X
-# display tried (:0), the Xvfb RandR
-# ceiling (8192x4096x24), picom + the chromium screen follower on X11, the
-# wlr-screencopy capture of labwc, the Selkies device interposers in the
-# browsers, the CDP console sidebar, headless isolated contexts exactly when
-# the main browser is headless, and the HTTPS-First/-Upgrade features
-# disabled in chromium (CHROMIUM_EXTRA_ARGS can still pass its own
-# --disable-features=..., the last occurrence wins).
+# Environment reference (compose host-side ports and mounts are in compose.yaml):
+#   ENABLE_SELKIES=true           start desktop streaming and audio services
+#   ENABLE_CDP=true               enable on-demand browsers and public CDP; false keeps web settings
+#   ENABLE_AUTH=true              built-in login and CDP API key service
+#   AUTH_SETUP_CODE=""            setup code; empty generates and logs one
+#   ENABLE_HTTPS=false            additionally serve TLS on the web UI
+#   NGINX_LISTEN_HTTP_PORT=80      container HTTP listener
+#   NGINX_LISTEN_HTTPS_PORT=443    container HTTPS listener
+#   CDP_LISTEN_PORT=9222          container public CDP listener
+#   NGINX_LISTEN_ADDR=""           listener address; empty = all interfaces
+#   ALLOWED_HOSTS=""               accepted host names (IP addresses/localhost always work)
+#   PORT_FORWARDS=""               extra nginx proxies: LISTEN=HOST:PORT, space/comma separated
+#   SELKIES_SUBFOLDER=""           web UI path prefix, e.g. /desk
+#   SELKIES_EXTRA_ARGS=""          extra Selkies arguments (selkies.sh)
+#   DISPLAY_BACKEND=wayland       wayland (labwc) or x11 (Xvfb/picom)
+#   TZ=UTC                        container timezone, inherited by processes
+#   CHROMIUM_EXTRA_ARGS=""         extra Chromium arguments, appended last
+#   CHROMIUM_SANDBOX=auto         auto or off; requires non-root and user namespaces
+#   CHROMIUM_ALLOW_FILE_URLS=false allow file:// URLs in browsers
+#   CHROMIUM_ALLOW_DEVTOOLS=true  allow DevTools windows
+#   CDP_ALLOW_ORIGINS=""           web page origins allowed to use CDP; empty = none
+#   CDP_ALLOW_BROWSER_CLOSE=false let a client close the shared browser
+#   CDP_FILE_DIRS=/browser/downloads colon-separated permitted CDP local-file directories
+#   CDP_CONSOLE_ACTIONS=true      console browser creation and individual tab closing
+#   CDP_CONSOLE_RESTART=true      console container restart action (requires restart policy)
+#   RUN_USER=browser              runtime uid[:gid] or username (privileges.sh)
+#   CHROME_BIN=/opt/chrome-for-testing/chrome alternative binary (chromium.sh)
+# Other native SELKIES_* settings pass through, except fixed resizing and the audio startup default.
+# Fixed paths: /browser/{user-data,contexts,settings}; sockets /tmp/agentene;
+# TLS /etc/nginx/tls/{fullchain,privkey}.pem. X11 RandR ceiling: 8192x4096x24.
 
 config_load() {
     config_removed
+    settings_load
     config_sockets
     config_display
     config_selkies
@@ -276,7 +73,6 @@ config_sockets() {
 config_display() {
     # First X display tried; x11_pick_display moves on to a free one.
     DISPLAY=":0"
-    SCREEN_GEOMETRY="${SCREEN_GEOMETRY:-1920x1080x24}"
     # Working size, split once for the display/selkies/chromium modules.
     SCREEN_WIDTH="${SCREEN_GEOMETRY%%x*}"
     SCREEN_HEIGHT="$(printf '%s' "${SCREEN_GEOMETRY}" | cut -dx -f2)"
@@ -290,8 +86,7 @@ config_display() {
     [ "${ENABLE_SELKIES}" = "true" ] || [ "${ENABLE_CDP}" = "true" ] \
         || die "nothing to start (ENABLE_SELKIES and ENABLE_CDP both false?)"
     # Desktop the headed browser windows live on (display-x11.sh /
-    # display-wayland.sh); only meaningful with ENABLE_SELKIES=true, which
-    # owns the display either way.
+    # display-wayland.sh), with or without the Selkies viewing service.
     DISPLAY_BACKEND="${DISPLAY_BACKEND:-wayland}"
     case "${DISPLAY_BACKEND}" in
         x11|wayland) : ;;
@@ -359,30 +154,8 @@ config_tls() {
 }
 
 config_chromium() {
-    CHROMIUM_HEADLESS="${CHROMIUM_HEADLESS:-0}"
-    CHROMIUM_START_URL="${CHROMIUM_START_URL:-about:blank}"
-    # The CDP gateway starts the main browser at container start (true) or
-    # on demand only (false).
-    CHROMIUM_AUTOSTART="${CHROMIUM_AUTOSTART:-true}"
-    case "${CHROMIUM_AUTOSTART}" in
-        true|false) : ;;
-        *) die "CHROMIUM_AUTOSTART='${CHROMIUM_AUTOSTART}' must be true or false" ;;
-    esac
-    # Minutes until the gateway closes an idle main browser; 0 = never.
-    CHROMIUM_IDLE_TIMEOUT="${CHROMIUM_IDLE_TIMEOUT:-0}"
-    case "${CHROMIUM_IDLE_TIMEOUT}" in
-        ''|*[!0-9]*) die "CHROMIUM_IDLE_TIMEOUT='${CHROMIUM_IDLE_TIMEOUT}' must be a number of minutes (0 = never)" ;;
-    esac
-    # The persisted profile, on the /browser mount.
+    # Browser preferences come from settings_load (the web configuration).
     CHROMIUM_USER_DATA_DIR="/browser/user-data"
-    # Browser UI locale + Accept-Language; en-US by default (env override: any
-    # other locale, e.g. zh-CN).
-    CHROMIUM_LANG="${CHROMIUM_LANG:-en-US}"
-    # Single GPU/rendering policy knob; the device detection lives in gpu.sh.
-    # auto = hardware GL when a GPU is visible, else SwiftShader software;
-    # off = always software (the historical behavior); strict = hardware
-    # only, never allow SwiftShader.
-    CHROMIUM_GPU="${CHROMIUM_GPU:-auto}"
     # The browsers' own sandbox (chromium.sh): auto = when possible.
     CHROMIUM_SANDBOX="${CHROMIUM_SANDBOX:-auto}"
     case "${CHROMIUM_SANDBOX}" in
@@ -404,21 +177,6 @@ config_chromium() {
 }
 
 config_cdp_gateway() {
-    # CDP gateway: isolated CDP contexts become profile-cloned browsers
-    # (cdp-gateway.sh).
-    CDP_CONTEXTS_MAX="${CDP_CONTEXTS_MAX:-4}"
-    case "${CDP_CONTEXTS_MAX}" in
-        ''|*[!0-9]*|0) die "CDP_CONTEXTS_MAX='${CDP_CONTEXTS_MAX}' must be a positive number" ;;
-    esac
-    CDP_CONTEXTS_OVERFLOW="${CDP_CONTEXTS_OVERFLOW:-hibernate}"
-    case "${CDP_CONTEXTS_OVERFLOW}" in
-        hibernate|reject) : ;;
-        *) die "CDP_CONTEXTS_OVERFLOW='${CDP_CONTEXTS_OVERFLOW}' must be hibernate or reject" ;;
-    esac
-    CDP_CONTEXTS_HIBERNATED_MAX="${CDP_CONTEXTS_HIBERNATED_MAX:-16}"
-    case "${CDP_CONTEXTS_HIBERNATED_MAX}" in
-        ''|*[!0-9]*) die "CDP_CONTEXTS_HIBERNATED_MAX must be a non-negative integer" ;;
-    esac
     # The profile clones (wiped on every start) sit on the /browser mount next
     # to the profile, so they are reflinks where the filesystem supports it.
     CDP_CONTEXTS_DIR="/browser/contexts"
@@ -460,21 +218,14 @@ config_cdp_gateway() {
         true|false) ;;
         *) die "CDP_CONSOLE_ACTIONS='${CDP_CONSOLE_ACTIONS}' must be true or false" ;;
     esac
-    # The CDP console sidebar on the Selkies page (nginx.sh, cdp-gateway.sh)
-    # needs the web UI to sit in and the gateway to talk to.
-    CDP_CONSOLE_PANEL_ACTIVE=false
-    if [ "${ENABLE_SELKIES}" = "true" ] && [ "${ENABLE_CDP}" = "true" ]; then
-        CDP_CONSOLE_PANEL_ACTIVE=true
-    fi
-    # The CDP clients' input drawn over the Selkies stream (the gateway's
-    # input-overlay.mjs, cdp-gateway/overlay.js), next to the sidebar: off
-    # without it.
-    CDP_INPUT_OVERLAY="${CDP_INPUT_OVERLAY:-text}"
-    case "${CDP_INPUT_OVERLAY}" in
-        text|keys|off) : ;;
-        *) die "CDP_INPUT_OVERLAY='${CDP_INPUT_OVERLAY}' must be text, keys or off" ;;
+    CDP_CONSOLE_RESTART="${CDP_CONSOLE_RESTART:-true}"
+    case "${CDP_CONSOLE_RESTART}" in
+        true|false) ;;
+        *) die "CDP_CONSOLE_RESTART='${CDP_CONSOLE_RESTART}' must be true or false" ;;
     esac
-    [ "${CDP_CONSOLE_PANEL_ACTIVE}" = "true" ] || CDP_INPUT_OVERLAY=off
+    # The settings sidebar remains available in desktop-only mode.
+    CDP_CONSOLE_PANEL_ACTIVE="${ENABLE_SELKIES}"
+
 }
 
 config_auth() {

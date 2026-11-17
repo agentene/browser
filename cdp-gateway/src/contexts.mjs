@@ -6,10 +6,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { notifyChange } from './changes.mjs';
 import {
-  CONTEXT_COLORS, CONTEXTS_DIR, CONTEXTS_HEADLESS, MAIN_PROFILE, MAX_CONTEXTS, CONTEXTS_OVERFLOW, HIBERNATED_MAX, WAYLAND,
+  CONTEXT_COLORS, CONTEXTS_DIR, MAIN_PROFILE, MAX_CONTEXTS, CONTEXTS_OVERFLOW, HIBERNATED_MAX, WAYLAND,
   appId, readFlags,
 } from './config.mjs';
-import { browserReady, launchChromium } from './launch.mjs';
+import { browserReady, launchChromium, prepareBrowserLaunch } from './launch.mjs';
 import { restoreScreen } from './screen.mjs';
 import { cloneProfile, preparePrefs } from './profile.mjs';
 import { copyCookies, restoreLocalStorage, snapshotLocalStorage } from './storage-sync.mjs';
@@ -115,7 +115,6 @@ export class Context {
       await fs.rm(path.join(this.profile, name), { force: true });
     }
     let flags = readFlags();
-    if (CONTEXTS_HEADLESS && !flags.includes('--headless')) flags.push('--headless');
     flags = flags.concat([
       `--user-data-dir=${this.profile}`,
       // With the debugging pipe, this also keeps Chromium and its profile alive after the last window closes. Native restore is triggered explicitly in restoreTabs().
@@ -124,7 +123,8 @@ export class Context {
       ...this.proxy,
     ]);
     // the Wayland app_id focus() raises this context's windows by
-    if (WAYLAND && !CONTEXTS_HEADLESS) flags.push(`--class=${appId(this.name)}`);
+    if (WAYLAND) flags.push(`--class=${appId(this.name)}`);
+    const env = await prepareBrowserLaunch(this.profile);
     const logPath = path.join(this.dir, 'chromium.log');
     const logFile = createWriteStream(logPath, { flags: 'a' });
     // an error on the log (cannot be opened, the disk filled up) would be an
@@ -135,9 +135,9 @@ export class Context {
       logFile.once('open', resolve);
       logFile.once('error', reject);
     });
-    if (!CONTEXTS_HEADLESS) await restoreScreen();
+    await restoreScreen();
     if (this.destroyed || !this.alive()) { logFile.end(); throw new Error('context was deleted or its owner disconnected'); }
-    const { proc, pipe } = launchChromium(flags, logFile, this.name);
+    const { proc, pipe } = launchChromium(flags, logFile, this.name, env);
     this.proc = proc;
     this.pipe = pipe;
     // a failed spawn (EAGAIN, ENOMEM, ...) is an 'error' event and no 'exit';
@@ -352,7 +352,7 @@ export class ContextRegistry {
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
     const eligible = (c) => c !== exclude && c.state === 'running' && !c.destroyed && !c.blockedReason;
     while (this.running >= MAX_CONTEXTS) {
-      if (CONTEXTS_OVERFLOW === 'reject') throw new Error(`CDP context limit reached (${MAX_CONTEXTS}); close another isolated session or raise CDP_CONTEXTS_MAX`);
+      if (CONTEXTS_OVERFLOW === 'reject') throw new Error(`CDP context limit reached (${MAX_CONTEXTS}); close another isolated session or increase the running-browser limit in web Settings`);
       const candidates = this.values().filter(eligible);
       // Query the browser itself: console-owned contexts may have no client session, and its target cache may be incomplete. A failed query cannot establish that a browser is empty.
       const tabs = await Promise.allSettled(candidates.map((c) => pageInfos(c.pipe)));

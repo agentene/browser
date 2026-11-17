@@ -1,9 +1,8 @@
 // The main browser.
 //
 // Always this process's child, launched from the command line the entrypoint
-// left in MAIN_FLAGS_FILE: right when the gateway starts with
-// CHROMIUM_AUTOSTART=true (server.mjs), otherwise on demand only. Either way
-// a stopped one is started again by the next CDP client that uses the
+// left in MAIN_FLAGS_FILE, on demand only.
+// A stopped one is started again by the next CDP client that uses the
 // default context (ensure() in mux.mjs / routes-json.mjs) or the console. When it exits — window
 // closed, Stop, a crash, a client's Browser.close — the gateway just marks it
 // stopped: the gateway, not the browser, is what the container supervises.
@@ -15,7 +14,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { notifyChange } from './changes.mjs';
 import { MAIN_FLAGS_FILE, MAIN_LOG, MAIN_PROFILE, readFlags } from './config.mjs';
-import { browserReady, launchChromium } from './launch.mjs';
+import { browserReady, launchChromium, prepareBrowserLaunch } from './launch.mjs';
+import { restoreScreen } from './screen.mjs';
 import { killGroup, log } from './util.mjs';
 
 const STARTUP_TIMEOUT_MS = 15_000;
@@ -29,7 +29,7 @@ class MainBrowser {
     this.browserId = ''; // the id in its /devtools/browser/<id> URL, new per launch
     this.starting = null; // the launch in progress, shared by concurrent callers
     this.stopping = null; // the shutdown in progress, likewise
-    this.lastActive = Date.now(); // last time idle.mjs saw it in use
+    this.closing = false; // gateway shutdown: no subsequent client may start it again
   }
 
   get running() {
@@ -44,9 +44,11 @@ class MainBrowser {
   // stopped (still 'running' until it has exited) is waited for and started
   // anew, instead of handing a client a browser on its way out.
   ensure() {
+    if (this.closing) return Promise.reject(new Error('the gateway is shutting down'));
     if (this.running && !this.stopping) return Promise.resolve();
     this.starting ??= (async () => {
       if (this.stopping) await this.stopping;
+      if (this.closing) throw new Error('the gateway is shutting down');
       if (!this.running) await this.launch();
     })().finally(() => { this.starting = null; });
     return this.starting;
@@ -63,6 +65,8 @@ class MainBrowser {
       for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
         await fs.rm(path.join(MAIN_PROFILE, name), { force: true });
       }
+      const env = await prepareBrowserLaunch(MAIN_PROFILE);
+      await restoreScreen();
       const logFile = createWriteStream(MAIN_LOG, { flags: 'a' });
       // for good, not just while it opens: a later error with no listener
       // would take the gateway down (chromium writes to the file itself)
@@ -73,7 +77,8 @@ class MainBrowser {
       });
       logFile.write(`--- ${new Date().toISOString()} main browser started by the CDP gateway ---\n`);
       let pipe;
-      ({ proc, pipe } = launchChromium(readFlags(MAIN_FLAGS_FILE), logFile, 'main browser'));
+      // Chrome's own startup preferences decide which pages to open.
+      ({ proc, pipe } = launchChromium(readFlags(MAIN_FLAGS_FILE), logFile, 'main browser', env));
       this.proc = proc;
       this.pipe = pipe;
       // a failed spawn is an 'error' event and no 'exit' (unhandled, it would
@@ -99,7 +104,6 @@ class MainBrowser {
       this.version = await browserReady(proc, pipe, STARTUP_TIMEOUT_MS, MAIN_LOG);
       this.browserId = randomUUID();
       this.state = 'running';
-      this.lastActive = Date.now();
       notifyChange();
       log(`main browser up (pid ${proc.pid}, ${Date.now() - t0}ms)`);
     } catch (err) {
@@ -116,12 +120,19 @@ class MainBrowser {
   // SIGTERM exits with code 0 as well but drops what is still in memory
   // (verified: a cookie set seconds before was gone after the restart), so
   // it is only the fallback; the group is killed after a grace period.
-  // One shutdown at a time: the console's Stop, an idle tick (every 15 s
-  // while Browser.close is still underway) and a failed launch all wait for
+  // One shutdown at a time: concurrent Stop requests and a failed launch wait for
   // the same one instead of each sending signals and arming timers of its own.
   stop() {
     this.stopping ??= this.#shutdown().finally(() => { this.stopping = null; });
     return this.stopping;
+  }
+
+  // Unlike the console's Stop, gateway shutdown permanently closes this
+  // instance. Include a launch already awaiting filesystem work/readiness.
+  async close() {
+    this.closing = true;
+    await this.starting?.catch(() => {});
+    await this.stop();
   }
 
   async #shutdown() {

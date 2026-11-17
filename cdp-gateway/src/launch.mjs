@@ -2,8 +2,10 @@
 // main browser (main-browser.mjs) and every context's (contexts.mjs) alike.
 
 import { spawn } from 'node:child_process';
-import { CHROME_BIN } from './config.mjs';
+import { BROWSER_LANGUAGE, CHROME_BIN } from './config.mjs';
 import { CdpPipe } from './pipe.mjs';
+import { prepareLanguage } from './profile.mjs';
+import { resolveLanguage } from './language.mjs';
 import { rememberVersion } from './version.mjs';
 
 const HIDE_WEBDRIVER = 'AutomationControlled';
@@ -33,14 +35,24 @@ export function pipeArgs(flags) {
 // Spawns chromium with its DevTools pipe on fds 3 and 4; output (an open
 // file stream) gets its stdout and stderr. Its own process group, so a kill
 // of the group takes the renderers down too.
-export function launchChromium(flags, output, label) {
+export function launchChromium(flags, output, label, env) {
   const proc = spawn(CHROME_BIN, pipeArgs(flags), {
+    env,
     detached: true,
     stdio: ['ignore', output, output, 'pipe', 'pipe'],
   });
   const pipe = new CdpPipe(proc.stdio[3], proc.stdio[4], label);
   proc.once('exit', () => pipe.close());
   return { proc, pipe };
+}
+
+// Capture one language for both the profile and child environment. The gateway
+// keeps its environment; each new browser process adopts the current setting.
+export async function prepareBrowserLaunch(profile) {
+  const language = resolveLanguage(BROWSER_LANGUAGE);
+  await prepareLanguage(profile, language);
+  const locale = `${language.replaceAll('-', '_')}.UTF-8`;
+  return { ...process.env, LANG: locale, LC_ALL: locale };
 }
 
 // Resolves with Browser.getVersion (kept as pipe.version too) once chromium

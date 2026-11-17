@@ -1,5 +1,5 @@
 // Console live state (WebSocket /console/ws), the console pages' only source
-// of state. A new subscriber gets a snapshot, then only what changed,
+// of live state. A new subscriber gets a snapshot, then only what changed,
 // batched per tick as {ops: [...]}:
 //   {t:'snapshot', max, settings, browsers:[{name, ...fields, tabs, current, thumb}], ai}
 //   {t:'settings', settings}               the server-side settings changed
@@ -20,7 +20,7 @@
 import WebSocket from 'ws';
 import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
-import { MAX_CONTEXTS, HIBERNATED_MAX, CONTEXTS_OVERFLOW } from './config.mjs';
+import { DESKTOP_ENABLED, MAX_CONTEXTS, HIBERNATED_MAX, CONTEXTS_OVERFLOW } from './config.mjs';
 import { contexts } from './contexts.mjs';
 import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
 import { unwatchInput, watchInput, workingTabs } from './input-overlay.mjs';
@@ -209,7 +209,7 @@ export async function subscribe(ws) {
     if (tickTimer) unwatchInput(); // watched since the first subscriber came in
     clearInterval(tickTimer);
     tickTimer = null;
-    unwatchFront();
+    if (DESKTOP_ENABLED) unwatchFront();
     for (const view of views.values()) stopCast(view);
     // the current-tab probes' sessions too (targets.mjs) — once a tick
     // under way is done, or it would probe the tabs again after this
@@ -226,7 +226,7 @@ export async function subscribe(ws) {
   ws.send(JSON.stringify({ ops: [snapshot()] }));
   subscribers.add(ws);
   if (!tickTimer) {
-    watchFront();
+    if (DESKTOP_ENABLED) watchFront();
     watchInput();
     tickTimer = setInterval(runTick, TICK_MS);
     runTick(); // starts the screencasts
