@@ -52,7 +52,7 @@ def run(backend, cdp=True, stream=True):
         args = ["run", "-d", "--name", name, "--shm-size=512m", "-p", "127.0.0.1::80", "-p", "127.0.0.1::9222",
                 "-v", f"{data}:/browser", "-e", f"DISPLAY_BACKEND={'x11' if backend.endswith('x11') else 'wayland'}",
                 "-e", f"ENABLE_SELKIES={str(stream).lower()}", "-e", f"ENABLE_CDP={str(cdp).lower()}",
-                "-e", "SELKIES_SUBFOLDER=/desk", "-e", "AUTH_SETUP_CODE=settings-smoke-code",
+                "-e", "BROWSER_SUBPATH=/desk", "-e", "AUTH_SETUP_CODE=settings-smoke-code",
                 "-e", "RUN_USER=1002:1002",
                 "-e", "SELKIES_EXTRA_ARGS=--enable-resize=false --manual-resolution=true --manual-width=640 --manual-height=480 --audio-on-start=false|locked"]
         for key in LEGACY:
@@ -279,7 +279,7 @@ def run(backend, cdp=True, stream=True):
                 assert args.index("--manual-height=0") > args.index("--manual-height=480"), args
                 # Fixed on by default, without locking the viewer's audio toggle.
                 assert args.index("--audio-on-start=true") > args.index("--audio-on-start=false|locked"), args
-            print(f"Settings smoke OK: {backend}, CDP={cdp}, stream={stream}, authenticated, subfolder, UID=1002", flush=True)
+            print(f"Settings smoke OK: {backend}, CDP={cdp}, stream={stream}, authenticated, subpath, UID=1002", flush=True)
         except BaseException:
             print(docker("logs", "--tail", "60", name), file=sys.stderr)
             try:

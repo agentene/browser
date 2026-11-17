@@ -6,11 +6,11 @@
 #   shell access:    docker compose exec browser bash
 #   rebuild only:    docker compose build
 #
-# Every runtime knob reads from a .env file next to this file (create it with
-# `cp .env.example .env`): values there override the defaults baked in below
-# via ${VAR:-default} substitution. Variables NOT listed under environment:
-# still reach the container through the env_file pass-through (e.g. native
-# SELKIES_* settings).
+# Runtime knobs read from a .env file next to this file (create it with
+# `cp .env.example .env`) or the shell. Most entries below supply Compose
+# defaults via ${VAR:-default}; web path defaults belong to the image, so
+# their entries only forward configured values. Variables NOT listed under
+# environment: still reach the container through env_file (e.g. native SELKIES_*).
 #
 # Ports come in two independent sets, both settable in .env:
 #   * CONTAINER side — what nginx listens on inside the container:
@@ -59,8 +59,8 @@ services:
 
     # Pass everything in .env through to the container as-is; covers variables
     # not explicitly listed under environment: below. `environment:` entries
-    # (which read the same .env via substitution) win on conflict, so both
-    # mechanisms always agree. Missing .env is not an error.
+    # resolve values from the shell or .env and take precedence over env_file.
+    # Missing .env is not an error.
     env_file:
       - path: .env
         required: false
@@ -144,10 +144,11 @@ services:
       # http://host:port/desk/ (slashes optional; empty = site root). An
       # outer reverse proxy mounting it at a subpath must forward the path
       # UNCHANGED (no prefix stripping). / and /desk redirect to /desk/.
-      # Also forward CONSOLE_SUBFOLDER, including its shared __auth/ routes.
-      SELKIES_SUBFOLDER: "${SELKIES_SUBFOLDER:-}"
+      # Also forward CONSOLE_SUBPATH, including its shared __auth/ routes.
+      # Forward optional values from the shell or .env; config.sh supplies defaults.
+      BROWSER_SUBPATH:
       # Console prefix: slashes optional; an explicit empty value means root.
-      CONSOLE_SUBFOLDER: "${CONSOLE_SUBFOLDER-/console}"
+      CONSOLE_SUBPATH:
       # Extra CLI flags passed to `selkies`
       SELKIES_EXTRA_ARGS: "${SELKIES_EXTRA_ARGS:-}"
       # Browser/desktop preferences are configured in the web Settings page,
@@ -180,7 +181,7 @@ services:
       # Every isolated CDP context (browser.newContext(), playwright-cli
       # "isolated": true) gets its own chromium on a clone of the profile above:
       # inherits its logins, shares nothing back; destroyed when the context
-      # closes. Dashboard: http://host:${NGINX_HTTP_PORT}${CONSOLE_SUBFOLDER}/
+      # closes. Dashboard: http://host:${NGINX_HTTP_PORT}${CONSOLE_SUBPATH}/
       # Web page origins that may use the CDP API (comma-separated, * = any),
       # like chromium's --remote-allow-origins; empty = none: any request
       # with an Origin header (a page's WebSocket or fetch) is refused.

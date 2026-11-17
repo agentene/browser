@@ -75,7 +75,7 @@ def smoke(image, user):
     docker("run", "-d", "--name", name, "--restart", "always", "--shm-size=512m",
            "-p", f"127.0.0.1:{web_port}:80", "-p", f"127.0.0.1:{cdp_port}:9222",
            "-e", f"RUN_USER={user}", "-e", "AUTH_SETUP_CODE=restart-smoke",
-           "-e", "SELKIES_SUBFOLDER=/remote", image)
+           "-e", "BROWSER_SUBPATH=/remote", image)
     try:
         info = json.loads(docker("inspect", name))[0]
         ports = info["NetworkSettings"]["Ports"]
@@ -131,7 +131,7 @@ def smoke(image, user):
         docker("exec", "-e", "MODE=check", name, "node", "--input-type=module", "-e", COOKIE_PROBE)
         assert json.loads(docker("exec", name, "node", "-e", "console.log(JSON.stringify(require('fs').readdirSync('/browser/contexts')))")) == []
         assert json.loads(docker("inspect", name))[0]["RestartCount"] == 1
-        print(f"Console container restart OK (RUN_USER={user}, login, API key, cookie, settings, subfolder)", flush=True)
+        print(f"Console container restart OK (RUN_USER={user}, login, API key, cookie, settings, subpath)", flush=True)
     except Exception:
         subprocess.run(["docker", "logs", name], check=False)
         subprocess.run(["docker", "exec", name, "cat", "/tmp/cdp-gateway.log"], check=False)

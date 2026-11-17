@@ -2,8 +2,8 @@
 # nginx.sh — the public front door: web HTTP/HTTPS + CDP endpoint (nginx_start).
 #
 # One nginx instance serves the web HTTP/HTTPS listeners and the public CDP
-# port. CONSOLE_SUBFOLDER goes to CONSOLE_SOCKET; the desktop under
-# SELKIES_SUBFOLDER goes to SELKIES_SOCKET when enabled. The CDP listener
+# port. CONSOLE_SUBPATH goes to CONSOLE_SOCKET; the desktop under
+# BROWSER_SUBPATH goes to SELKIES_SOCKET when enabled. The CDP listener
 # goes only to CDP_GATEWAY_SOCKET. The gateway shares browser state between
 # its two Unix listeners; neither exposes an internal TCP port.
 # Web pages and console operations use the login session (check/web), while
@@ -251,21 +251,21 @@ nginx_web_servers() {
     locations="$(nginx_console_locations)"
     if [ "${ENABLE_SELKIES}" = "true" ]; then
         locations="${locations}
-        location ${SELKIES_SUBFOLDER}/ {
+        location ${BROWSER_SUBPATH}/ {
             proxy_pass http://unix:${SELKIES_SOCKET};
         }
 $(nginx_web_entry_locations)"
-        if [ -n "${SELKIES_SUBFOLDER}" ]; then
+        if [ -n "${BROWSER_SUBPATH}" ]; then
             locations="${locations}
-        location = ${SELKIES_SUBFOLDER} {
+        location = ${BROWSER_SUBPATH} {
             absolute_redirect off;
-            return 301 ${SELKIES_SUBFOLDER}/;
+            return 301 ${BROWSER_SUBPATH}/;
         }"
         fi
     fi
-    if [ -n "${CONSOLE_SUBFOLDER}" ] && { [ "${ENABLE_SELKIES}" != "true" ] || [ -n "${SELKIES_SUBFOLDER}" ]; }; then
-        local entry_path="${CONSOLE_SUBFOLDER}"
-        [ "${ENABLE_SELKIES}" = "true" ] && entry_path="${SELKIES_SUBFOLDER}"
+    if [ -n "${CONSOLE_SUBPATH}" ] && { [ "${ENABLE_SELKIES}" != "true" ] || [ -n "${BROWSER_SUBPATH}" ]; }; then
+        local entry_path="${CONSOLE_SUBPATH}"
+        [ "${ENABLE_SELKIES}" = "true" ] && entry_path="${BROWSER_SUBPATH}"
         locations="${locations}
         location = / {
             absolute_redirect off;
@@ -325,7 +325,7 @@ EOF
 # page's own scripts (dashboard.html contains an inline script).
 nginx_auth_script() {
     [ "${ENABLE_AUTH}" = "true" ] || return 0
-    printf '<script src="%s/client.js"></script>' "${AUTH_SUBFOLDER}"
+    printf '<script src="%s/client.js"></script>' "${AUTH_SUBPATH}"
 }
 
 # HTML entry pages need complete, uncompressed responses for script injection.
@@ -344,11 +344,11 @@ EOF
 # The desktop's entry page uses the configured console namespace for scripts.
 nginx_web_entry_locations() {
     local scripts entry
-    scripts="$(nginx_auth_script)<script src=\"${CONSOLE_SUBFOLDER}/i18n.js\" defer></script><script src=\"${CONSOLE_SUBFOLDER}/settings-ui.js\" defer></script><script src=\"${CONSOLE_SUBFOLDER}/panel.js\" defer></script>"
+    scripts="$(nginx_auth_script)<script src=\"${CONSOLE_SUBPATH}/i18n.js\" defer></script><script src=\"${CONSOLE_SUBPATH}/settings-ui.js\" defer></script><script src=\"${CONSOLE_SUBPATH}/panel.js\" defer></script>"
     if [ "${ENABLE_CDP}" = "true" ]; then
-        scripts="${scripts}<script src=\"${CONSOLE_SUBFOLDER}/overlay.js\" defer></script>"
+        scripts="${scripts}<script src=\"${CONSOLE_SUBPATH}/overlay.js\" defer></script>"
     fi
-    for entry in "${SELKIES_SUBFOLDER}/" "${SELKIES_SUBFOLDER}/index.html"; do
+    for entry in "${BROWSER_SUBPATH}/" "${BROWSER_SUBPATH}/index.html"; do
         cat <<EOF
         location = ${entry} {
 $(nginx_html_filter "${scripts}")
@@ -361,22 +361,22 @@ EOF
 # Map the public prefix to the console socket's fixed internal /console/.
 # Only the entry page receives the common authentication bootstrap.
 nginx_console_locations() {
-    if [ -n "${CONSOLE_SUBFOLDER}" ]; then
+    if [ -n "${CONSOLE_SUBPATH}" ]; then
         cat <<EOF
-        location = ${CONSOLE_SUBFOLDER} {
+        location = ${CONSOLE_SUBPATH} {
             absolute_redirect off;
-            return 302 ${CONSOLE_SUBFOLDER}/\$is_args\$args;
+            return 302 ${CONSOLE_SUBPATH}/\$is_args\$args;
         }
 EOF
     fi
     local scripts
     scripts="$(nginx_auth_script)"
     cat <<EOF
-        location = ${CONSOLE_SUBFOLDER}/ {
+        location = ${CONSOLE_SUBPATH}/ {
 $(if [ -n "${scripts}" ]; then nginx_html_filter "${scripts}"; fi)
             proxy_pass http://unix:${CONSOLE_SOCKET}:/console/;
         }
-        location ${CONSOLE_SUBFOLDER}/ {
+        location ${CONSOLE_SUBPATH}/ {
             proxy_pass http://unix:${CONSOLE_SOCKET}:/console/;
         }
 EOF
@@ -425,19 +425,19 @@ EOF
 # Public account pages and APIs belong exclusively to the web listeners.
 nginx_auth_ui_locations() {
     cat <<EOF
-        location ${AUTH_SUBFOLDER}/ {
+        location ${AUTH_SUBPATH}/ {
             auth_request off;
             absolute_redirect off;
 $(nginx_auth_headers)
-            proxy_set_header X-Auth-Base "${AUTH_SUBFOLDER}/";
-            proxy_set_header X-Auth-Home "${CONSOLE_SUBFOLDER}/";
+            proxy_set_header X-Auth-Base "${AUTH_SUBPATH}/";
+            proxy_set_header X-Auth-Home "${CONSOLE_SUBPATH}/";
             proxy_pass http://unix:${AUTH_SOCKET}:/;
         }
         location @agentene_login {
             auth_request off;
 $(nginx_auth_headers)
-            proxy_set_header X-Auth-Base "${AUTH_SUBFOLDER}/";
-            proxy_set_header X-Auth-Home "${CONSOLE_SUBFOLDER}/";
+            proxy_set_header X-Auth-Base "${AUTH_SUBPATH}/";
+            proxy_set_header X-Auth-Home "${CONSOLE_SUBPATH}/";
             proxy_pass_request_body off;
             proxy_set_header Content-Length "";
             rewrite ^ /page break;

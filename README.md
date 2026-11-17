@@ -84,7 +84,7 @@ docker compose up -d --build
 
 Then:
 
-* **Desktop stream**: <http://localhost:8080> — the Chromium window, live.
+* **Desktop stream**: <http://localhost:8080/browser/> — the Chromium window, live.
 * **Console**: <http://localhost:8080/console/> — browser management and settings, available with desktop streaming disabled too.
 * **CDP endpoint**: <http://localhost:9222/json/version> — for Playwright et al.
 
@@ -188,7 +188,7 @@ How it works:
 * The context's browser lives as long as the context. Closing the context or disconnecting the client (`playwright-cli -s=… close`) destroys it: the process is stopped and its clone deleted. The next session gets a fresh clone, so it always has the main browser's current logins.
 * Every isolated context inherits everything in the profile (cookies, localStorage, IndexedDB, service workers, extensions…) at the moment it starts. Later changes in the main browser do not flow into a running isolated context, and changes in one never flow back.
 
-The CDP console lives at **`http://localhost:8080/console/`**, on the web HTTP/HTTPS listeners and protected by the built-in login. The gateway serves it on `console.sock`, sharing browser state with its separate CDP listener. `CONSOLE_SUBFOLDER` controls its public prefix; console URLs in this guide use the default `/console`. It shows the main browser and every isolated context as a card: on the left a live thumbnail of the tab in front with its title on a banner across the bottom, on the right a scrollable list of all its open tabs with the one in front highlighted. Clicking a tab in the list (or the thumbnail) switches the browser to it and raises its window. The card of the browser whose window is in front on the desktop — what the Selkies stream shows — glows softly and has *Showing* in place of its *Show* button. The cards update live: the page holds a WebSocket (`/console/ws`) over which the gateway pushes only what changed — tabs opened, closed or renamed, another tab in front, a new thumbnail (only while a console is open; at most every 2 seconds for the browser in front on the desktop, every 20 seconds for the others). Each card also offers two actions:
+The CDP console lives at **`http://localhost:8080/console/`**, on the web HTTP/HTTPS listeners and protected by the built-in login. The gateway serves it on `console.sock`, sharing browser state with its separate CDP listener. `CONSOLE_SUBPATH` controls its public prefix; console URLs in this guide use the default `/console`. It shows the main browser and every isolated context as a card: on the left a live thumbnail of the tab in front with its title on a banner across the bottom, on the right a scrollable list of all its open tabs with the one in front highlighted. Clicking a tab in the list (or the thumbnail) switches the browser to it and raises its window. The card of the browser whose window is in front on the desktop — what the Selkies stream shows — glows softly and has *Showing* in place of its *Show* button. The cards update live: the page holds a WebSocket (`/console/ws`) over which the gateway pushes only what changed — tabs opened, closed or renamed, another tab in front, a new thumbnail (only while a console is open; at most every 2 seconds for the browser in front on the desktop, every 20 seconds for the others). Each card also offers two actions:
 
 * *Show* raises that browser window in the Selkies stream.
 * *Delete* force-closes an isolated context and disconnects its client.
@@ -203,7 +203,7 @@ Click the header’s gear to replace the browser cards with a settings page, kee
 
 A browser window that opens on the desktop — e.g. the window of a new isolated context — comes to the front by default, as window managers do. Turn off *New windows to the front* in the same settings page and new windows open behind the one in front instead, so an automation run does not take over the window you are watching; *Show* still brings any window forward. It applies to the windows opened from then on, and is saved on the server: the console's settings live in `/browser/settings/settings.json` (a JSON object by section, e.g. `{"desktop": {"raiseNewWindows": false}}`) on the `/browser` mount, so they survive container restarts and re-creation; they have no environment variables, and the console's `GET` / `PATCH /console/api/settings` read and change them. The language is per viewer and stays in the browser. The switch is available when the desktop service is enabled. On Wayland labwc lowers the new window as it maps, before its first frame; on X11 the screen follower stands in for the missing window manager (Chromium asks it to activate a window instead of raising its own), so nothing gets switched back after the fact.
 
-The same console also sits **next to the live desktop**: move the pointer to the right edge of the Selkies page and click the handle that appears (on touch screens it always shows). Drag the sidebar's left edge to resize it, up to half the page or 1000px, whichever is less (remembered per browser); its cards follow the width, side by side once there is room. The sidebar has the cards and actions of `/console/`; *Show* raises the window right in the stream you are watching. nginx injects the sidebar script (`cdp-gateway/panel.js`) into the Selkies page and uses the same `/console/api/` and `/console/ws` endpoints as the standalone console, independently of `SELKIES_SUBFOLDER`. Both follow the built-in login; the WebSocket also only accepts pages of the same origin. The sidebar is available whenever Selkies is on; without CDP it offers settings only.
+The same console also sits **next to the live desktop**: move the pointer to the right edge of the Selkies page and click the handle that appears (on touch screens it always shows). Drag the sidebar's left edge to resize it, up to half the page or 1000px, whichever is less (remembered per browser); its cards follow the width, side by side once there is room. The sidebar has the cards and actions of `/console/`; *Show* raises the window right in the stream you are watching. nginx injects the sidebar script (`cdp-gateway/panel.js`) into the Selkies page and uses the same `/console/api/` and `/console/ws` endpoints as the standalone console, independently of `BROWSER_SUBPATH`. Both follow the built-in login; the WebSocket also only accepts pages of the same origin. The sidebar is available whenever Selkies is on; without CDP it offers settings only.
 
 **Seeing what an AI agent does.** CDP input (`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`, `Input.insertText`, …) goes straight into the page: the stream shows the page react — hover styles, clicks, typed text — but no pointer moves and no key shows, and native popups follow the desktop's own pointer (a tooltip opens where it rests, not where the agent points). So the Selkies page also draws the CDP clients' input over the stream (**AI input detail**, on by default): a colored pointer per CDP connection (`AI #1`, `AI #2`, …) where it points, a ring for each click (dashed for a right click, `×2` for a double click), an arrow for the wheel, and a line at the bottom left with the key combos it presses (`Ctrl+A`, `Enter`) and the text it types. The gateway sees every client command on its way to the browsers, so this needs no change to the clients or the pages — nothing is injected into them; it maps the viewport's CSS pixels onto the desktop from the window's bounds and the page zoom, and holds each mark back about the stream's latency so it moves with the picture.
 * Text typed into a password, one-time-code or card field (or anywhere inside a frame, where the focused field cannot be told) shows as `••••` with a count. **AI input detail** = `keys` shows only a count for all text; `off` turns the overlay off (the script remains available for live re-enabling, but the gateway watches and sends no input).
@@ -244,22 +244,22 @@ Limits:
 
 ## Watching the desktop
 
-Open <http://localhost:8080>. Selkies streams the virtual display (with audio) straight into the browser tab — keyboard and mouse input go to the container. Chromium always runs with desktop windows, so automation can be watched in the stream. Click **Start browser** in the sidebar to begin manual browsing. Set **Browser language** in the web settings; manage startup pages in Chrome’s own **Settings → On startup**.
+Open <http://localhost:8080/browser/>. Selkies streams the virtual display (with audio) straight into the browser tab — keyboard and mouse input go to the container. Chromium always runs with desktop windows, so automation can be watched in the stream. Click **Start browser** in the sidebar to begin manual browsing. Set **Browser language** in the web settings; manage startup pages in Chrome’s own **Settings → On startup**.
 
 The first visit asks you to set up the administrator login (or to skip it) — see [Login and CDP API key](#login-and-cdp-api-key).
 
 ### Serving under a subpath
 
-Set the desktop and console prefixes independently in `.env`. Leading and trailing slashes are optional, and nested paths are supported:
+Set the desktop and console prefixes independently in `.env` or the shell. The image supplies defaults when they are unset; Compose passes through configured values, including empty ones. Leading and trailing slashes are optional, and nested paths are supported:
 
 ```bash
-SELKIES_SUBFOLDER=/tools/browser
-CONSOLE_SUBFOLDER=/tools/console
+BROWSER_SUBPATH=/tools/browser
+CONSOLE_SUBPATH=/tools/console
 ```
 
 The desktop's page, assets, API and WebSockets live under `/tools/browser/`. The console and sidebar use `/tools/console/`, including `/tools/console/__auth/` for their shared login, account controls and session renewal. nginx redirects either slash-less entry URL to its directory form.
 
-`CONSOLE_SUBFOLDER` defaults to `/console`; an explicitly empty value or `/` puts it at the site root. `SELKIES_SUBFOLDER` defaults to the root. With Selkies enabled, the two prefixes must differ. One may be nested inside the other, provided it does not shadow the containing application's API or resources. If one application is at the root, it supplies `/`; otherwise `/` opens the desktop when enabled, or the console when streaming is disabled.
+`CONSOLE_SUBPATH` defaults to `/console`; an explicitly empty value or `/` puts it at the site root. `BROWSER_SUBPATH` defaults to `/browser`; an explicitly empty value or `/` puts the desktop at the site root. With Selkies enabled, the two prefixes must differ. One may be nested inside the other, provided it does not shadow the containing application's API or resources. If one application is at the root, it supplies `/`; otherwise `/` opens the desktop when enabled, or the console when streaming is disabled.
 
 An outer reverse proxy must forward both namespaces **unchanged**, including the console's `__auth/` routes, and preserve WebSocket headers. The example above can share one proxy location:
 
@@ -342,7 +342,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | ---------------- | ------- | --------------------------------------------------------------------- |
 | `ENABLE_SELKIES` | `true`  | `false` = skip desktop streaming + audio; keep the HTTP/HTTPS console and virtual desktop          |
 | `ENABLE_CDP`     | `true`  | `false` = skip Chromium + public CDP, keep the web settings service (remote-desktop-only container) |
-| `CONSOLE_SUBFOLDER` | `/console` | Public prefix for the console, its API/WebSockets and shared `__auth/` routes; slashes optional, nested paths supported, explicitly empty = site root. See [Serving under a subpath](#serving-under-a-subpath) |
+| `CONSOLE_SUBPATH` | `/console` | Public prefix for the console, its API/WebSockets and shared `__auth/` routes; slashes optional, nested paths supported, explicitly empty = site root. See [Serving under a subpath](#serving-under-a-subpath) |
 | `ENABLE_AUTH`    | `true`  | built-in login for the web UI + CDP console and the optional CDP API key, managed in the console (see [Login and CDP API key](#login-and-cdp-api-key)); `false` = everything open |
 | `AUTH_SETUP_CODE` | *(empty)* | the code the first-start setup form asks for (8+ printable characters, no spaces); empty = a random one on every start, printed in the container log. Set it for scripted setups |
 
@@ -377,7 +377,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `SELKIES_WEBCAM_ON_START` | `false` | `true` \| `false` \| `demand`, like `SELKIES_MICROPHONE_ON_START` |
 | `SELKIES_GAMEPAD_ENABLED` | `true` | gamepad support |
 | `SELKIES_GAMEPAD_ON_START` | `false` | poll the viewer's gamepads from the start; `false` = off until the side menu toggle |
-| `SELKIES_SUBFOLDER`           | *(empty)* | URL path prefix of the desktop, e.g. `/desk` → `http://host:8080/desk/`; empty = site root; must not overlap the console prefix or its resources (see [Serving under a subpath](#serving-under-a-subpath)) |
+| `BROWSER_SUBPATH`           | `/browser` | URL path prefix of the desktop, e.g. `/desk` → `http://host:8080/desk/`; empty = site root; must not overlap the console prefix or its resources (see [Serving under a subpath](#serving-under-a-subpath)) |
 
 **Chromium / CDP**
 

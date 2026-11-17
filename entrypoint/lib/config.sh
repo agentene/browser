@@ -17,8 +17,8 @@
 #   NGINX_LISTEN_ADDR=""           listener address; empty = all interfaces
 #   ALLOWED_HOSTS=""               accepted host names (IP addresses/localhost always work)
 #   PORT_FORWARDS=""               extra nginx proxies: LISTEN=HOST:PORT, space/comma separated
-#   SELKIES_SUBFOLDER=""           desktop path prefix, e.g. /desk
-#   CONSOLE_SUBFOLDER=/console    console path prefix; explicit empty = site root
+#   BROWSER_SUBPATH=/browser      desktop path prefix; explicit empty = site root
+#   CONSOLE_SUBPATH=/console      console path prefix; explicit empty = site root
 #   SELKIES_EXTRA_ARGS=""          extra Selkies arguments (selkies.sh)
 #   DISPLAY_BACKEND=wayland       wayland (labwc) or x11 (Xvfb/picom)
 #   TZ=UTC                        container timezone, inherited by processes
@@ -96,9 +96,9 @@ config_display() {
     esac
 }
 
-# config_subfolder <variable> <default>: both web applications use the same
+# config_subpath <variable> <default>: both web applications use the same
 # URL-safe normalization. An explicitly empty value means the site root.
-config_subfolder() {
+config_subpath() {
     local name="$1" value="$2"
     if [ -v "${name}" ]; then value="${!name}"; fi
     value="${value#"${value%%[!/]*}"}"
@@ -110,32 +110,33 @@ config_subfolder() {
     printf -v "${name}" '%s' "${value:+/${value}}"
 }
 
-# Sets SELKIES_SUBFOLDER / CONSOLE_SUBFOLDER and the derived AUTH_SUBFOLDER.
+# Sets BROWSER_SUBPATH / CONSOLE_SUBPATH and the derived AUTH_SUBPATH.
+# Startup and health checks share these defaults, normalization and validation.
 # Nested application prefixes are fine; they must not shadow the containing
 # application's own resources, API or WebSocket paths.
 config_web_paths() {
-    config_subfolder SELKIES_SUBFOLDER ""
-    config_subfolder CONSOLE_SUBFOLDER /console
-    AUTH_SUBFOLDER="${CONSOLE_SUBFOLDER}/__auth"
-    [ "${ENABLE_SELKIES}" = "true" ] || return 0
-    if [ "${SELKIES_SUBFOLDER}" = "${CONSOLE_SUBFOLDER}" ]; then
-        die "SELKIES_SUBFOLDER and CONSOLE_SUBFOLDER must use different paths"
+    config_subpath BROWSER_SUBPATH /browser
+    config_subpath CONSOLE_SUBPATH /console
+    AUTH_SUBPATH="${CONSOLE_SUBPATH}/__auth"
+    [ "${ENABLE_SELKIES:-true}" = "true" ] || return 0
+    if [ "${BROWSER_SUBPATH}" = "${CONSOLE_SUBPATH}" ]; then
+        die "BROWSER_SUBPATH and CONSOLE_SUBPATH must use different paths"
     fi
     local child
-    case "${SELKIES_SUBFOLDER}" in
-        "${CONSOLE_SUBFOLDER}/"*)
-            child="${SELKIES_SUBFOLDER#"${CONSOLE_SUBFOLDER}/"}"
+    case "${BROWSER_SUBPATH}" in
+        "${CONSOLE_SUBPATH}/"*)
+            child="${BROWSER_SUBPATH#"${CONSOLE_SUBPATH}/"}"
             case "${child}" in
                 api|api/*|ws|ws/*|overlay|overlay/*|__auth|__auth/*|i18n.js|i18n.js/*|settings-ui.js|settings-ui.js/*|panel.js|panel.js/*|overlay.js|overlay.js/*)
-                    die "SELKIES_SUBFOLDER='${SELKIES_SUBFOLDER}' overlaps a console resource" ;;
+                    die "BROWSER_SUBPATH='${BROWSER_SUBPATH}' overlaps a console resource" ;;
             esac ;;
     esac
-    case "${CONSOLE_SUBFOLDER}" in
-        "${SELKIES_SUBFOLDER}/"*)
-            child="${CONSOLE_SUBFOLDER#"${SELKIES_SUBFOLDER}/"}"
+    case "${CONSOLE_SUBPATH}" in
+        "${BROWSER_SUBPATH}/"*)
+            child="${CONSOLE_SUBPATH#"${BROWSER_SUBPATH}/"}"
             case "${child}" in
                 api|api/*|assets|assets/*|index.html|index.html/*)
-                    die "CONSOLE_SUBFOLDER='${CONSOLE_SUBFOLDER}' overlaps a desktop resource" ;;
+                    die "CONSOLE_SUBPATH='${CONSOLE_SUBPATH}' overlaps a desktop resource" ;;
             esac ;;
     esac
 }

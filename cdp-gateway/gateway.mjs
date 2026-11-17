@@ -40,7 +40,7 @@
 // also read once on load so a closed sidebar uses the saved language. Its
 // actions are POST/DELETE /console/api/<name>… and PATCH /console/api/settings; plus the sidebar script
 // nginx injects into the Selkies page (panel.js). All console requests use
-// the web listener at CONSOLE_SUBFOLDER and its dedicated Unix socket.
+// the web listener at CONSOLE_SUBPATH and its dedicated Unix socket.
 // nginx maps that public prefix to the internal /console/ routes below.
 //
 // The modules, in src/:

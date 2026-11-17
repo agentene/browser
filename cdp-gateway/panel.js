@@ -3,8 +3,8 @@
 // delete; start/stop of the main browser) next to the live desktop.
 //
 // nginx injects it into the Selkies entry page (sub_filter before </head>,
-// entrypoint/lib/nginx.sh) and maps CONSOLE_SUBFOLDER to the console socket.
-// Its script URL supplies the API base, independently of SELKIES_SUBFOLDER. Same origin as
+// entrypoint/lib/nginx.sh) and maps CONSOLE_SUBPATH to the console socket.
+// Its script URL supplies the API base, independently of BROWSER_SUBPATH. Same origin as
 // Selkies on purpose: nginx checks the built-in login's session cookie
 // (ENABLE_AUTH). Its settings page also carries the built-in
 // login's controls through the shared AgenteneAuthClient injected by nginx.

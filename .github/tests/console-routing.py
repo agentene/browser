@@ -75,17 +75,24 @@ def free_ports():
             item.close()
 
 
-def smoke(label, stream, cdp, prefix, user, https, auth, backend="wayland", host=False, console_prefix="/console"):
+def smoke(label, stream, cdp, prefix, user, https, auth, backend="wayland", host=False, console_prefix=None):
     name = f"console-routing-{os.getpid()}-{label}"
-    console_path = "/" + console_prefix.strip("/") if console_prefix.strip("/") else ""
+    desktop_value = "/browser" if prefix is None else prefix
+    desktop_path = "/" + desktop_value.strip("/") if desktop_value.strip("/") else ""
+    console_value = "/console" if console_prefix is None else console_prefix
+    console_path = "/" + console_value.strip("/") if console_value.strip("/") else ""
     auth_path = console_path + "/__auth/"
     http_port, https_port, cdp_port = free_ports() if host else (18080, 18443, 19222)
     args = ["run", "-d", "--name", name, "--shm-size=512m",
             "-e", f"ENABLE_SELKIES={str(stream).lower()}", "-e", f"ENABLE_CDP={str(cdp).lower()}",
             "-e", f"ENABLE_HTTPS={str(https).lower()}", "-e", f"ENABLE_AUTH={str(auth).lower()}",
-            "-e", f"SELKIES_SUBFOLDER={prefix}", "-e", f"CONSOLE_SUBFOLDER={console_prefix}", "-e", f"RUN_USER={user}", "-e", f"DISPLAY_BACKEND={backend}",
+            "-e", f"RUN_USER={user}", "-e", f"DISPLAY_BACKEND={backend}",
             "-e", "AUTH_SETUP_CODE=routing-test", "-e", f"NGINX_LISTEN_HTTP_PORT={http_port}",
             "-e", f"NGINX_LISTEN_HTTPS_PORT={https_port}", "-e", f"CDP_LISTEN_PORT={cdp_port}"]
+    if prefix is not None:
+        args += ["-e", f"BROWSER_SUBPATH={prefix}"]
+    if console_prefix is not None:
+        args += ["-e", f"CONSOLE_SUBPATH={console_prefix}"]
     if host:
         args += ["--network", "host", "-e", "NGINX_LISTEN_ADDR=127.0.0.1"]
     else:
@@ -144,19 +151,27 @@ def smoke(label, stream, cdp, prefix, user, https, auth, backend="wayland", host
             websocket(origin + console_path + "/overlay", 101 if cdp and stream else 404, cookie, origin)
             request(viewer, origin + console_path + "/json/version", 404)
             websocket(origin + console_path + "/devtools/browser/x", 404, cookie, origin)
+            if console_path and (not stream or desktop_path):
+                headers, _ = request(viewer, origin + "/", 302)
+                assert headers["Location"] == (desktop_path if stream else console_path) + "/"
+            else:
+                request(viewer, origin + "/")
             if stream:
-                _, page = request(viewer, origin + prefix + "/")
+                if desktop_path:
+                    headers, _ = request(viewer, origin + desktop_path, 301)
+                    assert headers["Location"] == desktop_path + "/"
+                _, page = request(viewer, origin + desktop_path + "/")
                 assert f'src="{console_path}/panel.js"'.encode() in page
                 assert (f'src="{console_path}/overlay.js"'.encode() in page) == cdp
                 assert page.count(bootstrap) == (1 if auth else 0)
-                request(viewer, origin + prefix + "/api/sessions")
+                request(viewer, origin + desktop_path + "/api/sessions")
+                websocket(origin + desktop_path + "/api/websockets", 101, cookie, origin)
+                websocket(origin + desktop_path + "/api/websockets", 403, cookie, "https://evil.example")
+                if auth:
+                    request(anonymous, origin + desktop_path + "/", 401)
+                    websocket(origin + desktop_path + "/api/websockets", 401)
             else:
-                if console_path:
-                    headers, _ = request(viewer, origin + "/", 302)
-                    assert headers["Location"] == console_path + "/"
-                else:
-                    request(viewer, origin + "/")
-                request(viewer, origin + prefix + "/", 404)
+                request(viewer, origin + desktop_path + "/", 404)
         docker("exec", name, "test", "-S", "/tmp/agentene/console.sock")
         if cdp:
             key = {"X-API-Key": "routing-api-key"} if auth else {}
@@ -195,17 +210,18 @@ for console_prefix, desktop_prefix in [("/console", "/console"), ("/console", "/
                                        ("/desk/api/admin", "/desk"), ("", ""), ("", "/__auth"), ("", "/api"),
                                        ("/index.html", ""), ("/api/admin", ""), ("/assets", ""),
                                        ("/bad/../path", "/browser"), ("/bad//path", "/browser"), ("/bad path", "/browser")]:
-    result = subprocess.run(["docker", "run", "--rm", "-e", f"SELKIES_SUBFOLDER={desktop_prefix}",
-                             "-e", f"CONSOLE_SUBFOLDER={console_prefix}", IMAGE], capture_output=True, text=True, check=False)
+    result = subprocess.run(["docker", "run", "--rm", "-e", f"BROWSER_SUBPATH={desktop_prefix}",
+                             "-e", f"CONSOLE_SUBPATH={console_prefix}", IMAGE], capture_output=True, text=True, check=False)
     assert result.returncode != 0 and "ERROR" in result.stdout + result.stderr, result.stdout + result.stderr
 result = subprocess.run(["docker", "run", "--rm", "-e", "ENABLE_SELKIES=false", "-e", "CDP_LISTEN_PORT=80", IMAGE], capture_output=True, text=True, check=False)
 assert result.returncode != 0 and "used more than once" in result.stdout + result.stderr, result.stdout + result.stderr
 result = subprocess.run(["docker", "run", "--rm", "-e", "ENABLE_SELKIES=false", "-e", "ENABLE_CDP=false", IMAGE], capture_output=True, text=True, check=False)
 assert result.returncode != 0 and "nothing to start" in result.stdout + result.stderr, result.stdout + result.stderr
 
+smoke("defaults", True, True, None, "browser", False, True)
 smoke("root", True, True, "", "browser", False, True)
 smoke("settings-x11", True, False, "/browser", "1002:1002", False, True, backend="x11")
-smoke("nested-tls", True, True, "/tools/desk", "browser", True, True, console_prefix="tools/admin///")
+smoke("nested-tls", True, True, "tools/desk///", "browser", True, True, console_prefix="tools/admin///")
 smoke("console-tls", False, True, "/browser", "0", True, True, console_prefix="/admin")
 smoke("host", False, True, "/browser", "browser", False, False, host=True, console_prefix="/control")
 smoke("root-console", True, True, "/browser", "browser", False, True, console_prefix="")

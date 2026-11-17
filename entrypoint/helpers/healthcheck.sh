@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Check public routes without launching Chromium. Use the same prefix
-# normalization as startup, including explicit empty/root prefixes.
+# Check public routes without launching Chromium. Use the same path defaults,
+# normalization and validation as startup, including explicit empty/root paths.
 set -uo pipefail
 
 # shellcheck source=entrypoint/lib/common.sh
@@ -8,8 +8,7 @@ set -uo pipefail
 # shellcheck source=entrypoint/lib/config.sh
 . /usr/local/lib/docker-entrypoint/lib/config.sh
 
-config_subfolder CONSOLE_SUBFOLDER /console
-config_subfolder SELKIES_SUBFOLDER ""
+config_web_paths
 
 probe() {
     local status
@@ -21,9 +20,9 @@ probe() {
     esac
 }
 
-probe "http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}${CONSOLE_SUBFOLDER}/api/settings" || exit 1
+probe "http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}${CONSOLE_SUBPATH}/api/settings" || exit 1
 if [ "${ENABLE_SELKIES:-true}" = true ]; then
-    probe "http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}${SELKIES_SUBFOLDER}/" redirect || exit 1
+    probe "http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}${BROWSER_SUBPATH}/" redirect || exit 1
 fi
 if [ "${ENABLE_CDP:-true}" = true ]; then
     probe "http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/json/list" || exit 1

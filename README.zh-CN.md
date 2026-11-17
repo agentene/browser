@@ -84,7 +84,7 @@ docker compose up -d --build
 
 然后:
 
-* **桌面串流**:<http://localhost:8080> —— Chromium 窗口实时画面。
+* **桌面串流**:<http://localhost:8080/browser/> —— Chromium 窗口实时画面。
 * **控制台**:<http://localhost:8080/console/> —— 浏览器管理与设置,关闭桌面串流后也可使用。
 * **CDP 端点**:<http://localhost:9222/json/version> —— 供 Playwright 等客户端连接。
 
@@ -188,7 +188,7 @@ await browser.close();  // 只关闭 CDP 会话,不关浏览器
 * context 背后的浏览器与 context 同生共死。关闭 context 或客户端断开(`playwright-cli -s=… close`)即销毁它:结束进程、删除克隆。下一个 session 会得到全新的克隆,因此总是带着主浏览器当前的登录态。
 * 每个隔离 context 继承的是它启动那一刻 profile 里的全部内容(cookie、localStorage、IndexedDB、Service Worker、扩展……)。之后主浏览器的变化不会流入正在运行的隔离 context,隔离 context 里的改动也永远不会流回主浏览器。
 
-CDP 控制台在 **`http://localhost:8080/console/`**,由 Web HTTP/HTTPS 入口提供,跟随内置登录。网关通过 `console.sock` 提供控制台,与独立的 CDP 监听器共享浏览器状态。`CONSOLE_SUBFOLDER` 控制公开路径前缀;本指南中的控制台 URL 使用默认的 `/console`。主浏览器和每个隔离 context 各占一张卡片:左边是当前 tab 的实时缩略图,标题显示在缩略图底部的半透明横幅里;右边是一个与缩略图等高、可滚动的列表,列出所有打开的 tab,当前 tab 高亮。点列表里的 tab(或缩略图)会让浏览器切换到该 tab,并把窗口提到最前。窗口当前在桌面最前面(也就是 Selkies 画面里看到的)的那个浏览器,卡片会带一圈柔和的辉光,*Show* 按钮的位置换成 *Showing* 标记。卡片实时更新:页面与网关之间保持一条 WebSocket(`/console/ws`),网关只推送变化的部分 —— tab 打开、关闭或改名,当前 tab 切换,新的缩略图(只在有控制台打开时生成;桌面最前面的浏览器最多每 2 秒一张,其他浏览器最多每 20 秒一张)。每张卡片还提供两个操作:
+CDP 控制台在 **`http://localhost:8080/console/`**,由 Web HTTP/HTTPS 入口提供,跟随内置登录。网关通过 `console.sock` 提供控制台,与独立的 CDP 监听器共享浏览器状态。`CONSOLE_SUBPATH` 控制公开路径前缀;本指南中的控制台 URL 使用默认的 `/console`。主浏览器和每个隔离 context 各占一张卡片:左边是当前 tab 的实时缩略图,标题显示在缩略图底部的半透明横幅里;右边是一个与缩略图等高、可滚动的列表,列出所有打开的 tab,当前 tab 高亮。点列表里的 tab(或缩略图)会让浏览器切换到该 tab,并把窗口提到最前。窗口当前在桌面最前面(也就是 Selkies 画面里看到的)的那个浏览器,卡片会带一圈柔和的辉光,*Show* 按钮的位置换成 *Showing* 标记。卡片实时更新:页面与网关之间保持一条 WebSocket(`/console/ws`),网关只推送变化的部分 —— tab 打开、关闭或改名,当前 tab 切换,新的缩略图(只在有控制台打开时生成;桌面最前面的浏览器最多每 2 秒一张,其他浏览器最多每 20 秒一张)。每张卡片还提供两个操作:
 
 * 「Show」把对应浏览器窗口提到 Selkies 画面最前;
 * 「Delete」强制关闭隔离 context 并断开它的客户端。
@@ -203,7 +203,7 @@ CDP 控制台在 **`http://localhost:8080/console/`**,由 Web HTTP/HTTPS 入口�
 
 桌面上新打开的浏览器窗口(例如新隔离 context 的窗口)默认会切到最前,和一般窗口管理器的行为一样。在同一个配置页里关闭 *新窗口切到最前*,之后新窗口就会开在当前最前窗口的后面,自动化任务不会抢走你正在看的窗口;「Show」仍然可以把任意窗口切到最前。开关只影响之后新打开的窗口,并保存在服务端:控制台的设置存放在 `/browser` 挂载下的 `/browser/settings/settings.json`(按分组组织的 JSON 对象,例如 `{"desktop": {"raiseNewWindows": false}}`),容器重启或重建后依然保留;这些设置没有对应的环境变量,控制台通过 `GET` / `PATCH /console/api/settings` 读取和修改。语言设置因人而异,仍保存在各自的浏览器里。桌面服务开启时可使用这个开关。Wayland 下由 labwc 在新窗口映射时、画出第一帧之前把它放到底层;X11 下由屏幕跟随进程代替缺失的窗口管理器(Chromium 改为请求它激活窗口,而不是自己置顶),因此不存在事后再切回去的过程。
 
-同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,使用与独立控制台相同的 `/console/api/` 和 `/console/ws` 入口,不依赖 `SELKIES_SUBFOLDER`。两者都跟随内置登录;WebSocket 还只接受同源页面的连接。Selkies 启用时侧边栏就会出现；关闭 CDP 时提供配置入口。
+同一个控制台也放在了**实时桌面旁边**:把鼠标移到 Selkies 页面的右边缘,点出现的拉手即可展开(触屏上拉手常显)。拖动侧边栏的左边缘可以调整宽度,最宽为页面宽度的一半或 1000px(取较小者,按浏览器记住),卡片随宽度自适应,空间足够时并排显示。侧边栏提供与 `/console/` 相同的卡片和操作;*Show* 会直接在你正在看的串流里置顶对应窗口。nginx 把侧边栏脚本(`cdp-gateway/panel.js`)注入 Selkies 页面,使用与独立控制台相同的 `/console/api/` 和 `/console/ws` 入口,不依赖 `BROWSER_SUBPATH`。两者都跟随内置登录;WebSocket 还只接受同源页面的连接。Selkies 启用时侧边栏就会出现；关闭 CDP 时提供配置入口。
 
 **看到 AI Agent 在做什么。** CDP 输入(`Input.dispatchMouseEvent`、`Input.dispatchKeyEvent`、`Input.insertText` 等)直接送进页面:串流里能看到页面的反应(悬停样式、点击效果、输入的文字),却看不到指针移动和按键,原生弹出物也跟着桌面自己的指针走(tooltip 出现在桌面指针停留的位置,而不是 Agent 指向的位置)。因此 Selkies 页面会在串流上叠加画出 CDP 客户端的输入(**AI 操作展示**,默认开启):每个 CDP 连接一个彩色指针(`AI #1`、`AI #2`……),每次点击一个圆环(右键为虚线、双击标 `×2`),滚轮显示箭头,左下角一行显示它按下的组合键(`Ctrl+A`、`Enter`)和输入的文字。网关本来就会经手每条发往浏览器的客户端命令,所以客户端和页面都不需要任何改动,也不会往页面里注入任何东西;网关根据窗口位置和页面缩放把视口的 CSS 像素换算到桌面坐标,并把每个标记延迟约一个串流延迟再画,让它和画面同步。
 * 在密码、一次性验证码、银行卡字段里(或焦点在 frame 内、无法判断是哪个字段时)输入的文字显示为 `••••` 加字数。**AI 操作展示** = `keys` 对所有文字都只显示字数;`off` 关闭叠加层(脚本保留以便在线重新开启，网关停止观察和发送输入)。
@@ -244,22 +244,22 @@ CDP 控制台在 **`http://localhost:8080/console/`**,由 Web HTTP/HTTPS 入口�
 
 ## 观看桌面
 
-打开 <http://localhost:8080>。Selkies 把虚拟显示器画面(含音频)直接串流到浏览器标签页 —— 键盘鼠标输入会送进容器。Chromium 始终使用桌面窗口运行，可以在串流中观看自动化操作。手动浏览时，在侧栏点击 **Start browser**。**浏览器语言**在 Web 配置页选择，启动页交给 Chrome 自带的**设置 → 启动时**管理。
+打开 <http://localhost:8080/browser/>。Selkies 把虚拟显示器画面(含音频)直接串流到浏览器标签页 —— 键盘鼠标输入会送进容器。Chromium 始终使用桌面窗口运行，可以在串流中观看自动化操作。手动浏览时，在侧栏点击 **Start browser**。**浏览器语言**在 Web 配置页选择，启动页交给 Chrome 自带的**设置 → 启动时**管理。
 
 首次访问时会要求设置管理员账号(或选择跳过)—— 见[登录与 CDP API Key](#登录与-cdp-api-key)。
 
 ### 挂载到子路径
 
-在 `.env` 中分别设置桌面和控制台的路径前缀。首尾斜杠可选,也支持多级路径:
+在 `.env` 或 shell 中分别设置桌面和控制台的路径前缀。未设置时由镜像提供默认值;Compose 透传已设置的值,包括空字符串。首尾斜杠可选,也支持多级路径:
 
 ```bash
-SELKIES_SUBFOLDER=/tools/browser
-CONSOLE_SUBFOLDER=/tools/console
+BROWSER_SUBPATH=/tools/browser
+CONSOLE_SUBPATH=/tools/console
 ```
 
 桌面的页面、静态资源、API 和 WebSocket 都在 `/tools/browser/` 下。独立控制台和侧栏共用 `/tools/console/`,其中 `/tools/console/__auth/` 提供统一的登录、账号管理和会话续期。访问不带末尾斜杠的入口时,nginx 会重定向到对应目录地址。
 
-`CONSOLE_SUBFOLDER` 默认是 `/console`;显式设置为空或 `/` 表示站点根目录。`SELKIES_SUBFOLDER` 默认在根目录。启用 Selkies 时,两个前缀必须不同。允许一个位于另一个之下,但不能覆盖外层应用的 API 或资源路径。一个应用在根目录时,它提供 `/`;否则 `/` 在串流开启时打开桌面,关闭时打开控制台。
+`CONSOLE_SUBPATH` 默认是 `/console`;显式设置为空或 `/` 表示站点根目录。`BROWSER_SUBPATH` 默认是 `/browser`;显式设置为空或 `/` 表示把桌面放在站点根目录。启用 Selkies 时,两个前缀必须不同。允许一个位于另一个之下,但不能覆盖外层应用的 API 或资源路径。一个应用在根目录时,它提供 `/`;否则 `/` 在串流开启时打开桌面,关闭时打开控制台。
 
 外层反向代理必须**原样**转发这两组路径,包含控制台下的 `__auth/`,并保留 WebSocket 头。上面的配置可以共用一个代理位置:
 
@@ -342,7 +342,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | ---------------- | ------ | -------------------------------------------------- |
 | `ENABLE_SELKIES` | `true` | `false` = 跳过桌面串流 + 音频，保留 HTTP/HTTPS 控制台和虚拟桌面 |
 | `ENABLE_CDP`     | `true` | `false` = 跳过 Chromium + 公共 CDP，保留 Web 配置服务(纯远程桌面容器) |
-| `CONSOLE_SUBFOLDER` | `/console` | 控制台及其 API、WebSocket 和共享 `__auth/` 接口的公开路径前缀;首尾斜杠可选,支持多级路径,显式为空表示站点根目录。见[挂载到子路径](#挂载到子路径) |
+| `CONSOLE_SUBPATH` | `/console` | 控制台及其 API、WebSocket 和共享 `__auth/` 接口的公开路径前缀;首尾斜杠可选,支持多级路径,显式为空表示站点根目录。见[挂载到子路径](#挂载到子路径) |
 | `ENABLE_AUTH`    | `true` | web UI + CDP 控制台的内置登录,以及可选的 CDP API Key,均在控制台中管理(见[登录与 CDP API Key](#登录与-cdp-api-key));`false` = 全部开放 |
 | `AUTH_SETUP_CODE` | *(空)* | 首次启动的初始化表单要求输入的设置码(至少 8 个可见字符,不含空格);空 = 每次启动随机生成一个并打印在容器日志里。脚本化初始化时可以设置它 |
 
@@ -377,7 +377,7 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `SELKIES_WEBCAM_ON_START` | `false` | `true` \| `false` \| `demand`,同 `SELKIES_MICROPHONE_ON_START` |
 | `SELKIES_GAMEPAD_ENABLED` | `true` | 游戏手柄支持 |
 | `SELKIES_GAMEPAD_ON_START` | `false` | 一开始就轮询观看端手柄;`false` = 需在侧边栏手动打开 |
-| `SELKIES_SUBFOLDER`           | *(空)*    | 桌面的 URL 路径前缀,如 `/desk` → `http://host:8080/desk/`;空 = 站点根路径；不能与控制台前缀或资源路径冲突(见[挂载到子路径](#挂载到子路径)) |
+| `BROWSER_SUBPATH`           | `/browser` | 桌面的 URL 路径前缀,如 `/desk` → `http://host:8080/desk/`;空 = 站点根路径；不能与控制台前缀或资源路径冲突(见[挂载到子路径](#挂载到子路径)) |
 
 **Chromium / CDP**
 

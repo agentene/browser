@@ -27,7 +27,7 @@ runtime smoke tests.
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | The commonly changed runtime knobs, documented (the full reference is the READMEs' Configuration section + `entrypoint/lib/config.sh`) |
-| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`CONSOLE_SUBFOLDER`, default `/console/`, on the web port, served by the dedicated console socket), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies is on (settings-only without CDP)), `overlay.js` (the CDP clients' input — pointer, clicks, keys, typed text — drawn over the Selkies stream, injected next to the sidebar; fed by `src/input-overlay.mjs`, `CDP_INPUT_OVERLAY`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X browser windows, topmost first, with their titles — the console's front marker and current tab) |
+| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`CONSOLE_SUBPATH`, default `/console/`, on the web port, served by the dedicated console socket), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies is on (settings-only without CDP)), `overlay.js` (the CDP clients' input — pointer, clicks, keys, typed text — drawn over the Selkies stream, injected next to the sidebar; fed by `src/input-overlay.mjs`, `CDP_INPUT_OVERLAY`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X browser windows, topmost first, with their titles — the console's front marker and current tab) |
 | `auth-server/` | Built-in login + CDP API key (`ENABLE_AUTH=true`, default): `server.mjs` (dependency-free Node service on a unix socket that nginx asks about every web UI / console request — `check/web`, a session cookie — and every CDP request — `check/cdp`, the API key once one is set — via `auth_request`; also serves the setup/login form nginx shows in place on 401, the account page and the auth API under `<console prefix>/__auth/` on the web listeners), `src/` (`store.mjs`: `/browser/settings/auth.json`, scrypt/SHA-256 hashes, sessions; `secrets.mjs`; `limiter.mjs`), `page.html` (setup/login/account page), `ui.js` (the shared *Access* rows + dialogs), `client.js` (nginx injects this shared authentication bootstrap into both entry pages; it mounts `ui.js`, synchronizes language and renews the session via `api/renew`, idle tabs included), `test/` (`node --test`, not shipped) |
 | `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Git release tags are `v<VERSION>` (code releases; a Chrome bump publishes only the `<VERSION>-<chrome-version>` image tag) — see [Releases](#releases) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + the README build-arg tables together |
@@ -55,6 +55,7 @@ npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit te
 for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/client.js; do node --check "$f"; done
 npm test --prefix auth-server                                  # auth server unit tests (no deps)
 python3 -m py_compile entrypoint/helpers/*.py .github/tests/*.py
+python3 .github/tests/compose-paths.py                         # unset/empty/override forwarding
 docker build --check .
 ```
 
@@ -72,7 +73,7 @@ docker rm -f cdp-smoke
 # Web-UI path (CDP off)
 docker run -d --name web-smoke -p 8080:80 -e ENABLE_CDP=false \
   agentene/browser:latest
-curl -sf http://127.0.0.1:8080/ | grep -qi '<html'
+curl -sf http://127.0.0.1:8080/browser/ | grep -qi '<html'
 docker rm -f web-smoke
 ```
 
@@ -181,7 +182,7 @@ node update-chrome-node.mjs --node 22        # force the Node major
   `auth_request` to the auth service's `check/web`, the CDP API through
   `check/cdp`; on a web 401 nginx serves the auth service's page in place
   (no redirects); a CDP 401 is JSON. Public account routes live only at
-  the web listener's `<CONSOLE_SUBFOLDER>/__auth/`. Its own
+  the web listener's `<CONSOLE_SUBPATH>/__auth/`. Its own
   locations are exempt (`auth_request off`). The CDP API stays open while no
   API key is set, so CDP clients never need changes by default; the session
   cookie never opens the CDP API. Its state is console-managed in
@@ -252,16 +253,18 @@ The gateway also provides settings-only mode with `ENABLE_CDP=false`: it stays
 supervised on `console.sock`, serves the console settings and restart action,
 and refuses browser operations. Neither the CDP socket nor its public listener
 is opened in that mode. The web HTTP listener (and HTTPS when enabled) always
-serves `CONSOLE_SUBFOLDER` (default `/console`), including with Selkies disabled. The gateway uses distinct
+serves `CONSOLE_SUBPATH` (default `/console`), including with Selkies disabled. The gateway uses distinct
 HTTP and WebSocket handlers for its two sockets; never select a handler from a
 request header. nginx maps the public console prefix to the socket's fixed
 internal `/console/`; internal probes and stop hooks use that socket path.
-`SELKIES_SUBFOLDER` controls only the desktop. Both prefixes share validation,
+`BROWSER_SUBPATH` controls only the desktop (default `/browser`). Both prefixes share validation,
 allow explicit empty/root values and reject conflicting namespaces. The sidebar
 uses the console's configured public prefix; both pages share the authentication
 client under that prefix's `__auth/`. The Compose healthcheck is the shared
-`entrypoint/helpers/healthcheck.sh`, which normalizes the same prefixes and reads
-container-side listen ports. The sidebar remains on the web UI. Settings writes require a revision; reductions
+`entrypoint/helpers/healthcheck.sh`, which calls `config_web_paths` for the same
+path defaults, normalization and validation, and reads container-side listen ports.
+Compose forwards optional path values without defining their defaults. The sidebar
+remains on the web UI. Settings writes require a revision; reductions
 that delete sleepers also require confirmation bound to the exact removal list.
 
 ## Releases
