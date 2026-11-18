@@ -17,6 +17,7 @@ import { killGroup, log, sleep } from './util.mjs';
 import { ContextSession } from './context-session.mjs';
 import { captureTabs, nativeRestore, restoreTabs, parkSessionFiles, finishSessionFiles } from './context-restore.mjs';
 import { pageInfos } from './targets.mjs';
+import { CdpClient } from './cdp-client.mjs';
 
 const STARTUP_TIMEOUT_MS = 15_000;
 
@@ -74,6 +75,7 @@ export class Context {
     this.waking = null;
     this.wakeActive = false;
     this.hibernating = null;
+    this.closing = null;
     this.destroying = null;
     this.alive = () => true;
   }
@@ -104,6 +106,8 @@ export class Context {
     } catch (err) {
       log(`${this.name}: localStorage restore skipped: ${err.message}`);
     }
+    if (this.destroyed) throw new Error('isolated CDP context exited during startup');
+    await this.watchPages();
     log(`${this.name}: up (pid ${this.proc?.pid}; clone ${tClone - t0}ms, total ${Date.now() - t0}ms; synced from main: ${cookies} cookies, localStorage of ${origins} open origin(s))`);
   }
 
@@ -117,7 +121,8 @@ export class Context {
     let flags = readFlags();
     flags = flags.concat([
       `--user-data-dir=${this.profile}`,
-      // With the debugging pipe, this also keeps Chromium and its profile alive after the last window closes. Native restore is triggered explicitly in restoreTabs().
+      // Start empty; restoreTabs() explicitly opens a window for native restore.
+      // The pipe keeps an empty Chromium alive, so watchPages() handles last-tab closure.
       '--no-startup-window',
       ...(restore ? ['--restore-last-session'] : []),
       ...this.proxy,
@@ -165,6 +170,64 @@ export class Context {
     return this.session;
   }
 
+  async watchPages() {
+    const pipe = this.pipe;
+    const client = await CdpClient.connect(pipe);
+    const pages = new Set();
+    client.on('Target.targetCreated', ({ targetInfo }) => pages.add(targetInfo.targetId));
+    client.on('Target.targetDestroyed', ({ targetId }) => {
+      // A fresh context starts empty. Only the loss of its last page closes it;
+      // worker shutdown and the temporary tabs used during restore do not.
+      if (!pages.delete(targetId) || pages.size || this.pipe !== pipe || this.state !== 'running') return;
+      this.closeEmpty().catch((err) => log(`${this.name}: closing empty browser: ${err.message}`));
+    });
+    await client.send('Target.setDiscoverTargets', { discover: true, filter: [{ type: 'page' }] });
+  }
+
+  closeEmpty() {
+    if (this.closing) return this.closing;
+    // Closing only releases capacity. Run outside the registry queue so a
+    // creation waiting for that slot cannot deadlock the close behind itself.
+    this.closing = Promise.resolve().then(async () => {
+      while (this.holds && this.state === 'running' && !this.destroyed) await sleep(20);
+      if (this.destroyed || this.state !== 'running') return;
+      // Incognito contexts cannot survive a process replacement, even empty ones.
+      if (this.mux?.innerContexts.size || this.session?.blockedReason) return;
+      this.state = 'closing';
+      if (this.session) this.session.mode = 'quiescing';
+      try {
+        // Fence commands already sent before quiescing. A concurrently opened
+        // page wins; never stop a browser based only on an old destruction event.
+        if ((await pageInfos(this.pipe)).length || this.mux?.innerContexts.size || this.session?.blockedReason) return;
+        this.snapshot = { tabs: [], current: null };
+        this.selected = null;
+        this.restoredTargets = null;
+        this.restoreWarning = '';
+        this.lastError = '';
+        this.session?.suspend({ keepPages: false });
+        notifyChange();
+        this.snapshot.forced = await this.stop(true);
+        if (this.snapshot.forced) this.restoreWarning = 'browser required a signal to stop; recent unsaved state may be lost';
+        this.slot = false;
+        if (this.destroyed) return;
+        this.state = 'stopped';
+        this.hibernatedAt = null;
+        log(`${this.name}: closed (last tab closed; profile retained)`);
+      } catch (err) {
+        this.lastError = err.message;
+        if (!this.pipe || this.pipe.closed) this.destroy('chromium exited while closing');
+        throw err;
+      } finally {
+        if (this.state === 'closing') {
+          this.state = 'running';
+          if (this.session) { this.session.mode = 'running'; this.session.flush(); }
+        }
+        notifyChange();
+      }
+    }).finally(() => { this.closing = null; });
+    return this.closing;
+  }
+
   touch() { this.lastUsedAt = Date.now(); }
   get blockedReason() {
     if (this.mux?.innerContexts.size) return 'browser contains incognito contexts';
@@ -175,6 +238,7 @@ export class Context {
 
   hibernate(reason = 'requested via console') {
     return this.registry.serialize(async () => {
+      await this.closing;
       if (this.state === 'hibernated') return;
       await this.hibernateNow(reason);
       await this.registry.trim();
@@ -184,6 +248,7 @@ export class Context {
   hibernateNow(reason) {
     if (this.hibernating) return this.hibernating;
     this.hibernating = (async () => {
+      await this.closing;
       if (this.destroyed || this.state !== 'running') throw new Error('context is not running');
       if (this.blockedReason) throw new Error(this.blockedReason);
       this.state = 'hibernating';
@@ -213,11 +278,13 @@ export class Context {
 
   wake() {
     if (this.destroyed) return Promise.reject(new Error('context is gone'));
+    if (this.closing) return this.closing.then(() => this.wake());
     if (this.state === 'running') { this.touch(); return Promise.resolve(); }
     if (this.waking) return this.waking;
     this.waking = this.registry.serialize(async () => {
       if (this.destroyed) throw new Error('context is gone');
       if (this.state === 'running') return;
+      const previousState = this.state;
       await this.registry.makeRoom(this);
       if (this.destroyed) throw new Error('context is gone');
       this.slot = true;
@@ -249,9 +316,10 @@ export class Context {
           await this.pipe.call('Target.detachFromTarget', { sessionId });
         }
         this.restoredTargets = new Map(pages.map((p) => [p.id, p.physical]));
-        const current = pages.find((p) => p.id === this.snapshot.current);
+        const current = pages.find((p) => p.id === this.snapshot?.current);
         if (current) await this.pipe.call('Target.activateTarget', { targetId: current.physical });
         if (this.destroyed) throw new Error('context was deleted');
+        await this.watchPages();
         await finishSessionFiles(this, true);
         this.state = 'running';
         this.hibernatedAt = null;
@@ -264,7 +332,7 @@ export class Context {
         await this.stop(false);
         await finishSessionFiles(this, false);
         this.slot = false;
-        this.state = this.destroyed ? 'destroying' : 'hibernated';
+        this.state = this.destroyed ? 'destroying' : previousState;
         this.lastError = err.message;
         this.session?.flush(err);
         notifyChange();
@@ -311,7 +379,7 @@ export class Context {
       // A queued wake has not touched the profile and will observe destroyed
       // before it starts. Waiting on it from a registry eviction deadlocks
       // the queue behind that same eviction.
-      await Promise.allSettled([this.starting, this.wakeActive ? this.waking : null, this.hibernating].filter(Boolean));
+      await Promise.allSettled([this.starting, this.wakeActive ? this.waking : null, this.hibernating, this.closing].filter(Boolean));
       await this.stop(false);
       this.slot = false;
       await fs.rm(this.dir, { recursive: true, force: true });
@@ -350,8 +418,9 @@ export class ContextRegistry {
   async makeRoom(exclude) {
     if (this.closing) throw new Error('CDP gateway is shutting down');
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
-    const eligible = (c) => c !== exclude && c.state === 'running' && !c.destroyed && !c.blockedReason;
+    const eligible = (c) => c !== exclude && c.state === 'running' && !c.closing && !c.destroyed && !c.blockedReason;
     while (this.running >= MAX_CONTEXTS) {
+      if (Date.now() < deadline && this.values().some((c) => c.closing)) { await sleep(20); continue; }
       if (CONTEXTS_OVERFLOW === 'reject') throw new Error(`CDP context limit reached (${MAX_CONTEXTS}); close another isolated session or increase the running-browser limit in web Settings`);
       const candidates = this.values().filter(eligible);
       // Query the browser itself: console-owned contexts may have no client session, and its target cache may be incomplete. A failed query cannot establish that a browser is empty.
@@ -367,7 +436,7 @@ export class ContextRegistry {
       }
       // A newly created context's Mux finishes attaching outside the registry
       // lock. Wait for that short lease, not for an arbitrary user command.
-      if (Date.now() < deadline && this.values().some((c) => c.holds || c.destroyed)) { await sleep(20); continue; }
+      if (Date.now() < deadline && this.values().some((c) => c.holds || c.closing || c.destroyed)) { await sleep(20); continue; }
       throw new Error(`CDP context limit reached (${MAX_CONTEXTS}); no hibernatable browser: ${this.values().filter((c) => c.slot).map((c) => `${c.name}: ${c.blockedReason || c.state}`).join('; ')}`);
     }
   }

@@ -149,6 +149,9 @@ jobs:
               sleep 1
             done
             docker logs hibernation-smoke 2>&1 | grep "starting CDP gateway .*desktop=$display_backend," >/dev/null
+            docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 -e CONSOLE_ENDPOINT=http://127.0.0.1:80 \
+              -e PLAYWRIGHT_CLI_JS=/test-deps/node_modules/cli-current/playwright-cli.js \
+              hibernation-smoke node /tests/context-window-close.mjs
             for cli in cli-current cli-previous; do
               echo "Context hibernation: backend=$backend cli=$cli"
               docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 -e CONSOLE_ENDPOINT=http://127.0.0.1:80 \

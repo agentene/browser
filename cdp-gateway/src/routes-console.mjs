@@ -144,8 +144,6 @@ export async function consoleRoute(req, res, url, restart) {
     return true;
   }
   if (action === 'focus' && req.method === 'POST') {
-    const context = contexts.get(name);
-    if (context) { await context.wake(); context.touch(); }
     if (name === 'main' && !mainBrowser.running) {
       send(res, 409, { error: `the main browser is ${mainBrowser.state}` });
     } else if (!(await focus(name, targetId))) {

@@ -24,6 +24,27 @@ const schema = { domains: [
   ], events: [{ name: 'executionContextCreated', parameters: [{ name: 'context', $ref: 'ExecutionContextDescription' }] }] },
 ] };
 
+test('closing retires logical pages and windows but preserves browser configuration for reopening', () => {
+  const upstream = new EventEmitter();
+  upstream.close = () => upstream.emit('close');
+  const context = { snapshot: { tabs: [] } };
+  const session = new ContextSession(context, upstream, schema);
+  const events = [];
+  session.on('message', (data) => events.push(JSON.parse(data)));
+  session.entry('page-session', 'page', 'page', '');
+  session.targets.set('page', { targetId: 'page', type: 'page' });
+  session.windowTargets.set(1, 'page');
+  session.root.journal.record({ method: 'Target.setDiscoverTargets', params: { discover: true } }, {});
+  session.suspend({ keepPages: false });
+  assert.equal(session.readyState, 1);
+  assert.equal(session.mode, 'suspended');
+  assert.deepEqual([...session.sessions.keys()], ['']);
+  assert.equal(session.targets.size, 0);
+  assert.equal(session.windowTargets.size, 0);
+  assert.ok(session.root.journal.states.has('Target.setDiscoverTargets'));
+  assert.deepEqual(events.map((e) => e.method), ['Target.detachedFromTarget', 'Target.targetDestroyed']);
+});
+
 test('typed rewrites leave application objectId/sessionId/frameId properties untouched', () => {
   const ids = new ProtocolIds(schema);
   ids.restart();

@@ -616,13 +616,17 @@
   // flicker, focus and list scroll position stay).
   function fillCard(context, v) {
     const n = context.tabs.size;
-    const state = context.state ?? 'running';
+    // Only a saved hibernation is a wake; reopening a stopped context is a start.
+    const state = context.state === 'waking' && !context.hibernatedAt ? 'starting' : context.state ?? 'running';
     const sleeping = state === 'hibernated';
-    const pending = !['running', 'hibernated'].includes(state);
-    const stateKey = { starting: 'stateStarting', hibernated: 'stateHibernated', hibernating: 'stateHibernating', waking: 'stateWaking', destroying: 'stateDestroying' }[state];
-    v.chip.textContent = stateKey ? `${t(stateKey)} · ${t('tabs', n)}` : t('tabs', n);
+    const pending = !['running', 'hibernated', 'stopped'].includes(state);
+    const stateKey = { starting: 'stateStarting', stopped: 'stateStopped', closing: 'stateClosing', hibernated: 'stateHibernated', hibernating: 'stateHibernating', waking: 'stateWaking', destroying: 'stateDestroying' }[state];
+    const stateOnly = ['closing', 'stopped', 'starting'].includes(state);
+    v.chip.textContent = stateOnly ? t(stateKey) : stateKey ? `${t(stateKey)} · ${t('tabs', n)}` : t('tabs', n);
     v.card.classList.toggle('hibernated', sleeping);
-    v.show.textContent = t(sleeping ? 'wake' : 'show');
+    const startAction = state === 'stopped' || state === 'starting';
+    v.show.textContent = t(sleeping ? 'wake' : startAction ? 'startBrowser' : 'show');
+    v.show.title = t(startAction ? 'startBrowser' : 'showTitle');
     v.show.disabled = pending;
     if (v.hibernate) {
       v.hibernate.hidden = !actionsEnabled || state !== 'running';

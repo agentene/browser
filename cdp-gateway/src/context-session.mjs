@@ -240,19 +240,20 @@ export class ContextSession extends EventEmitter {
     this.deliver({ ...raw, sessionId: parent || undefined, params });
   }
 
-  suspend() {
+  suspend({ keepPages = true } = {}) {
     this.mode = 'suspended';
+    const interruption = keepPages ? 'context hibernated' : 'context browser closed';
     for (const tab of this.context.snapshot?.tabs ?? []) {
       this.targets.set(tab.id, { ...this.targets.get(tab.id), targetId: tab.id, type: 'page', title: tab.title, url: tab.url,
         attached: [...this.sessions.values()].some((s) => s.targetId === tab.id) });
     }
     for (const [id, p] of this.pending) {
-      if (p.reject) p.reject(new Error('context hibernated'));
-      else this.error(p.msg, 'context hibernated while the command was in flight');
+      if (p.reject) p.reject(new Error(interruption));
+      else this.error(p.msg, `${interruption} while the command was in flight`);
       this.pending.delete(id);
     }
     for (const [id, s] of this.sessions) {
-      if (['page', 'browser'].includes(s.type)) {
+      if (s.type === 'browser' || (keepPages && s.type === 'page')) {
         if (s.type === 'page') {
           for (const [key, world] of s.worlds) {
             if (world.auxData?.frameId === s.frameId) continue;
@@ -269,13 +270,14 @@ export class ContextSession extends EventEmitter {
       this.sessions.delete(id);
     }
     for (const [id, info] of this.targets) {
-      if (['page', 'browser'].includes(info.type)) continue;
+      if (info.type === 'browser' || (keepPages && info.type === 'page')) continue;
       this.deliver({ method: 'Target.targetDestroyed', params: { targetId: id } });
       this.targets.delete(id);
     }
     const old = this.upstream;
     this.upstream = null;
     old?.close();
+    if (!keepPages) this.windowTargets.clear();
   }
 
   async restore(pipe, pages) {

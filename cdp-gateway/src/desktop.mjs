@@ -108,9 +108,25 @@ export function unwatchFront() {
 // Bring a context's (or the main browser's) window to the front of the desktop
 // so it shows up in the Selkies stream, with the tab targetId in front if
 // one is given (else the tab in front stays). A browser whose tabs were all
-// closed (it keeps running without a window) gets a blank tab to show.
+// closed gets a fresh process and a blank tab to show.
 // Resolves false when there is nothing to focus: no such browser or tab.
 export async function focus(name, targetId) {
+  const context = contexts.get(name);
+  if (!context) return focusWindow(name, targetId);
+  // Coalesce repeated Show clicks, including the empty check + createTarget.
+  if (!targetId && context.focusing) return context.focusing;
+  const task = (async () => {
+    await context.wake();
+    context.holds++;
+    try { return await focusWindow(name, targetId); }
+    finally { context.holds--; }
+  })();
+  if (targetId) return task;
+  context.focusing = task.finally(() => { context.focusing = null; });
+  return context.focusing;
+}
+
+async function focusWindow(name, targetId) {
   const pipe = pipeOf(name);
   if (!pipe) return false;
   const context = contexts.get(name);

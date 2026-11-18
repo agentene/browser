@@ -116,7 +116,8 @@ try {
   const keptPage = await occupied.c.newPage();
   const occupiedPid = (await state(occupied.name, 'running')).pid;
   const emptied = await connect();
-  await (await emptied.c.newPage()).close();
+  // Fresh contexts have never opened a window; unlike a last-tab closure,
+  // they stay running so client setup can finish before the first newPage.
   const replacement = await connect();
   await state(emptied.name, 'hibernated');
   assert.equal((await state(occupied.name, 'running')).pid, occupiedPid, 'creation must prefer a newer empty browser over an older browser with tabs');
@@ -125,11 +126,19 @@ try {
   await state(emptied.name, 'running');
   await state(replacement.name, 'hibernated');
   assert.equal((await state(occupied.name, 'running')).pid, occupiedPid, 'waking must also prefer an empty browser');
-  await keptPage.close(); // Both are empty now; the originally older browser has the most recent activity.
+  assert.equal(keptPage.isClosed(), false);
+  for (const client of [occupied, emptied, replacement]) {
+    await client.b.close();
+    await state(client.name, null);
+  }
+  const older = await connect();
+  const olderPid = (await state(older.name, 'running')).pid;
+  const newer = await connect();
+  await older.c.cookies(); // Both are empty; the older browser is now most recently used.
   const next = await connect();
-  await state(emptied.name, 'hibernated');
-  assert.equal((await state(occupied.name, 'running')).pid, occupiedPid, 'multiple empty browsers must be selected by LRU');
-  for (const client of [occupied, emptied, replacement, next]) {
+  await state(newer.name, 'hibernated');
+  assert.equal((await state(older.name, 'running')).pid, olderPid, 'multiple empty browsers must be selected by LRU');
+  for (const client of [older, newer, next]) {
     await client.b.close();
     await state(client.name, null);
   }
@@ -298,13 +307,13 @@ try {
     await cli('goto', url);
     const name = (await listing()).browsers.find((v) => !v.main).name;
     const empty = async (pid) => {
-      const current = await state(name, 'running');
+      const current = await state(name, 'stopped');
       assert.equal(current.restoreWarning, '');
       assert.equal(current.tabs.length, 0, 'closing the last tab must not create a replacement');
-      if (pid !== undefined) assert.equal(current.pid, pid, 'closing the last tab must not restart the browser');
+      assert.equal(current.pid, null, 'closing the last tab must stop the browser');
       await cli('cookie-list');
       const ready = await state(name, 'running');
-      assert.equal(ready.pid, current.pid, 'the empty context must remain usable in the same process');
+      if (pid !== undefined) assert.notEqual(ready.pid, pid, 'the same context must be usable in a fresh process');
       assert.equal(ready.tabs.length, 0);
       return ready.pid;
     };
@@ -335,7 +344,9 @@ try {
     await action(name, 'hibernate');
     assert.equal((await state(name, 'hibernated')).tabs.length, 0);
     await action(name, 'wake');
-    const pid = await empty();
+    const awake = await state(name, 'running');
+    assert.equal(awake.tabs.length, 0);
+    const pid = awake.pid;
     await cli('tab-new');
     const blank = await state(name, 'running');
     assert.equal(blank.pid, pid);
@@ -343,7 +354,7 @@ try {
     await cli('close');
     await state(name, null);
   }
-  console.log('PASS real CLI: last tab-close keeps an empty browser alive before and after native/URL restoration; tab-new reuses it; empty sleep/wake does not resurrect tabs');
+  console.log('PASS real CLI: last tab-close stops before and after native/URL restoration; commands reopen the same context; empty sleep/wake does not resurrect tabs');
 } finally {
   await cli('close').catch(() => {});
   await Promise.all(clients.map((b) => b.close().catch(() => {})));
