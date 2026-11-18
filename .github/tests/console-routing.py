@@ -94,8 +94,9 @@ def smoke(label, stream, cdp, prefix, user, https, auth, backend="wayland", host
     if console_prefix is not None:
         args += ["-e", f"CONSOLE_SUBPATH={console_prefix}"]
     if host:
-        args += ["--network", "host", "-e", "NGINX_LISTEN_ADDR=127.0.0.1"]
+        args += ["--network", "host"]
     else:
+        args += ["-e", "LISTEN_ADDR=0.0.0.0"]
         for port in [http_port, https_port, cdp_port]:
             args += ["-p", f"127.0.0.1::{port}"]
     docker(*args, IMAGE)

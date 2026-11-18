@@ -56,6 +56,8 @@ for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-ser
 npm test --prefix auth-server                                  # auth server unit tests (no deps)
 python3 -m py_compile entrypoint/helpers/*.py .github/tests/*.py
 python3 .github/tests/compose-paths.py                         # unset/empty/override forwarding
+python3 .github/tests/compose-ports.py                         # access ports, legacy aliases, bridge/host
+python3 .github/tests/listen-address.py                        # address aliases, explicit empty, IPv4/IPv6
 docker build --check .
 ```
 
@@ -65,13 +67,13 @@ Build and smoke-test:
 docker compose build
 
 # CDP path (Selkies off)
-docker run -d --name cdp-smoke -p 9222:9222 -e ENABLE_SELKIES=false \
+docker run -d --name cdp-smoke -e LISTEN_ADDR=0.0.0.0 -p 127.0.0.1:9222:9222 -e ENABLE_SELKIES=false \
   agentene/browser:latest
 curl -sf http://127.0.0.1:9222/json/version | jq -e '.Browser and .webSocketDebuggerUrl'
 docker rm -f cdp-smoke
 
 # Web-UI path (CDP off)
-docker run -d --name web-smoke -p 8080:80 -e ENABLE_CDP=false \
+docker run -d --name web-smoke -e LISTEN_ADDR=0.0.0.0 -p 127.0.0.1:8080:80 -e ENABLE_CDP=false \
   agentene/browser:latest
 curl -sf http://127.0.0.1:8080/browser/ | grep -qi '<html'
 docker rm -f web-smoke
@@ -113,9 +115,18 @@ node update-chrome-node.mjs --node 22        # force the Node major
    `nginx -t` runs on the generated file before start.
 4. **Two separate port sets — keep them apart.** Container-side listen ports
    are `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` (defaults
-   80/443/9222); host-side published ports are `NGINX_HTTP_PORT` /
-   `NGINX_HTTPS_PORT` / `CDP_PORT`. Compose `ports:` and the healthcheck
+   80/443/9222); the three user-facing access ports are `HTTP_PORT` /
+   `HTTPS_PORT` / `CDP_PORT`. Compose publishes them in bridge mode and
+   derives listeners from them in host mode. `NGINX_HTTP_PORT` /
+   `NGINX_HTTPS_PORT` remain fallback aliases when the new names are unset/empty;
+   explicit listener overrides still win. Compose `ports:` and the healthcheck
    must reference the container-side variables, never a literal port.
+   `LISTEN_ADDR` defaults to `127.0.0.1`, including explicit empty values.
+   The legacy `NGINX_LISTEN_ADDR` applies only when the new name is unset.
+   Compose bridge mode uses it for every published `host_ip` and explicitly
+   listens on `0.0.0.0` inside the container; host mode forwards it to nginx.
+   Plain `docker run` uses it for nginx directly: bridge publishing needs
+   `-e LISTEN_ADDR=0.0.0.0` and an explicit host IP in `-p`.
 5. **Runtime preferences belong in the web settings schema and both console UIs**,
    with shared defaults/validation in `cdp-gateway/src/settings-schema.mjs` and
    startup adaptation through `entrypoint/lib/settings.sh`. Never add an env

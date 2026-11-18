@@ -49,7 +49,7 @@ def run(backend, cdp=True, stream=True):
         profile = Path(data) / "user-data" / "Default"
         profile.mkdir(parents=True)
         (profile / "Preferences").write_text(json.dumps({"session": {"restore_on_startup": 4, "startup_urls": ["chrome://version/"]}}))
-        args = ["run", "-d", "--name", name, "--shm-size=512m", "-p", "127.0.0.1::80", "-p", "127.0.0.1::9222",
+        args = ["run", "-d", "-e", "LISTEN_ADDR=0.0.0.0", "--name", name, "--shm-size=512m", "-p", "127.0.0.1::80", "-p", "127.0.0.1::9222",
                 "-v", f"{data}:/browser", "-e", f"DISPLAY_BACKEND={'x11' if backend.endswith('x11') else 'wayland'}",
                 "-e", f"ENABLE_SELKIES={str(stream).lower()}", "-e", f"ENABLE_CDP={str(cdp).lower()}",
                 "-e", "BROWSER_SUBPATH=/desk", "-e", "AUTH_SETUP_CODE=settings-smoke-code",

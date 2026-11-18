@@ -23,11 +23,13 @@ node --check update-chrome-node.mjs
 for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js cdp-gateway/i18n.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
 python3 -m py_compile entrypoint/helpers/*.py .github/tests/*.py
+python3 .github/tests/compose-ports.py          # access ports, legacy aliases, bridge/host
+python3 .github/tests/listen-address.py         # address aliases, explicit empty, IPv4/IPv6
 docker build --check .                        # Dockerfile lint (BuildKit)
 
 # full build + runtime smoke tests
 docker compose build
-docker run -d --name cdp-smoke -p 9222:9222 -e ENABLE_SELKIES=false \
+docker run -d --name cdp-smoke -e LISTEN_ADDR=0.0.0.0 -p 127.0.0.1:9222:9222 -e ENABLE_SELKIES=false \
   agentene/browser:latest
 curl -sf http://127.0.0.1:9222/json/version   # then: docker rm -f cdp-smoke
 ```

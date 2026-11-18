@@ -5,7 +5,10 @@
 # (settings.json / the web UI); their schema is cdp-gateway/src/settings-schema.mjs.
 # The former preference variables are warned about and ignored by settings.sh.
 #
-# Environment reference (compose host-side ports and mounts are in compose.yaml):
+# Environment reference (Compose access ports and mounts are in compose.yaml):
+# Compose uses HTTP_PORT / HTTPS_PORT / CDP_PORT for bridge publishing or
+# host-mode listeners; defaults are 8080 / 8443 / 9222. Legacy NGINX_HTTP_PORT /
+# NGINX_HTTPS_PORT aliases apply only when the matching new name is unset/empty.
 #   ENABLE_SELKIES=true           start desktop streaming and audio services
 #   ENABLE_CDP=true               enable on-demand browsers and public CDP; false keeps web settings
 #   ENABLE_AUTH=true              built-in login and CDP API key service
@@ -14,7 +17,8 @@
 #   NGINX_LISTEN_HTTP_PORT=80      container HTTP listener
 #   NGINX_LISTEN_HTTPS_PORT=443    container HTTPS listener
 #   CDP_LISTEN_PORT=9222          container public CDP listener
-#   NGINX_LISTEN_ADDR=""           listener address; empty = all interfaces
+#   LISTEN_ADDR=127.0.0.1         listener address; unset/empty = IPv4 loopback
+#     NGINX_LISTEN_ADDR is a legacy alias, used only when LISTEN_ADDR is unset.
 #   ALLOWED_HOSTS=""               accepted host names (IP addresses/localhost always work)
 #   PORT_FORWARDS=""               extra nginx proxies: LISTEN=HOST:PORT, space/comma separated
 #   BROWSER_SUBPATH=/browser      desktop path prefix; explicit empty = site root
@@ -142,23 +146,24 @@ config_web_paths() {
 }
 
 config_nginx() {
-    # nginx public listen ports INSIDE the container (host-side publishing of
-    # these ports is a separate choice made by docker: compose "ports:" /
-    # docker -p — NGINX_HTTP_PORT / NGINX_HTTPS_PORT / CDP_PORT in compose).
+    # nginx public listen ports INSIDE the container. Compose uses HTTP_PORT /
+    # HTTPS_PORT / CDP_PORT for bridge publishing or to derive host listeners;
+    # explicit listener overrides take precedence. Plain docker run uses -p
+    # for bridge publishing and these listener variables for --network host.
     NGINX_LISTEN_HTTP_PORT="${NGINX_LISTEN_HTTP_PORT:-80}"        # web UI over HTTP (always on)
     NGINX_LISTEN_HTTPS_PORT="${NGINX_LISTEN_HTTPS_PORT:-443}"     # web UI over HTTPS (ENABLE_HTTPS=true only)
     CDP_LISTEN_PORT="${CDP_LISTEN_PORT:-9222}"  # public CDP endpoint
     ENABLE_HTTPS="${ENABLE_HTTPS:-false}"   # true = also serve HTTPS on ${NGINX_LISTEN_HTTPS_PORT}
-    # Address every nginx listener binds to (empty = all interfaces). Matters with
-    # network_mode: host, where there is no docker port mapping to restrict
-    # exposure: 127.0.0.1 keeps the unauthenticated CDP endpoint host-local.
-    NGINX_LISTEN_ADDR="${NGINX_LISTEN_ADDR:-}"
-    case "${NGINX_LISTEN_ADDR}" in
-        '') LISTEN_PREFIX="" ;;
-        *[!0-9A-Fa-f.:\[\]]*) die "NGINX_LISTEN_ADDR='${NGINX_LISTEN_ADDR}' must be an IPv4/IPv6 address" ;;
-        \[*) LISTEN_PREFIX="${NGINX_LISTEN_ADDR}:" ;;
-        *:*) LISTEN_PREFIX="[${NGINX_LISTEN_ADDR}]:" ;;   # bare IPv6 -> [addr]:port
-        *) LISTEN_PREFIX="${NGINX_LISTEN_ADDR}:" ;;
+    # Default all listeners to loopback. Compose bridge mode publishes on the
+    # selected host address and explicitly uses 0.0.0.0 inside the container.
+    # An explicitly empty new name selects loopback, even with a legacy value.
+    LISTEN_ADDR="${LISTEN_ADDR-${NGINX_LISTEN_ADDR:-}}"
+    LISTEN_ADDR="${LISTEN_ADDR:-127.0.0.1}"
+    case "${LISTEN_ADDR}" in
+        *[!0-9A-Fa-f.:\[\]]*) die "LISTEN_ADDR='${LISTEN_ADDR}' must be an IPv4/IPv6 address" ;;
+        \[*) LISTEN_PREFIX="${LISTEN_ADDR}:" ;;
+        *:*) LISTEN_PREFIX="[${LISTEN_ADDR}]:" ;;   # bare IPv6 -> [addr]:port
+        *) LISTEN_PREFIX="${LISTEN_ADDR}:" ;;
     esac
     # Extra reverse proxies served by the same nginx front door (empty = none).
     # Parsed and validated in nginx.sh.

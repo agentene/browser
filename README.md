@@ -103,8 +103,9 @@ docker build -t agentene/browser .
 
 docker run -d --name agentene-browser \
   --restart always \
-  -p 8080:80 \
-  -p 9222:9222 \
+  -e LISTEN_ADDR=0.0.0.0 \
+  -p 127.0.0.1:8080:80 \
+  -p 127.0.0.1:9222:9222 \
   -v "$PWD/browser:/browser" \
   agentene/browser
 ```
@@ -113,17 +114,24 @@ Any argument other than the implicit `start` is exec'd instead of the supervisor
 
 ## Ports
 
-Two independent sets of variables, both set in `.env`: the **container-side** port is what nginx actually listens on inside the container; the **host-side** port is what docker publishes (compose maps it onto the container-side port automatically).
+With Compose, configure just three access ports in `.env`; the same settings work in bridge and host modes:
 
-| Service                | Container port (default) | Set with                  | Host port (default) | Set with                             |
-| ---------------------- | ------------------------ | ------------------------- | ------------------- | ------------------------------------ |
-| Web UI (HTTP)          | 80                       | `NGINX_LISTEN_HTTP_PORT`  | 8080                | `NGINX_HTTP_PORT`                    |
-| Web UI (HTTPS, opt-in) | 443                      | `NGINX_LISTEN_HTTPS_PORT` | 8443                | `NGINX_HTTPS_PORT` + [HTTPS](#https) |
-| Chromium CDP           | 9222                     | `CDP_LISTEN_PORT`         | 9222                | `CDP_PORT`                           |
+| Service | Variable | Default access port |
+| --- | --- | --- |
+| Web UI (HTTP) | `HTTP_PORT` | `8080` |
+| Web UI (HTTPS, opt-in) | `HTTPS_PORT` | `8443` |
+| Chromium CDP | `CDP_PORT` | `9222` |
 
-Changing the container-side ports is mainly useful with `network_mode: host` / a shared network namespace, or when peers on the docker network expect specific ports; with plain port publishing the defaults are fine. They must not collide with each other or with `PORT_FORWARDS` listeners — the entrypoint fails fast on a clash (the services behind nginx use no ports). With `docker run`, pass them via `-e` and adjust `-p` to match (e.g. `-e CDP_LISTEN_PORT=9333 -p 9222:9333`).
+* **Bridge (default):** Docker publishes these ports on the host's `LISTEN_ADDR` and maps them to the container's HTTP / HTTPS / CDP ports (`80` / `443` / `9222`). The container listens on `0.0.0.0` to receive forwarded traffic; peers on the same Docker network still use the container ports.
+* **[Host network](#host-network-compose):** nginx listens on the chosen access ports directly on the host's `LISTEN_ADDR`; there is no port mapping. Switching modes keeps the access URLs the same.
 
-On top of these ports, `PORT_FORWARDS` adds extra listeners that are reverse-proxied to sibling containers on the docker network — see [Docker network (compose)](#docker-network-compose). With host networking there is no publishing at all and the container-side ports are bound on the host directly — see [Host network (compose)](#host-network-compose).
+`LISTEN_ADDR` defaults to `127.0.0.1`, including an explicitly empty value, so both modes are host-local by default. For access from other machines, explicitly set `LISTEN_ADDR=0.0.0.0` or the desired host address (use bare IPv6, e.g. `::1`). Existing deployments that relied on remote access by default must choose an address when upgrading.
+
+For example, `HTTP_PORT=18080` makes the console available at `http://localhost:18080/console/` in either mode. HTTPS is off by default: use `compose.https.yaml` to enable and publish it in bridge mode, or `ENABLE_HTTPS=true` in host mode (see [HTTPS](#https)).
+
+These three port variables are Compose settings. With plain `docker run` in bridge mode, use `-e LISTEN_ADDR=0.0.0.0` so the container accepts forwarded traffic, and choose the host address and port through `-p`, e.g. `-p 127.0.0.1:18080:80`. Existing listener overrides remain supported for advanced deployments; see [Environment variables](#environment-variables).
+
+`PORT_FORWARDS` can add extra listeners that proxy to sibling containers — see [Docker network (compose)](#docker-network-compose).
 
 ## Connecting Playwright over CDP
 
@@ -346,15 +354,40 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `ENABLE_AUTH`    | `true`  | built-in login for the web UI + CDP console and the optional CDP API key, managed in the console (see [Login and CDP API key](#login-and-cdp-api-key)); `false` = everything open |
 | `AUTH_SETUP_CODE` | *(empty)* | the code the first-start setup form asks for (8+ printable characters, no spaces); empty = a random one on every start, printed in the container log. Set it for scripted setups |
 
+**Ports (Compose)**
+
+For everyday use, set `HTTP_PORT` / `HTTPS_PORT` / `CDP_PORT`; see [Ports](#ports) for defaults and behavior in both network modes.
+
+<details>
+<summary>Advanced: legacy port names and listener overrides</summary>
+
+`NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` remain compatible aliases. Compose prefers a nonempty `HTTP_PORT` / `HTTPS_PORT`, falls back to the corresponding old name, then to `8080` / `8443`. New configurations only need the three access-port variables above.
+
+`NGINX_LISTEN_ADDR` remains a compatible alias, used only when `LISTEN_ADDR` is unset. An unset or empty effective value becomes `127.0.0.1`; explicit `LISTEN_ADDR=` never falls back to the old name. Compose bridge mode applies this address to host port publishing and listens on `0.0.0.0` inside the container; host mode and plain `docker run` apply it to nginx listeners.
+
+Use these overrides for a shared network namespace or peers that require specific container ports. Leave them unset for normal Compose deployments:
+
+| Variable | Image / bridge default | Host overlay defaults to |
+| --- | --- | --- |
+| `NGINX_LISTEN_HTTP_PORT` | `80` | `HTTP_PORT` (`8080`) |
+| `NGINX_LISTEN_HTTPS_PORT` | `443` | `HTTPS_PORT` (`8443`) |
+| `CDP_LISTEN_PORT` | `9222` | `CDP_PORT` (`9222`) |
+
+Existing configurations still work: explicit listener values take precedence over the host overlay's derived values. To control access through only the three usual ports, remove these overrides from an existing `.env` or shell environment. In bridge mode, Compose automatically adjusts the container side of each port mapping.
+
+With plain `docker run`, pass listener overrides through `-e` and adjust `-p` to match, e.g. `-e LISTEN_ADDR=0.0.0.0 -e CDP_LISTEN_PORT=9333 -p 127.0.0.1:9222:9333`. With `--network host`, set the listener directly, e.g. `-e NGINX_LISTEN_HTTP_PORT=18080`, without `-p`.
+
+The three listener ports must not collide with each other or with `PORT_FORWARDS` listeners; the entrypoint fails fast on a clash. nginx and the healthcheck always use the actual listener ports.
+
+</details>
+
 **Web UI / TLS**
 
 | Variable                         | Default                                       | Description                                                                                                                                                                                       |
 | -------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NGINX_LISTEN_HTTP_PORT`         | `80`                                          | container port nginx serves the web UI on over HTTP (see [What's inside](#whats-inside))                                                                                                                         |
-| `NGINX_LISTEN_HTTPS_PORT`        | `443`                                         | container port nginx serves the web UI on over TLS                                                                                                                                                |
-| `NGINX_LISTEN_ADDR`              | *(empty)*                                     | address every nginx listener (web UI, CDP, `PORT_FORWARDS`) binds to; empty = all interfaces. Set `127.0.0.1` with [host networking](#host-network-compose) to keep CDP and the web UI host-local |
+| `LISTEN_ADDR` | `127.0.0.1` | Access address; unset/empty means IPv4 loopback. Compose bridge mode uses it for host port binding (the container listens on `0.0.0.0`); host mode and plain `docker run` use it for every nginx listener (web UI, CDP, `PORT_FORWARDS`). `0.0.0.0` = all IPv4 interfaces; use bare addresses for IPv6 |
 | `ALLOWED_HOSTS`                  | *(empty)*                                     | host names the web UI and the CDP port answer to, comma-separated (`.example.com` / `*.example.com` = its subdomains too), besides IP addresses and `localhost`; any other `Host` gets 421. Guards an open web UI / console (login skipped, `ENABLE_AUTH=false`) against DNS rebinding — see [Security considerations](#security-considerations). Empty = any host name |
-| `ENABLE_HTTPS`                   | `false`                                       | `true` = nginx also serves the web UI over TLS on `NGINX_LISTEN_HTTPS_PORT`                                                                                                                       |
+| `ENABLE_HTTPS`                   | `false`                                       | `true` = nginx also serves the web UI over TLS; see [HTTPS](#https) for publishing and certificates                                                                                                                       |
 
 **Extra port forwards**
 
@@ -387,7 +420,6 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `CHROMIUM_SANDBOX`          | `auto`                                                                                             | Chromium's own sandbox (main and context browsers): `auto` = on when the browsers run unprivileged (`RUN_USER` not `0`, the default) **and** the container may create user namespaces, `--no-sandbox` otherwise; `off` = always `--no-sandbox`. See [Privilege drop (`RUN_USER`)](#privilege-drop-run_user) |
 | `CHROMIUM_ALLOW_FILE_URLS`  | `false`                                                                                            | `true` = the browsers may open `file://` URLs. Blocked by default (a managed `URLBlocklist` policy), because through the browser a page or a CDP client could read any file its user can — the login's session secret included. The CDP commands that name files by path are `CDP_FILE_DIRS`' business |
 | `CHROMIUM_ALLOW_DEVTOOLS`   | `true`                                                                                             | `false` = the browsers open no DevTools window (a managed `URLBlocklist` policy: `devtools://*`, `chrome://inspect`). A DevTools window speaks CDP to its page on a channel of its own, past the CDP gateway's checks, and a CDP client can open one (a key press, a click in `chrome://inspect`) — set `false` when a CDP client must not get past `CDP_FILE_DIRS`. The CDP endpoint itself is not affected |
-| `CDP_LISTEN_PORT`           | `9222`                                                                                             | container port of the public CDP endpoint (nginx → the CDP gateway → chromium; see [Ports](#ports))                                                                                                                                                  |
 
 **CDP gateway** (see [CDP gateway](#cdp-gateway-isolated-contexts-with-your-logins))
 
@@ -460,7 +492,7 @@ This publishes `https://localhost:8443` and turns HTTPS on in one go.
 
 **Option B — bring your own certificate:** drop `fullchain.pem` + `privkey.pem` into `./tls` on the host and use the overlay above (or set `ENABLE_HTTPS=true`). Existing valid pairs are always reused as-is; a broken pair (unparseable, mismatched, or only one of the two files present) stops the container with a clear error instead of being silently replaced.
 
-`ENABLE_HTTPS=true` *without* the overlay means HTTPS works only inside the docker network (e.g. behind another reverse proxy) — the host port stays unpublished and `./tls` is not mounted, so a self-signed pair lives inside the container and is regenerated when it is recreated. With `compose.host.yaml`, put `compose.https.yaml` before it (its port mapping is dropped, the mount stays).
+In bridge mode, `ENABLE_HTTPS=true` *without* the overlay means HTTPS works only inside the docker network (e.g. behind another reverse proxy); the host port stays unpublished. With `compose.host.yaml`, `ENABLE_HTTPS=true` serves HTTPS directly on `HTTPS_PORT`; to also mount `./tls` for persistent certificates, put `compose.https.yaml` before it (its port mapping is dropped, the mount stays). Without the `./tls` mount, a self-signed pair lives inside the container and is regenerated when it is recreated.
 
 ## GPU passthrough (optional)
 
@@ -540,7 +572,7 @@ PORT_FORWARDS=3080=web:80
 #PORT_FORWARDS=3080=web:80 6080=onlyoffice-documentserver:80
 ```
 
-The forwards are served by the same nginx front door (no extra process): WebSocket-capable, per-request DNS resolution via the container's DNS server (docker's embedded DNS on compose networks) — this container starts fine while a peer is still down (requests 502 until the peer answers) and follows a recreated peer's new IP. A forward listen port must not collide with `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` (80/443/9222 by default) or any other forward — the entrypoint refuses to start on a clash.
+The forwards are served by the same nginx front door (no extra process): WebSocket-capable, per-request DNS resolution via the container's DNS server (docker's embedded DNS on compose networks) — this container starts fine while a peer is still down (requests 502 until the peer answers) and follows a recreated peer's new IP. A forward listen port must not collide with the HTTP / HTTPS / CDP listeners (80/443/9222 by default in bridge mode; the three configured access ports by default in host mode) or any other forward — the entrypoint refuses to start on a clash.
 
 ### Host network (compose)
 
@@ -550,12 +582,12 @@ To let the browser reach apps running on the host itself — e.g. a dev server o
 # .env — keep compose.host.yaml LAST when combining overlays,
 # e.g. compose.yaml:compose.gpu.yaml:compose.host.yaml
 COMPOSE_FILE=compose.yaml:compose.host.yaml
-NGINX_LISTEN_ADDR=127.0.0.1   # recommended: keep CDP + web UI off the network
+#LISTEN_ADDR=127.0.0.1  # default; empty is the same. 0.0.0.0 = all IPv4 interfaces
 ```
 
 What changes in this mode:
 
-* Nothing is published; nginx binds its ports on the host directly. `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` default to `NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` / `CDP_PORT` (8080 / 8443 / 9222), so the URLs stay the same as in bridge mode; set them explicitly to override. HTTPS needs only `ENABLE_HTTPS=true` (`compose.https.yaml` is not needed; its port mapping is dropped).
+* Nothing is published; nginx listens directly on `HTTP_PORT` / `HTTPS_PORT` / `CDP_PORT` (8080 / 8443 / 9222 by default), so the URLs stay the same as in bridge mode. HTTPS needs only `ENABLE_HTTPS=true`; to also mount `./tls` for persistent certificates, put `compose.https.yaml` before the host overlay. Existing advanced listener overrides still take precedence; see [Environment variables](#environment-variables).
 * Only nginx's listeners take host ports: the services behind it are on unix sockets inside the container's own filesystem and the browsers have no DevTools port, so nothing of the container sits on the host's loopback past nginx (and the [CDP API key](#login-and-cdp-api-key)).
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` and `hostname` do not apply. `PORT_FORWARDS` still works but resolves names through the host's DNS (container names do not resolve) — usually you just point the browser at `localhost:<port>` directly.
 * With `DISPLAY_BACKEND=x11`, if the host runs its own X server on `:0`, the entrypoint picks the next free display automatically. Xvfb listens on its filesystem socket only, so host processes cannot attach to the unauthenticated container display.
@@ -634,7 +666,7 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 
 ## Security considerations
 
-* **The CDP endpoint is open until you set a [CDP API key](#login-and-cdp-api-key).** Without one, full browser control is one TCP connect away. Even with one, publish `9222` on localhost or a trusted network only (or behind TLS: the key travels in a header, in clear text over plain HTTP). With [host networking](#host-network-compose) there is no port mapping to restrict this; use `NGINX_LISTEN_ADDR=127.0.0.1`.
+* **The CDP endpoint is open until you set a [CDP API key](#login-and-cdp-api-key).** Without one, full browser control is one TCP connect away. Even with one, publish `9222` on localhost or a trusted network only (or behind TLS: the key travels in a header, in clear text over plain HTTP). Compose defaults to `LISTEN_ADDR=127.0.0.1` in both bridge and [host networking](#host-network-compose), including an empty value; remote access requires an explicit different address.
 * **CDP gateway contexts inherit your real logins.** Every isolated client starts out signed in wherever the main browser is. That is the point of the feature, and it is also the risk: hand the CDP endpoint only to automation you would trust with those accounts. The `/console/` page and its API follow the [built-in login](#login-and-cdp-api-key) (open when it is skipped or `ENABLE_AUTH=false`). The sidebar shares the same console API and login session.
 * **Set up the login right after the first start.** The setup form needs the setup code from the container log, so a visitor who cannot read the log cannot claim the browser; still, the CDP API stays open until a key is set. Skipping leaves the web UI open to everyone who can reach it — and, through DNS rebinding, to any web page a user on that network opens (a site that points its own host name at the container): set `ALLOWED_HOSTS` to the names you reach it by (IP addresses and `localhost` always work) to close that. The CDP API itself is not affected (it refuses every request a page can send: any `Origin`, and any `Sec-Fetch-Site` but `none` — a DNS-rebound page's same-origin GET included). Use HTTPS alongside the login whenever the web UI leaves a trusted network (plain HTTP sends the password and the session cookie in clear text).
 * **Browser pages cannot reach the CDP API.** Requests with an `Origin` header are refused unless `CDP_ALLOW_ORIGINS` lists the origin, and requests whose `Sec-Fetch-Site` is anything but `none` (a DNS-rebound page's same-origin GET included) are refused outright. Nothing behind nginx is on a TCP port a page could open (unix sockets, and a DevTools pipe instead of a DevTools port), so a page — in any browser, the container's own included — only ever reaches the services through nginx.
@@ -655,7 +687,7 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 | Symptom                                           | Fix                                                                                                                                                                                                                                         |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `curl :9222/json/version` fails                   | `docker compose logs`; check `/tmp/chromium.log` inside the container. Port busy? change `CDP_PORT`.                                                                                                                                        |
-| Container restarts in a loop with host networking | a listen port is already in use on the host — check `docker compose logs` / `/tmp/nginx/error.log`, then move `NGINX_LISTEN_HTTP_PORT`, `NGINX_LISTEN_HTTPS_PORT` or `CDP_LISTEN_PORT`. |
+| Container restarts in a loop with host networking | a listen port is already in use on the host — check `docker compose logs` / `/tmp/nginx/error.log`, then change `HTTP_PORT`, `HTTPS_PORT` or `CDP_PORT`; check any existing advanced listener overrides too. |
 | Desktop or console unreachable                                | Check `/tmp/nginx/error.log` and `/tmp/cdp-gateway.log`. Desktop streaming requires `ENABLE_SELKIES=true`; `/console/` is available independently.                                                                                                                       |
 | Browser window not in the stream                  | Click **Start browser**, or wake a hibernated browser and use **Show** to bring its window forward.                                                                                                                                                             |
 | Isolated session fails with `CDP context limit reached` | `reject` mode is selected, or every running browser is temporarily ineligible for hibernation. Check card reasons, close an idle session, or raise **Maximum running isolated browsers**. Gateway log: `/tmp/cdp-gateway.log`; per-context chromium logs: `$CDP_CONTEXTS_DIR/<context>/chromium.log` while the context is alive (its directory is deleted with it, also after a failed startup — the reason is then in the gateway log). |

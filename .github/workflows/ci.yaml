@@ -95,6 +95,12 @@ jobs:
       - name: Compose optional web paths
         run: python3 .github/tests/compose-paths.py
 
+      - name: Compose access ports and legacy aliases
+        run: python3 .github/tests/compose-ports.py
+
+      - name: Listener address and legacy alias
+        run: python3 .github/tests/listen-address.py
+
       - name: docker build --check (Dockerfile lint, BuildKit)
         run: docker build --check .
 
@@ -131,7 +137,7 @@ jobs:
             # arbitrary times, changing LRU order even when test tabs are idle.
             settings_dir="$(mktemp -d)"
             printf '%s\n' '{"contexts":{"maxRunning":2,"maxHibernated":2}}' > "$settings_dir/settings.json"
-            docker run -d --name hibernation-smoke --shm-size=1g \
+            docker run -d -e LISTEN_ADDR=0.0.0.0 --name hibernation-smoke --shm-size=1g \
               -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" \
               -e DISPLAY_BACKEND="$display_backend" \
               -e CHROMIUM_EXTRA_ARGS=--disable-component-extensions-with-background-pages \
@@ -163,7 +169,7 @@ jobs:
             if [[ "$backend" = cdp-* ]]; then selkies=false; fi
             # Keep the default extension environment; raw CDP does not emulate
             # focus, so this can observe each window's actual selected tab.
-            docker run -d --name native-restore-smoke --shm-size=1g \
+            docker run -d -e LISTEN_ADDR=0.0.0.0 --name native-restore-smoke --shm-size=1g \
               -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" \
               -e DISPLAY_BACKEND="$display_backend" \
               -v "$PWD/.github/tests:/tests:ro" localhost/ci:${{ env.IMAGE_NAME }}
@@ -181,7 +187,7 @@ jobs:
       - name: Smoke test — chromium CDP endpoint
         run: |
           set -euo pipefail
-          docker run -d --name cdp-smoke -p 9222:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name cdp-smoke -p 9222:9222 \
             -e ENABLE_SELKIES=false localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker logs cdp-smoke || true; docker rm -f cdp-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
@@ -229,7 +235,7 @@ jobs:
       - name: Smoke test — Selkies web UI
         run: |
           set -euo pipefail
-          docker run -d --name web-smoke -p 8080:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name web-smoke -p 8080:80 \
             -e ENABLE_CDP=false -e AUTH_SETUP_CODE=ci-setup-code localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker logs web-smoke || true; docker rm -f web-smoke >/dev/null' EXIT
           # fresh container: the built-in login's setup form, in place (401)
@@ -249,7 +255,7 @@ jobs:
       - name: Smoke test — CDP gateway
         run: |
           set -euo pipefail
-          docker run -d --name gateway-smoke -p 9223:9222 -p 8081:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name gateway-smoke -p 9223:9222 -p 8081:80 \
             -e ENABLE_SELKIES=false -e AUTH_SETUP_CODE=ci-setup-code \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec gateway-smoke cat /tmp/cdp-gateway.log || true; docker logs gateway-smoke || true; docker rm -f gateway-smoke >/dev/null' EXIT
@@ -404,7 +410,7 @@ jobs:
       - name: Smoke test — CDP console sidebar on the web UI
         run: |
           set -euo pipefail
-          docker run -d --name panel-smoke -p 9225:9222 -p 8082:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name panel-smoke -p 9225:9222 -p 8082:80 \
             -e AUTH_SETUP_CODE=panel-setup-code \
             -e SELKIES_ENABLE_BASIC_AUTH=true -e SELKIES_BASIC_AUTH_PASSWORD=unused \
             -e SELKIES_MASTER_TOKEN=unused-token \
@@ -465,7 +471,7 @@ jobs:
       - name: Smoke test — built-in login and CDP API key
         run: |
           set -euo pipefail
-          docker run -d --name auth-smoke -p 9228:9222 -p 8084:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name auth-smoke -p 9228:9222 -p 8084:80 \
             -e AUTH_SETUP_CODE=ci-setup-code localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec auth-smoke cat /tmp/auth-server.log /tmp/nginx/error.log || true; docker logs auth-smoke || true; docker rm -f auth-smoke >/dev/null' EXIT
           W=http://127.0.0.1:8084 C=http://127.0.0.1:9228 J=$(mktemp)
@@ -552,7 +558,7 @@ jobs:
           [ "$(code $C/json/version)" = 200 ]
           # ENABLE_AUTH=false: no auth service, nothing gated
           docker rm -f auth-smoke >/dev/null
-          docker run -d --name auth-smoke -p 9228:9222 -p 8084:80 -e ENABLE_AUTH=false \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name auth-smoke -p 9228:9222 -p 8084:80 -e ENABLE_AUTH=false \
             -e ALLOWED_HOSTS=browser.example,.lan.example localhost/ci:${{ env.IMAGE_NAME }}
           for i in $(seq 1 60); do
             curl -sf $C/json/version >/dev/null && curl -sf $W/browser/ >/dev/null && break
@@ -577,7 +583,7 @@ jobs:
           # /tmp survives a restart; files the last start handed to the run
           # user must not block this one (fs.protected_regular); Selkies on,
           # so the desktop settings (/tmp/desktop-raise-new-windows) apply
-          docker run -d --name restart-smoke -p 9230:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name restart-smoke -p 9230:9222 \
             -e ENABLE_AUTH=false -e RUN_USER=browser \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker logs restart-smoke || true; docker rm -f restart-smoke >/dev/null' EXIT
@@ -605,10 +611,10 @@ jobs:
       - name: Smoke test — RUN_USER default (browser) and RUN_USER=0 (root)
         run: |
           set -euo pipefail
-          docker run -d --name user-default -p 9231:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name user-default -p 9231:9222 \
             -e ENABLE_SELKIES=false -e ENABLE_AUTH=false \
             localhost/ci:${{ env.IMAGE_NAME }}
-          docker run -d --name user-root -p 9232:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name user-root -p 9232:9222 \
             -e ENABLE_SELKIES=false -e ENABLE_AUTH=false -e RUN_USER=0 \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'for c in user-default user-root; do docker logs $c || true; docker rm -f $c >/dev/null; done' EXIT
@@ -630,7 +636,7 @@ jobs:
       - name: Smoke test — chromium sandbox (RUN_USER + user namespaces)
         run: |
           set -euo pipefail
-          docker run -d --name sandbox-smoke -p 9227:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name sandbox-smoke -p 9227:9222 \
             -e ENABLE_SELKIES=false -e ENABLE_AUTH=false -e RUN_USER=browser \
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
             localhost/ci:${{ env.IMAGE_NAME }}
@@ -669,7 +675,7 @@ jobs:
           set -euo pipefail
           # CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close stands in for
           # the browser closing itself (its last window)
-          docker run -d --name ondemand-smoke -p 9226:9222 -p 8083:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name ondemand-smoke -p 9226:9222 -p 8083:80 \
             -e AUTH_SETUP_CODE=ci-setup-code \
             -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
@@ -764,7 +770,7 @@ jobs:
       - name: Smoke test — main browser close and subsequent CDP startup
         run: |
           set -euo pipefail
-          docker run -d --name close-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name close-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
             -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec close-smoke cat /tmp/cdp-gateway.log || true; docker logs close-smoke || true; docker rm -f close-smoke >/dev/null' EXIT
@@ -805,7 +811,7 @@ jobs:
       - name: Smoke test — Wayland desktop (the default DISPLAY_BACKEND)
         run: |
           set -euo pipefail
-          docker run -d --name wayland-smoke -p 9224:9222 -p 8081:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name wayland-smoke -p 9224:9222 -p 8081:80 \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec wayland-smoke cat /tmp/labwc.log || true; docker logs wayland-smoke || true; docker rm -f wayland-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
@@ -830,7 +836,7 @@ jobs:
       - name: Smoke test — X11 desktop (DISPLAY_BACKEND=x11)
         run: |
           set -euo pipefail
-          docker run -d --name x11-smoke -p 9227:9222 -p 8083:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name x11-smoke -p 9227:9222 -p 8083:80 \
             -e DISPLAY_BACKEND=x11 localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec x11-smoke cat /tmp/xvfb.log || true; docker logs x11-smoke || true; docker rm -f x11-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
@@ -851,7 +857,7 @@ jobs:
           set -euo pipefail
           for backend in wayland x11; do
             name="background-${backend}-smoke"
-            docker run -d --name "$name" --shm-size=64m \
+            docker run -d -e LISTEN_ADDR=0.0.0.0 --name "$name" --shm-size=64m \
               -e DISPLAY_BACKEND="$backend" -e ENABLE_CDP=false -e ENABLE_AUTH=false -e WAYLAND_DEBUG=client \
               localhost/ci:${{ env.IMAGE_NAME }}
             trap 'docker logs "$name" || true; docker cp "$name":/tmp/desktop-background.log /tmp/background-smoke.log && cat /tmp/background-smoke.log; docker rm -f "$name" >/dev/null' EXIT

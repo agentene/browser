@@ -24,10 +24,9 @@
 #   5. nginx           the public front door (web UI over HTTP/HTTPS, the CDP
 #                       endpoint, PORT_FORWARDS), on the container ports
 #                       NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT /
-#                       CDP_LISTEN_PORT. NGINX_HTTP_PORT / NGINX_HTTPS_PORT /
-#                       CDP_PORT are a different thing: they only pick the
-#                       HOST-side ports docker publishes (compose "ports:" /
-#                       docker -p).
+#                       CDP_LISTEN_PORT. Compose uses HTTP_PORT / HTTPS_PORT /
+#                       CDP_PORT to publish these in bridge mode or derive
+#                       the listeners in host mode.
 #
 # Container start == service start ("开机自启"): this script is the image
 # ENTRYPOINT; combine with `docker run --restart=always` for boot persistence.

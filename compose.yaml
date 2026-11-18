@@ -12,15 +12,13 @@
 # their entries only forward configured values. Variables NOT listed under
 # environment: still reach the container through env_file (e.g. native SELKIES_*).
 #
-# Ports come in two independent sets, both settable in .env:
-#   * CONTAINER side — what nginx listens on inside the container:
-#     NGINX_LISTEN_HTTP_PORT (default 80, web HTTP), NGINX_LISTEN_HTTPS_PORT (default 443, web
-#     HTTPS — only when ENABLE_HTTPS=true) and CDP_LISTEN_PORT (default 9222,
-#     CDP). Change these e.g. with host networking (compose.host.yaml) or a
-#     shared network namespace, or when sibling containers dial a specific
-#     port.
-#   * HOST side — what docker publishes: NGINX_HTTP_PORT / NGINX_HTTPS_PORT /
-#     CDP_PORT, mapped onto the container-side ports above.
+# Configure three access ports in .env: HTTP_PORT (8080),
+# HTTPS_PORT (8443) and CDP_PORT (9222).
+# Bridge mode publishes them to container ports 80 / 443 / 9222 by default;
+# compose.host.yaml makes nginx listen on the chosen access ports directly.
+# LISTEN_ADDR selects the host address in both modes (unset/empty = 127.0.0.1).
+# The listener variables below remain available as advanced overrides.
+# NGINX_HTTP_PORT / NGINX_HTTPS_PORT remain fallback aliases for older .env files.
 # The HTTPS port is not published at all by default; opt in via
 # COMPOSE_FILE=compose.yaml:compose.https.yaml in .env (see
 # compose.https.yaml) so a non-HTTPS setup does not occupy a host port.
@@ -65,13 +63,19 @@ services:
       - path: .env
         required: false
 
-    # host port : container port. The container side follows the listen
-    # ports configured under environment: below. The HTTPS port is
+    # Publish on LISTEN_ADDR; default/empty is host-local. The legacy address
+    # applies only when the new name is unset (an explicit empty still wins).
+    # The interpolation's two branches distinguish unset from empty.
+    # The container side follows the listen ports below. The HTTPS port is
     # deliberately absent here; it is published by the compose.https.yaml
     # overlay.
     ports:
-      - "${NGINX_HTTP_PORT:-8080}:${NGINX_LISTEN_HTTP_PORT:-80}" # web UI, HTTP (always on)
-      - "${CDP_PORT:-9222}:${CDP_LISTEN_PORT:-9222}" # chromium CDP endpoint
+      - target: ${NGINX_LISTEN_HTTP_PORT:-80} # web UI, HTTP (always on)
+        published: "${HTTP_PORT:-${NGINX_HTTP_PORT:-8080}}"
+        host_ip: &listen-address "${LISTEN_ADDR:-${LISTEN_ADDR+127.0.0.1}${LISTEN_ADDR-${NGINX_LISTEN_ADDR:-127.0.0.1}}}"
+      - target: ${CDP_LISTEN_PORT:-9222} # chromium CDP endpoint
+        published: "${CDP_PORT:-9222}"
+        host_ip: *listen-address
 
     volumes:
       # Browser data persisted on the host: the profile (user-data/: cookies,
@@ -102,15 +106,16 @@ services:
       AUTH_SETUP_CODE: "${AUTH_SETUP_CODE:-}"
 
       # --- nginx front door ---
-      # Ports nginx LISTENS ON inside the container (not the published host
-      # ports — those are NGINX_HTTP_PORT / NGINX_HTTPS_PORT / CDP_PORT).
+      # Advanced listener overrides; normally configure only HTTP_PORT /
+      # HTTPS_PORT / CDP_PORT. Bridge keeps these container defaults;
+      # compose.host.yaml derives listeners from the three access ports.
       NGINX_LISTEN_HTTP_PORT: "${NGINX_LISTEN_HTTP_PORT:-80}" # web UI, HTTP
       NGINX_LISTEN_HTTPS_PORT: "${NGINX_LISTEN_HTTPS_PORT:-443}" # web UI, HTTPS
       CDP_LISTEN_PORT: "${CDP_LISTEN_PORT:-9222}" # public CDP endpoint
-      # Address every nginx listener binds to; empty = all interfaces. Mainly
-      # for the compose.host.yaml overlay (no port mapping there to restrict
-      # exposure): 127.0.0.1 keeps the CDP endpoint (open until a CDP API key
-      # is set) and the web UI host-local.
+      # Bridge traffic arrives on the container network interface. LISTEN_ADDR
+      # in .env controls host_ip above; the host overlay forwards it directly.
+      LISTEN_ADDR: "0.0.0.0"
+      # Compatibility for existing .env files, shell values and Compose overrides.
       NGINX_LISTEN_ADDR: "${NGINX_LISTEN_ADDR:-}"
       # Host names the web UI and the CDP port answer to (comma-separated; a
       # leading dot = subdomains too), besides IP addresses and localhost;
@@ -181,7 +186,7 @@ services:
       # Every isolated CDP context (browser.newContext(), playwright-cli
       # "isolated": true) gets its own chromium on a clone of the profile above:
       # inherits its logins, shares nothing back; destroyed when the context
-      # closes. Dashboard: http://host:${NGINX_HTTP_PORT}${CONSOLE_SUBPATH}/
+      # closes. Dashboard: http://host:${HTTP_PORT}${CONSOLE_SUBPATH}/
       # Web page origins that may use the CDP API (comma-separated, * = any),
       # like chromium's --remote-allow-origins; empty = none: any request
       # with an Origin header (a page's WebSocket or fetch) is refused.

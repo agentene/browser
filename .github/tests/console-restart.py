@@ -72,7 +72,7 @@ def smoke(image, user):
         web_port = web_socket.getsockname()[1]
         cdp_port = cdp_socket.getsockname()[1]
     started = time.monotonic()
-    docker("run", "-d", "--name", name, "--restart", "always", "--shm-size=512m",
+    docker("run", "-d", "-e", "LISTEN_ADDR=0.0.0.0", "--name", name, "--restart", "always", "--shm-size=512m",
            "-p", f"127.0.0.1:{web_port}:80", "-p", f"127.0.0.1:{cdp_port}:9222",
            "-e", f"RUN_USER={user}", "-e", "AUTH_SETUP_CODE=restart-smoke",
            "-e", "BROWSER_SUBPATH=/remote", image)
