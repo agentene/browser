@@ -95,10 +95,10 @@ jobs:
       - name: Compose optional web paths
         run: python3 .github/tests/compose-paths.py
 
-      - name: Compose access ports and legacy aliases
+      - name: Compose access ports
         run: python3 .github/tests/compose-ports.py
 
-      - name: Listener address and legacy alias
+      - name: Listener address
         run: python3 .github/tests/listen-address.py
 
       - name: docker build --check (Dockerfile lint, BuildKit)

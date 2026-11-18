@@ -28,7 +28,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def client():
     return urllib.request.build_opener(
-        NoRedirect(), urllib.request.HTTPSHandler(context=TLS),
+        NoRedirect(), urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=TLS),
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
 
@@ -64,11 +64,11 @@ def websocket(url, status, cookie="", origin=None):
         connection.close()
 
 
-def free_ports():
+def free_ports(address):
     sockets = [socket.socket() for _ in range(3)]
     try:
         for item in sockets:
-            item.bind(("127.0.0.1", 0))
+            item.bind((address, 0))
         return [item.getsockname()[1] for item in sockets]
     finally:
         for item in sockets:
@@ -82,19 +82,21 @@ def smoke(label, stream, cdp, prefix, user, https, auth, backend="wayland", host
     console_value = "/console" if console_prefix is None else console_prefix
     console_path = "/" + console_value.strip("/") if console_value.strip("/") else ""
     auth_path = console_path + "/__auth/"
-    http_port, https_port, cdp_port = free_ports() if host else (18080, 18443, 19222)
+    # Exercise the healthcheck on a specific host address.
+    address = "127.0.0.2" if host else "127.0.0.1"
+    http_port, https_port, cdp_port = free_ports(address) if host else (18080, 18443, 19222)
     args = ["run", "-d", "--name", name, "--shm-size=512m",
             "-e", f"ENABLE_SELKIES={str(stream).lower()}", "-e", f"ENABLE_CDP={str(cdp).lower()}",
             "-e", f"ENABLE_HTTPS={str(https).lower()}", "-e", f"ENABLE_AUTH={str(auth).lower()}",
             "-e", f"RUN_USER={user}", "-e", f"DISPLAY_BACKEND={backend}",
-            "-e", "AUTH_SETUP_CODE=routing-test", "-e", f"NGINX_LISTEN_HTTP_PORT={http_port}",
-            "-e", f"NGINX_LISTEN_HTTPS_PORT={https_port}", "-e", f"CDP_LISTEN_PORT={cdp_port}"]
+            "-e", "AUTH_SETUP_CODE=routing-test", "-e", f"HTTP_PORT={http_port}",
+            "-e", f"HTTPS_PORT={https_port}", "-e", f"CDP_PORT={cdp_port}"]
     if prefix is not None:
         args += ["-e", f"BROWSER_SUBPATH={prefix}"]
     if console_prefix is not None:
         args += ["-e", f"CONSOLE_SUBPATH={console_prefix}"]
     if host:
-        args += ["--network", "host"]
+        args += ["--network", "host", "-e", f"LISTEN_ADDR={address}"]
     else:
         args += ["-e", "LISTEN_ADDR=0.0.0.0"]
         for port in [http_port, https_port, cdp_port]:
@@ -104,7 +106,7 @@ def smoke(label, stream, cdp, prefix, user, https, auth, backend="wayland", host
         info = json.loads(docker("inspect", name))[0]
         def endpoint(port, scheme="http"):
             published = port if host else info["NetworkSettings"]["Ports"][f"{port}/tcp"][0]["HostPort"]
-            return f"{scheme}://127.0.0.1:{published}"
+            return f"{scheme}://{address}:{published}"
         web, browser = endpoint(http_port), endpoint(cdp_port)
         viewer, anonymous = client(), client()
         for _ in range(240):
@@ -214,7 +216,7 @@ for console_prefix, desktop_prefix in [("/console", "/console"), ("/console", "/
     result = subprocess.run(["docker", "run", "--rm", "-e", f"BROWSER_SUBPATH={desktop_prefix}",
                              "-e", f"CONSOLE_SUBPATH={console_prefix}", IMAGE], capture_output=True, text=True, check=False)
     assert result.returncode != 0 and "ERROR" in result.stdout + result.stderr, result.stdout + result.stderr
-result = subprocess.run(["docker", "run", "--rm", "-e", "ENABLE_SELKIES=false", "-e", "CDP_LISTEN_PORT=80", IMAGE], capture_output=True, text=True, check=False)
+result = subprocess.run(["docker", "run", "--rm", "-e", "ENABLE_SELKIES=false", "-e", "CDP_PORT=80", IMAGE], capture_output=True, text=True, check=False)
 assert result.returncode != 0 and "used more than once" in result.stdout + result.stderr, result.stdout + result.stderr
 result = subprocess.run(["docker", "run", "--rm", "-e", "ENABLE_SELKIES=false", "-e", "ENABLE_CDP=false", IMAGE], capture_output=True, text=True, check=False)
 assert result.returncode != 0 and "nothing to start" in result.stdout + result.stderr, result.stdout + result.stderr

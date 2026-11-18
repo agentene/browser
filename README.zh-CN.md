@@ -125,11 +125,11 @@ docker run -d --name agentene-browser \
 * **Bridge(默认):** Docker 在宿主机的 `LISTEN_ADDR` 上发布这三个端口,映射到容器的 HTTP / HTTPS / CDP 端口(`80` / `443` / `9222`)。容器内固定监听 `0.0.0.0` 以接收转发;同网络的其他容器仍使用容器端口。
 * **[Host 网络](#host-网络compose):** nginx 直接在宿主机的 `LISTEN_ADDR` 上监听配置的访问端口,没有端口映射。切换模式后访问地址保持一致。
 
-`LISTEN_ADDR` 的默认值与显式空值均为 `127.0.0.1`,两种模式默认仅宿主机可访问。需要从其他机器访问时,显式设置 `LISTEN_ADDR=0.0.0.0` 或所需的宿主机地址(IPv6 使用不带方括号的形式,如 `::1`)。已有部署若依赖默认的外部访问,升级时需要显式选择监听地址。
+`LISTEN_ADDR` 未设置或留空时均为 `127.0.0.1`。需要从其他机器访问时，设为指定的宿主机 IP，或用 `0.0.0.0` 监听所有 IPv4 接口。IPv6 地址直接填写，例如 `::1`。
 
 例如,设置 `HTTP_PORT=18080` 后,两种模式都通过 `http://localhost:18080/console/` 访问控制台。HTTPS 默认关闭:bridge 模式用 `compose.https.yaml` 开启并发布端口,host 模式设置 `ENABLE_HTTPS=true` 即可(见 [HTTPS](#https-1))。
 
-这三个端口变量由 Compose 处理。直接使用 `docker run` 的 bridge 模式时,通过 `-e LISTEN_ADDR=0.0.0.0` 让容器接收转发,并用 `-p` 指定宿主地址与端口,例如 `-p 127.0.0.1:18080:80`。原有监听端口覆盖仍受支持,供高级部署使用;见[环境变量](#环境变量)。
+直接使用 `docker run` 时，这三个变量指定服务的监听端口，默认分别为 `80`、`443` 和 `9222`。例如，要在宿主机的 `18080` 端口访问控制台，bridge 模式使用 `-e LISTEN_ADDR=0.0.0.0 -p 127.0.0.1:18080:80`，host 模式使用 `--network host -e HTTP_PORT=18080`。
 
 `PORT_FORWARDS` 可追加监听端口,代理到兄弟容器 —— 见 [Docker 网络(compose)](#docker-网络compose)。
 
@@ -354,32 +354,9 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `ENABLE_AUTH`    | `true` | web UI + CDP 控制台的内置登录,以及可选的 CDP API Key,均在控制台中管理(见[登录与 CDP API Key](#登录与-cdp-api-key));`false` = 全部开放 |
 | `AUTH_SETUP_CODE` | *(空)* | 首次启动的初始化表单要求输入的设置码(至少 8 个可见字符,不含空格);空 = 每次启动随机生成一个并打印在容器日志里。脚本化初始化时可以设置它 |
 
-**端口(Compose)**
+**端口**
 
-日常只需设置 `HTTP_PORT` / `HTTPS_PORT` / `CDP_PORT`,默认值与两种网络模式的行为见[端口](#端口)。
-
-<details>
-<summary>高级:旧端口名称与监听端口覆盖</summary>
-
-`NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` 保留为兼容别名。Compose 优先使用非空的 `HTTP_PORT` / `HTTPS_PORT`,再回退到对应旧名称,最后使用默认值 `8080` / `8443`。新配置只需使用上面的三个访问端口变量。
-
-`NGINX_LISTEN_ADDR` 也保留为兼容别名,仅在 `LISTEN_ADDR` 未设置时使用。最终未设置或为空时均使用 `127.0.0.1`;显式的 `LISTEN_ADDR=` 不会回退到旧参数。Compose 的 bridge 模式将此地址用于宿主机端口发布,并在容器内监听 `0.0.0.0`;host 模式和直接 `docker run` 将此地址用于 nginx 监听。
-
-共享网络命名空间或同网络的其他容器需要特定端口时,可使用以下覆盖项。普通 Compose 部署保持未设置即可:
-
-| 变量 | 镜像 / bridge 默认值 | host overlay 默认取值 |
-| --- | --- | --- |
-| `NGINX_LISTEN_HTTP_PORT` | `80` | `HTTP_PORT` (`8080`) |
-| `NGINX_LISTEN_HTTPS_PORT` | `443` | `HTTPS_PORT` (`8443`) |
-| `CDP_LISTEN_PORT` | `9222` | `CDP_PORT` (`9222`) |
-
-原有配置继续生效:显式设置的监听端口优先于 host overlay 的自动取值。若希望只用三个常用端口控制访问地址,请从旧 `.env` 或 shell 环境中移除这些覆盖项。bridge 模式下 Compose 会自动调整映射的容器侧端口。
-
-直接使用 `docker run` 时,通过 `-e` 修改监听端口并相应调整 `-p`,例如 `-e LISTEN_ADDR=0.0.0.0 -e CDP_LISTEN_PORT=9333 -p 127.0.0.1:9222:9333`;使用 `--network host` 时直接设置监听端口,例如 `-e NGINX_LISTEN_HTTP_PORT=18080`,无需 `-p`。
-
-三个监听端口彼此之间、与 `PORT_FORWARDS` 监听端口都不得冲突;冲突时入口脚本直接报错退出。nginx 与健康检查始终使用实际监听端口。
-
-</details>
+`HTTP_PORT`、`HTTPS_PORT` 和 `CDP_PORT` 的默认值与配置示例见[端口](#端口)。
 
 **Web UI / TLS**
 
@@ -571,7 +548,7 @@ PORT_FORWARDS=3080=web:80
 #PORT_FORWARDS=3080=web:80 6080=onlyoffice-documentserver:80
 ```
 
-转发由同一个 nginx 前门提供(无额外进程):支持 WebSocket;经容器的 DNS 服务器(compose 网络下即 docker 内嵌 DNS)按请求解析对端 —— 对端容器还没起来时本容器照常启动(对端上线前请求返回 502),对端重建换 IP 后也能自动跟上。转发监听端口不得与 HTTP / HTTPS / CDP 监听端口(bridge 默认 80/443/9222;host 默认取配置的三个访问端口)或其他转发端口冲突 —— 冲突时入口脚本拒绝启动。
+转发由同一个 nginx 前门提供(无额外进程):支持 WebSocket;经容器的 DNS 服务器(compose 网络下即 docker 内嵌 DNS)按请求解析对端 —— 对端容器还没起来时本容器照常启动(对端上线前请求返回 502),对端重建换 IP 后也能自动跟上。入口脚本会检查所有启用的监听端口，包括转发端口，发现冲突就停止启动。Compose 的 bridge 容器内使用 80/443/9222 提供 HTTP、HTTPS 和 CDP，host 模式则使用配置的访问端口。
 
 ### Host 网络(compose)
 
@@ -586,7 +563,7 @@ COMPOSE_FILE=compose.yaml:compose.host.yaml
 
 该模式下的变化:
 
-* 不发布任何端口,nginx 直接在宿主机监听 `HTTP_PORT` / `HTTPS_PORT` / `CDP_PORT`(默认 8080 / 8443 / 9222),访问地址与 bridge 模式保持一致。HTTPS 只需 `ENABLE_HTTPS=true`;若要挂载 `./tls` 持久化证书,把 `compose.https.yaml` 放在 host overlay 前面。已有高级监听端口覆盖仍优先,见[环境变量](#环境变量)。
+* 服务直接监听 `HTTP_PORT`、`HTTPS_PORT` 和 `CDP_PORT`，默认分别为 8080、8443 和 9222。设置 `ENABLE_HTTPS=true` 可启用 HTTPS。要把证书持久化到 `./tls`，将 `compose.https.yaml` 放在 host overlay 前面。
 * 只有 nginx 的监听端口占用宿主机端口:nginx 后面的服务都在容器自身文件系统里的 unix socket 上,浏览器也没有 DevTools 端口,因此容器里没有任何东西绕过 nginx(以及 [CDP API Key](#登录与-cdp-api-key))暴露在宿主机回环上。
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` 与 `hostname` 不再生效。`PORT_FORWARDS` 仍可用,但通过宿主机的 DNS 解析(容器名无法解析)—— 通常直接让浏览器访问 `localhost:<端口>` 即可。
 * 使用 `DISPLAY_BACKEND=x11` 时,若宿主机自己在 `:0` 上跑着 X server,入口脚本会自动换用下一个空闲 display。Xvfb 只监听文件系统 socket,宿主机进程无法接入容器里无认证的 display。
@@ -686,7 +663,7 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 | 现象                                           | 处理                                                                                                                                                                                                                    |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `curl :9222/json/version` 失败                 | `docker compose logs`;查看容器内 `/tmp/chromium.log`。端口被占?改 `CDP_PORT`。                                                                                                                                          |
-| 使用 host 网络时容器反复重启                   | 某个监听端口已被宿主机占用 —— 查看 `docker compose logs` / `/tmp/nginx/error.log`,然后更换 `HTTP_PORT`、`HTTPS_PORT` 或 `CDP_PORT`;若已有高级监听端口覆盖,也需检查。 |
+| 使用 host 网络时容器反复重启 | 查看 `docker compose logs` 或 `/tmp/nginx/error.log`，找到已被占用的端口，然后将对应的 `HTTP_PORT`、`HTTPS_PORT` 或 `CDP_PORT` 改为空闲端口。 |
 | 桌面或控制台打不开                                  | 查看 `/tmp/nginx/error.log` 和 `/tmp/cdp-gateway.log`。桌面串流需要 `ENABLE_SELKIES=true`,控制台 `/console/` 独立可用。                                                                                                     |
 | 串流里看不到浏览器窗口                         | 主浏览器按需启动；点击 **Start browser**，或检查隔离浏览器是否已休眠，并用 **Show** 切到目标窗口。                                                                                                                                                          |
 | 隔离 session 报错 `CDP context limit reached`  | 当前为 `reject` 模式,或所有运行浏览器均暂不可休眠。查看卡片原因、关闭空闲 session,或提高 **隔离浏览器运行上限**。网关日志在 `/tmp/cdp-gateway.log`,各 context 的 Chromium 日志在 `$CDP_CONTEXTS_DIR/<context>/chromium.log`(仅在 context 存活期间存在:目录随 context 一起删除,启动失败时也一样 —— 此时原因见网关日志)。     |

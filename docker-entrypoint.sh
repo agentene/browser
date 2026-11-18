@@ -22,11 +22,8 @@
 #      auth service    the built-in login + CDP API key nginx checks every
 #                       request with (ENABLE_AUTH=true)
 #   5. nginx           the public front door (web UI over HTTP/HTTPS, the CDP
-#                       endpoint, PORT_FORWARDS), on the container ports
-#                       NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT /
-#                       CDP_LISTEN_PORT. Compose uses HTTP_PORT / HTTPS_PORT /
-#                       CDP_PORT to publish these in bridge mode or derive
-#                       the listeners in host mode.
+#                       endpoint, PORT_FORWARDS). HTTP_PORT, HTTPS_PORT and
+#                       CDP_PORT are the service ports inside the container.
 #
 # Container start == service start ("开机自启"): this script is the image
 # ENTRYPOINT; combine with `docker run --restart=always` for boot persistence.

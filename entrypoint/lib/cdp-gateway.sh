@@ -48,7 +48,7 @@ cdp_gateway_start() {
     log "starting CDP gateway on ${endpoints} (main browser on demand, max ${CDP_CONTEXTS_MAX} running contexts, overflow=${CDP_CONTEXTS_OVERFLOW}, max ${CDP_CONTEXTS_HIBERNATED_MAX} sleepers, desktop=${DISPLAY_BACKEND}, data in ${CDP_CONTEXTS_DIR}, web page origins allowed: ${CDP_ALLOW_ORIGINS:-none}, client Browser.close reaches the browser: ${CDP_ALLOW_BROWSER_CLOSE}, local files clients may name: ${CDP_FILE_DIRS}, input overlay: ${CDP_INPUT_OVERLAY})"
     start_service /tmp/cdp-gateway.log \
         env CHROME_BIN="${CHROME_BIN:-}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
-        CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" CDP_GATEWAY_SOCKET="${CDP_GATEWAY_SOCKET}" \
+        CDP_PORT="${CDP_PORT}" CDP_GATEWAY_SOCKET="${CDP_GATEWAY_SOCKET}" \
         CONSOLE_SOCKET="${CONSOLE_SOCKET}" \
         CDP_CONSOLE_ACTIONS="${CDP_CONSOLE_ACTIONS}" \
         CDP_CONSOLE_RESTART="${CDP_CONSOLE_RESTART}" \

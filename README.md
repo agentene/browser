@@ -125,11 +125,11 @@ With Compose, configure just three access ports in `.env`; the same settings wor
 * **Bridge (default):** Docker publishes these ports on the host's `LISTEN_ADDR` and maps them to the container's HTTP / HTTPS / CDP ports (`80` / `443` / `9222`). The container listens on `0.0.0.0` to receive forwarded traffic; peers on the same Docker network still use the container ports.
 * **[Host network](#host-network-compose):** nginx listens on the chosen access ports directly on the host's `LISTEN_ADDR`; there is no port mapping. Switching modes keeps the access URLs the same.
 
-`LISTEN_ADDR` defaults to `127.0.0.1`, including an explicitly empty value, so both modes are host-local by default. For access from other machines, explicitly set `LISTEN_ADDR=0.0.0.0` or the desired host address (use bare IPv6, e.g. `::1`). Existing deployments that relied on remote access by default must choose an address when upgrading.
+`LISTEN_ADDR` defaults to `127.0.0.1` when unset or empty. For access from other machines, set it to the desired host IP or to `0.0.0.0` for all IPv4 interfaces. Use bare IPv6 addresses such as `::1`.
 
 For example, `HTTP_PORT=18080` makes the console available at `http://localhost:18080/console/` in either mode. HTTPS is off by default: use `compose.https.yaml` to enable and publish it in bridge mode, or `ENABLE_HTTPS=true` in host mode (see [HTTPS](#https)).
 
-These three port variables are Compose settings. With plain `docker run` in bridge mode, use `-e LISTEN_ADDR=0.0.0.0` so the container accepts forwarded traffic, and choose the host address and port through `-p`, e.g. `-p 127.0.0.1:18080:80`. Existing listener overrides remain supported for advanced deployments; see [Environment variables](#environment-variables).
+With plain `docker run`, the same three variables set the listener ports directly and default to `80`, `443` and `9222`. To reach the console on host port `18080`, use `-e LISTEN_ADDR=0.0.0.0 -p 127.0.0.1:18080:80` in bridge mode or `--network host -e HTTP_PORT=18080` in host mode.
 
 `PORT_FORWARDS` can add extra listeners that proxy to sibling containers — see [Docker network (compose)](#docker-network-compose).
 
@@ -354,32 +354,9 @@ docker compose build --build-arg CHROME_VERSION=<version>
 | `ENABLE_AUTH`    | `true`  | built-in login for the web UI + CDP console and the optional CDP API key, managed in the console (see [Login and CDP API key](#login-and-cdp-api-key)); `false` = everything open |
 | `AUTH_SETUP_CODE` | *(empty)* | the code the first-start setup form asks for (8+ printable characters, no spaces); empty = a random one on every start, printed in the container log. Set it for scripted setups |
 
-**Ports (Compose)**
+**Ports**
 
-For everyday use, set `HTTP_PORT` / `HTTPS_PORT` / `CDP_PORT`; see [Ports](#ports) for defaults and behavior in both network modes.
-
-<details>
-<summary>Advanced: legacy port names and listener overrides</summary>
-
-`NGINX_HTTP_PORT` / `NGINX_HTTPS_PORT` remain compatible aliases. Compose prefers a nonempty `HTTP_PORT` / `HTTPS_PORT`, falls back to the corresponding old name, then to `8080` / `8443`. New configurations only need the three access-port variables above.
-
-`NGINX_LISTEN_ADDR` remains a compatible alias, used only when `LISTEN_ADDR` is unset. An unset or empty effective value becomes `127.0.0.1`; explicit `LISTEN_ADDR=` never falls back to the old name. Compose bridge mode applies this address to host port publishing and listens on `0.0.0.0` inside the container; host mode and plain `docker run` apply it to nginx listeners.
-
-Use these overrides for a shared network namespace or peers that require specific container ports. Leave them unset for normal Compose deployments:
-
-| Variable | Image / bridge default | Host overlay defaults to |
-| --- | --- | --- |
-| `NGINX_LISTEN_HTTP_PORT` | `80` | `HTTP_PORT` (`8080`) |
-| `NGINX_LISTEN_HTTPS_PORT` | `443` | `HTTPS_PORT` (`8443`) |
-| `CDP_LISTEN_PORT` | `9222` | `CDP_PORT` (`9222`) |
-
-Existing configurations still work: explicit listener values take precedence over the host overlay's derived values. To control access through only the three usual ports, remove these overrides from an existing `.env` or shell environment. In bridge mode, Compose automatically adjusts the container side of each port mapping.
-
-With plain `docker run`, pass listener overrides through `-e` and adjust `-p` to match, e.g. `-e LISTEN_ADDR=0.0.0.0 -e CDP_LISTEN_PORT=9333 -p 127.0.0.1:9222:9333`. With `--network host`, set the listener directly, e.g. `-e NGINX_LISTEN_HTTP_PORT=18080`, without `-p`.
-
-The three listener ports must not collide with each other or with `PORT_FORWARDS` listeners; the entrypoint fails fast on a clash. nginx and the healthcheck always use the actual listener ports.
-
-</details>
+For `HTTP_PORT`, `HTTPS_PORT` and `CDP_PORT` defaults and examples, see [Ports](#ports).
 
 **Web UI / TLS**
 
@@ -572,7 +549,7 @@ PORT_FORWARDS=3080=web:80
 #PORT_FORWARDS=3080=web:80 6080=onlyoffice-documentserver:80
 ```
 
-The forwards are served by the same nginx front door (no extra process): WebSocket-capable, per-request DNS resolution via the container's DNS server (docker's embedded DNS on compose networks) — this container starts fine while a peer is still down (requests 502 until the peer answers) and follows a recreated peer's new IP. A forward listen port must not collide with the HTTP / HTTPS / CDP listeners (80/443/9222 by default in bridge mode; the three configured access ports by default in host mode) or any other forward — the entrypoint refuses to start on a clash.
+The forwards are served by the same nginx front door (no extra process): WebSocket-capable, per-request DNS resolution via the container's DNS server (docker's embedded DNS on compose networks) — this container starts fine while a peer is still down (requests 502 until the peer answers) and follows a recreated peer's new IP. The entrypoint rejects port conflicts between active listeners, including forwards. Compose uses 80/443/9222 for HTTP/HTTPS/CDP inside a bridge container and the configured access ports in host mode.
 
 ### Host network (compose)
 
@@ -587,7 +564,7 @@ COMPOSE_FILE=compose.yaml:compose.host.yaml
 
 What changes in this mode:
 
-* Nothing is published; nginx listens directly on `HTTP_PORT` / `HTTPS_PORT` / `CDP_PORT` (8080 / 8443 / 9222 by default), so the URLs stay the same as in bridge mode. HTTPS needs only `ENABLE_HTTPS=true`; to also mount `./tls` for persistent certificates, put `compose.https.yaml` before the host overlay. Existing advanced listener overrides still take precedence; see [Environment variables](#environment-variables).
+* The service listens directly on `HTTP_PORT`, `HTTPS_PORT` and `CDP_PORT` (defaults 8080, 8443 and 9222). To enable HTTPS, set `ENABLE_HTTPS=true`. To persist certificates in `./tls`, include `compose.https.yaml` before the host overlay.
 * Only nginx's listeners take host ports: the services behind it are on unix sockets inside the container's own filesystem and the browsers have no DevTools port, so nothing of the container sits on the host's loopback past nginx (and the [CDP API key](#login-and-cdp-api-key)).
 * `NETWORK_NAME` / `NETWORK_EXTERNAL` and `hostname` do not apply. `PORT_FORWARDS` still works but resolves names through the host's DNS (container names do not resolve) — usually you just point the browser at `localhost:<port>` directly.
 * With `DISPLAY_BACKEND=x11`, if the host runs its own X server on `:0`, the entrypoint picks the next free display automatically. Xvfb listens on its filesystem socket only, so host processes cannot attach to the unauthenticated container display.
@@ -687,7 +664,7 @@ Without the secret everything still works, just human-gated: the PR opens, you v
 | Symptom                                           | Fix                                                                                                                                                                                                                                         |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `curl :9222/json/version` fails                   | `docker compose logs`; check `/tmp/chromium.log` inside the container. Port busy? change `CDP_PORT`.                                                                                                                                        |
-| Container restarts in a loop with host networking | a listen port is already in use on the host — check `docker compose logs` / `/tmp/nginx/error.log`, then change `HTTP_PORT`, `HTTPS_PORT` or `CDP_PORT`; check any existing advanced listener overrides too. |
+| Container restarts in a loop with host networking | Check `docker compose logs` or `/tmp/nginx/error.log` for a port already in use, then choose an available `HTTP_PORT`, `HTTPS_PORT` or `CDP_PORT`. |
 | Desktop or console unreachable                                | Check `/tmp/nginx/error.log` and `/tmp/cdp-gateway.log`. Desktop streaming requires `ENABLE_SELKIES=true`; `/console/` is available independently.                                                                                                                       |
 | Browser window not in the stream                  | Click **Start browser**, or wake a hibernated browser and use **Show** to bring its window forward.                                                                                                                                                             |
 | Isolated session fails with `CDP context limit reached` | `reject` mode is selected, or every running browser is temporarily ineligible for hibernation. Check card reasons, close an idle session, or raise **Maximum running isolated browsers**. Gateway log: `/tmp/cdp-gateway.log`; per-context chromium logs: `$CDP_CONTEXTS_DIR/<context>/chromium.log` while the context is alive (its directory is deleted with it, also after a failed startup — the reason is then in the gateway log). |

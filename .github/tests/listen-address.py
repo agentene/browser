@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Listener address aliases, explicit empty values and IPv4/IPv6 formatting."""
+"""Verify listener defaults, IPv4/IPv6 formatting and host bindings."""
 import json
 import os
 from pathlib import Path
@@ -9,7 +9,6 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-VARIABLES = ("LISTEN_ADDR", "NGINX_LISTEN_ADDR")
 PROBE = '''set -uo pipefail
 . "$1/entrypoint/lib/common.sh"
 . "$1/entrypoint/lib/config.sh"
@@ -22,34 +21,22 @@ OTHER_LOOPBACK = ("127.0.0.2", "127.0.0.2:")
 IPV6 = ("::1", "[::1]:")
 STARTUP_CASES = [
     ("unset", {}, LOOPBACK),
-    ("IPv4", {"LISTEN_ADDR": "127.0.0.1"}, LOOPBACK),
+    ("empty", {"LISTEN_ADDR": ""}, LOOPBACK),
+    ("IPv4", {"LISTEN_ADDR": "127.0.0.2"}, OTHER_LOOPBACK),
     ("explicit wildcard", {"LISTEN_ADDR": "0.0.0.0"}, WILDCARD),
-    ("legacy wildcard", {"NGINX_LISTEN_ADDR": "0.0.0.0"}, WILDCARD),
     ("IPv6", {"LISTEN_ADDR": "::1"}, IPV6),
     ("bracketed IPv6", {"LISTEN_ADDR": "[::1]"}, ("[::1]", "[::1]:")),
-    ("legacy IPv4", {"NGINX_LISTEN_ADDR": "127.0.0.1"}, LOOPBACK),
-    ("legacy IPv6", {"NGINX_LISTEN_ADDR": "::1"}, IPV6),
-    ("new name wins", {"LISTEN_ADDR": "127.0.0.1", "NGINX_LISTEN_ADDR": "127.0.0.2"}, LOOPBACK),
-    ("empty new name wins", {"LISTEN_ADDR": "", "NGINX_LISTEN_ADDR": "0.0.0.0"}, LOOPBACK),
-    ("empty legacy name", {"NGINX_LISTEN_ADDR": ""}, LOOPBACK),
-    ("unused legacy value", {"LISTEN_ADDR": "127.0.0.1", "NGINX_LISTEN_ADDR": "invalid"}, LOOPBACK),
-    ("invalid new value", {"LISTEN_ADDR": "localhost", "NGINX_LISTEN_ADDR": "127.0.0.1"}, None),
-    ("invalid legacy value", {"NGINX_LISTEN_ADDR": "localhost"}, None),
+    ("invalid address", {"LISTEN_ADDR": "localhost"}, None),
 ]
 COMPOSE_CASES = [
     # label, .env values, shell values, effective address and listener prefix
     ("unset", None, {}, LOOPBACK),
-    ("new name in env file", {"LISTEN_ADDR": "127.0.0.1"}, {}, LOOPBACK),
+    ("empty env value", {"LISTEN_ADDR": ""}, {}, LOOPBACK),
+    ("env file", {"LISTEN_ADDR": "127.0.0.2"}, {}, OTHER_LOOPBACK),
     ("explicit wildcard", {"LISTEN_ADDR": "0.0.0.0"}, {}, WILDCARD),
-    ("legacy wildcard", {"NGINX_LISTEN_ADDR": "0.0.0.0"}, {}, WILDCARD),
-    ("legacy name in env file", {"NGINX_LISTEN_ADDR": "127.0.0.1"}, {}, LOOPBACK),
-    ("new name in shell", None, {"LISTEN_ADDR": "127.0.0.1"}, LOOPBACK),
-    ("legacy name in shell", None, {"NGINX_LISTEN_ADDR": "127.0.0.1"}, LOOPBACK),
-    ("new name wins", {"LISTEN_ADDR": "127.0.0.1", "NGINX_LISTEN_ADDR": "127.0.0.2"}, {}, LOOPBACK),
-    ("empty new name wins", {"LISTEN_ADDR": "", "NGINX_LISTEN_ADDR": "0.0.0.0"}, {}, LOOPBACK),
+    ("shell", None, {"LISTEN_ADDR": "127.0.0.2"}, OTHER_LOOPBACK),
     ("shell overrides env file", {"LISTEN_ADDR": "127.0.0.1"}, {"LISTEN_ADDR": "127.0.0.2"}, OTHER_LOOPBACK),
-    ("empty shell overrides env file", {"LISTEN_ADDR": "127.0.0.1"}, {"LISTEN_ADDR": ""}, LOOPBACK),
-    ("empty new env beats legacy shell", {"LISTEN_ADDR": ""}, {"NGINX_LISTEN_ADDR": "0.0.0.0"}, LOOPBACK),
+    ("empty shell overrides env file", {"LISTEN_ADDR": "0.0.0.0"}, {"LISTEN_ADDR": ""}, LOOPBACK),
     ("IPv6", {"LISTEN_ADDR": "::1"}, {}, IPV6),
 ]
 
@@ -66,7 +53,7 @@ def check_startup(environment, expected, label):
 
 def main():
     environment = {key: value for key, value in os.environ.items()
-                   if key not in VARIABLES + ("ALLOWED_HOSTS", "PORT_FORWARDS")
+                   if key not in ("LISTEN_ADDR", "ALLOWED_HOSTS", "PORT_FORWARDS")
                    and not key.startswith("COMPOSE_")}
     for label, values, expected in STARTUP_CASES:
         check_startup({**environment, **values}, expected, label)
@@ -90,10 +77,9 @@ def main():
                     configuration = json.loads(subprocess.check_output(
                         command, cwd=directory, env={**environment, **shell_values}, text=True))
                     service = configuration["services"]["browser"]
-                    values = service["environment"]
-                    forwarded = {key: values[key] for key in VARIABLES if values.get(key) is not None}
                     context = (label, host, https)
-                    check_startup({**environment, **forwarded}, expected if host else WILDCARD, context)
+                    address = service["environment"]["LISTEN_ADDR"]
+                    check_startup({**environment, "LISTEN_ADDR": address}, expected if host else WILDCARD, context)
                     ports = service.get("ports", [])
                     if host:
                         assert not ports, (context, ports)

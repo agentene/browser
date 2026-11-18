@@ -14,11 +14,9 @@
 #
 # Configure three access ports in .env: HTTP_PORT (8080),
 # HTTPS_PORT (8443) and CDP_PORT (9222).
-# Bridge mode publishes them to container ports 80 / 443 / 9222 by default;
-# compose.host.yaml makes nginx listen on the chosen access ports directly.
+# Bridge mode publishes them to fixed container ports 80 / 443 / 9222.
+# With compose.host.yaml the services listen on the chosen ports directly.
 # LISTEN_ADDR selects the host address in both modes (unset/empty = 127.0.0.1).
-# The listener variables below remain available as advanced overrides.
-# NGINX_HTTP_PORT / NGINX_HTTPS_PORT remain fallback aliases for older .env files.
 # The HTTPS port is not published at all by default; opt in via
 # COMPOSE_FILE=compose.yaml:compose.https.yaml in .env (see
 # compose.https.yaml) so a non-HTTPS setup does not occupy a host port.
@@ -30,12 +28,7 @@
 # The entrypoint starts everything in one container:
 #   Xvfb (or labwc) -> PulseAudio -> Selkies (unix socket) -> Chrome
 #   (+ CDP gateway) -> nginx front door
-#   nginx serves: NGINX_LISTEN_HTTP_PORT (web UI, HTTP)
-#                 + NGINX_LISTEN_HTTPS_PORT (web UI, HTTPS, ENABLE_HTTPS=true)
-#                 + CDP_LISTEN_PORT (chromium CDP endpoint)
-#                 + one listener per PORT_FORWARDS entry (extra forwards to
-#                   sibling containers on the same docker network — see the
-#                   environment: section)
+#   nginx serves the web UI, CDP and any extra PORT_FORWARDS listeners.
 
 services:
   browser:
@@ -63,17 +56,13 @@ services:
       - path: .env
         required: false
 
-    # Publish on LISTEN_ADDR; default/empty is host-local. The legacy address
-    # applies only when the new name is unset (an explicit empty still wins).
-    # The interpolation's two branches distinguish unset from empty.
-    # The container side follows the listen ports below. The HTTPS port is
-    # deliberately absent here; it is published by the compose.https.yaml
-    # overlay.
+    # Publish HTTP and CDP on the selected host address. The HTTPS overlay
+    # publishes the web UI's TLS port.
     ports:
-      - target: ${NGINX_LISTEN_HTTP_PORT:-80} # web UI, HTTP (always on)
-        published: "${HTTP_PORT:-${NGINX_HTTP_PORT:-8080}}"
-        host_ip: &listen-address "${LISTEN_ADDR:-${LISTEN_ADDR+127.0.0.1}${LISTEN_ADDR-${NGINX_LISTEN_ADDR:-127.0.0.1}}}"
-      - target: ${CDP_LISTEN_PORT:-9222} # chromium CDP endpoint
+      - target: &http-target 80
+        published: "${HTTP_PORT:-8080}"
+        host_ip: &listen-address "${LISTEN_ADDR:-127.0.0.1}"
+      - target: &cdp-target 9222
         published: "${CDP_PORT:-9222}"
         host_ip: *listen-address
 
@@ -105,25 +94,19 @@ services:
       # printed in the container log (docker compose logs browser).
       AUTH_SETUP_CODE: "${AUTH_SETUP_CODE:-}"
 
-      # --- nginx front door ---
-      # Advanced listener overrides; normally configure only HTTP_PORT /
-      # HTTPS_PORT / CDP_PORT. Bridge keeps these container defaults;
-      # compose.host.yaml derives listeners from the three access ports.
-      NGINX_LISTEN_HTTP_PORT: "${NGINX_LISTEN_HTTP_PORT:-80}" # web UI, HTTP
-      NGINX_LISTEN_HTTPS_PORT: "${NGINX_LISTEN_HTTPS_PORT:-443}" # web UI, HTTPS
-      CDP_LISTEN_PORT: "${CDP_LISTEN_PORT:-9222}" # public CDP endpoint
-      # Bridge traffic arrives on the container network interface. LISTEN_ADDR
-      # in .env controls host_ip above; the host overlay forwards it directly.
+      # Bridge listeners use fixed container ports and accept Docker's
+      # forwarded traffic. The host overlay uses the configured ports and address.
+      HTTP_PORT: *http-target
+      HTTPS_PORT: "443"
+      CDP_PORT: *cdp-target
       LISTEN_ADDR: "0.0.0.0"
-      # Compatibility for existing .env files, shell values and Compose overrides.
-      NGINX_LISTEN_ADDR: "${NGINX_LISTEN_ADDR:-}"
       # Host names the web UI and the CDP port answer to (comma-separated; a
       # leading dot = subdomains too), besides IP addresses and localhost;
       # others get 421. Guards an open web UI / console (login skipped or
       # ENABLE_AUTH=false) against DNS rebinding. Empty = any host name.
       ALLOWED_HOSTS: "${ALLOWED_HOSTS:-}"
-      # true = nginx also serves HTTPS on NGINX_LISTEN_HTTPS_PORT (published to the
-      # host only via the compose.https.yaml overlay, which also mounts ./tls).
+      # true = also serve HTTPS. The HTTPS overlay publishes it in bridge
+      # mode and mounts ./tls for certificates.
       # Certificates: an existing valid pair in ./tls is reused as-is;
       # otherwise a self-signed pair is generated once and then reused.
       ENABLE_HTTPS: "${ENABLE_HTTPS:-false}"

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Check public routes without launching Chromium. Use the same path defaults,
-# normalization and validation as startup, including explicit empty/root paths.
+# Check the configured listeners and web paths without launching Chromium.
 set -uo pipefail
 
 # shellcheck source=entrypoint/lib/common.sh
@@ -9,10 +8,18 @@ set -uo pipefail
 . /usr/local/lib/docker-entrypoint/lib/config.sh
 
 config_web_paths
+config_nginx
+
+# A wildcard listener accepts probes on the corresponding loopback address.
+case "${LISTEN_PREFIX}" in
+    '0.0.0.0:') probe_prefix='127.0.0.1:' ;;
+    '[::]:') probe_prefix='[::1]:' ;;
+    *) probe_prefix="${LISTEN_PREFIX}" ;;
+esac
 
 probe() {
     local status
-    status="$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' "$1")" || return 1
+    status="$(curl --noproxy '*' -s --max-time 2 -o /dev/null -w '%{http_code}' "$1")" || return 1
     case "${status}" in
         200|401) return 0 ;;
         3??) [ "${2:-}" = redirect ] ;;
@@ -20,10 +27,10 @@ probe() {
     esac
 }
 
-probe "http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}${CONSOLE_SUBPATH}/api/settings" || exit 1
+probe "http://${probe_prefix}${HTTP_PORT}${CONSOLE_SUBPATH}/api/settings" || exit 1
 if [ "${ENABLE_SELKIES:-true}" = true ]; then
-    probe "http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}${BROWSER_SUBPATH}/" redirect || exit 1
+    probe "http://${probe_prefix}${HTTP_PORT}${BROWSER_SUBPATH}/" redirect || exit 1
 fi
 if [ "${ENABLE_CDP:-true}" = true ]; then
-    probe "http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/json/list" || exit 1
+    probe "http://${probe_prefix}${CDP_PORT}/json/list" || exit 1
 fi

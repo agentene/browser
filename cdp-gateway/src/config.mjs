@@ -50,7 +50,7 @@ export const SCREEN_SIZE = env.CDP_GATEWAY_SCREEN_SIZE || '';
 export const PROTOCOL_FILE = env.CDP_GATEWAY_PROTOCOL_FILE || '/opt/chrome-for-testing/devtools-protocol.json';
 // its /json/version, captured the same way (version.mjs)
 export const VERSION_FILE = env.CDP_GATEWAY_VERSION_FILE || '/opt/chrome-for-testing/devtools-version.json';
-export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
+export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_PORT || 9222}`;
 export const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
 // desktop-raise-new-windows.sh, which hands the console's "new windows to
 // the front" to the desktop; empty when the browsers have no desktop
