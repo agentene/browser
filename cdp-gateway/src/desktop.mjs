@@ -116,7 +116,7 @@ export async function focus(name, targetId) {
   // Coalesce repeated Show clicks, including the empty check + createTarget.
   if (!targetId && context.focusing) return context.focusing;
   const task = (async () => {
-    await context.wake();
+    await context.wake('console focus');
     context.holds++;
     try { return await focusWindow(name, targetId); }
     finally { context.holds--; }

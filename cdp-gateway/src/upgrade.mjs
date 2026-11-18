@@ -56,7 +56,7 @@ async function resolveCdp(req, p) {
   }
   if (p.startsWith('/devtools/page/')) {
     const targetId = p.slice('/devtools/page/'.length);
-    const target = await targetAddress(targetId, true);
+    const target = await targetAddress(targetId, 'page WebSocket');
     if (!target) return { refuse: 404 };
     const { pipe, id, context } = target;
     if (context) context.relays++;

@@ -147,9 +147,10 @@ try {
   const native = await connect();
   const fixture = (process.env.CDP_FIXTURE_URL ?? endpoint) + '/json/version';
   const nativePages = [];
+  let oldResponse;
   for (const marker of ['one', 'two']) {
     const p = await native.c.newPage();
-    await p.goto(fixture);
+    oldResponse = await p.goto(fixture);
     await p.evaluate((marker) => {
       sessionStorage.setItem('identity', marker);
       window.volatileState = 42;
@@ -164,6 +165,11 @@ try {
   let nativePageEvents = 0;
   native.c.on('page', () => nativePageEvents++);
   await action(native.name, 'hibernate');
+  await assert.rejects(oldResponse.body(), /request id/i);
+  await assert.rejects(oldHandle.jsonValue());
+  const sleeping = (await listing()).browsers.find((b) => b.name === native.name);
+  assert.equal(sleeping.state, 'hibernated', 'late response and JSHandle reads must leave the context asleep');
+  assert.equal(sleeping.pid, null);
   assert.equal((await native.c.cookies()).find((c) => c.name === 'session_kept').value, 'yes');
   assert.equal((await state(native.name, 'running')).restoreWarning, '');
   assert.deepEqual(native.c.pages(), nativePages);

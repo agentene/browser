@@ -277,9 +277,9 @@ export class Context {
     return this.hibernating;
   }
 
-  wake() {
+  wake(reason = 'explicit request') {
     if (this.destroyed) return Promise.reject(new Error('context is gone'));
-    if (this.closing) return this.closing.then(() => this.wake());
+    if (this.closing) return this.closing.then(() => this.wake(reason));
     if (this.state === 'running') { this.touch(); return Promise.resolve(); }
     if (this.waking) return this.waking;
     this.waking = this.registry.serialize(async () => {
@@ -293,6 +293,7 @@ export class Context {
       this.wakeActive = true;
       this.lastError = '';
       this.restoreWarning = this.snapshot?.forced ? 'browser required a signal to stop; recent unsaved state may be lost' : '';
+      log(`${this.name}: ${previousState === 'stopped' ? 'starting' : 'waking'} (${reason})`);
       notifyChange();
       try {
         let native = nativeRestore(this);

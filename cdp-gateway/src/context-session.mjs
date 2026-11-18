@@ -80,9 +80,24 @@ export class ContextSession extends EventEmitter {
       return;
     }
     if (this.mode !== 'running') {
-      // Discovery is a view of logical targets, not an instruction to run
-      // every sleeping browser. GC of an old handle must not wake it either.
-      if (msg.method === 'Target.detachFromTarget') {
+      try {
+        const session = this.sessions.get(msg.sessionId ?? '');
+        if (this.mode === 'suspended' && !session) throw new Error('stale or unknown session id after context hibernation');
+        const result = this.localResult(msg, session);
+        if (result === undefined) this.queueForWake(msg, session);
+        else if (msg.id !== undefined) this.deliver({ id: msg.id, sessionId: msg.sessionId, result });
+      } catch (err) { this.error(msg, err.message); }
+      cb?.();
+      return;
+    }
+    try { this.forward(msg, cb); } catch (err) { this.error(msg, err.message); cb?.(); }
+  }
+
+  // Answer from the logical session when possible. An undefined result means
+  // the command needs Chromium.
+  localResult(msg, session) {
+    switch (msg.method) {
+      case 'Target.detachFromTarget': {
         const detached = new Set([msg.params?.sessionId]);
         for (const s of this.sessions.values()) if (detached.has(s.parent)) detached.add(s.id);
         for (const id of detached) {
@@ -92,31 +107,74 @@ export class ContextSession extends EventEmitter {
           this.deliver({ method: 'Target.detachedFromTarget', sessionId: s.parent || undefined,
             params: { sessionId: id, targetId: s.targetId } });
         }
-        if (msg.id !== undefined) this.deliver({ id: msg.id, sessionId: msg.sessionId, result: {} });
-      } else if (msg.method === 'Target.getTargets') {
+        return {};
+      }
+      case 'Target.getTargets': {
         const filter = msg.params?.filter;
         const targetInfos = [...this.targets.values()].filter((t) => {
           if (!filter) return !['browser', 'tab'].includes(t.type);
           const rule = filter.find((f) => !f.type || f.type === t.type);
           return rule ? !rule.exclude : false;
         });
-        this.deliver({ id: msg.id, sessionId: msg.sessionId, result: { targetInfos } });
-      } else if (msg.method === 'Runtime.releaseObject') {
-        this.sessions.get(msg.sessionId ?? '')?.journal.helpers.delete(msg.params?.objectId);
-        this.deliver({ id: msg.id, sessionId: msg.sessionId, result: {} });
-      } else {
-        const bytes = Buffer.byteLength(JSON.stringify(msg));
-        if (this.queueBytes + bytes > MAX_BUFFERED) this.error(msg, 'context wake queue is full');
-        else {
-          this.queue.push(msg);
-          this.queueBytes += bytes;
-          this.context.wake().catch((err) => this.flush(err));
-        }
+        return { targetInfos };
       }
-      cb?.();
-      return;
+      case 'Target.getTargetInfo': {
+        const targetInfo = this.targets.get(msg.params?.targetId ?? session?.targetId);
+        return targetInfo && { targetInfo };
+      }
+      case 'Runtime.releaseObject':
+      case 'Runtime.releaseObjectGroup':
+        session?.journal.record(msg, {});
+        return {};
+      // These event responses carry no protocol id for the dialog, debugger
+      // wait or screencast frame. All three ended with the physical session.
+      case 'Page.handleJavaScriptDialog':
+        if (this.mode === 'suspended') throw new Error('No dialog is showing');
+        return undefined;
+      case 'Runtime.runIfWaitingForDebugger':
+      case 'Page.screencastFrameAck':
+        return this.mode === 'suspended' ? {} : undefined;
     }
-    try { this.forward(msg, cb); } catch (err) { this.error(msg, err.message); cb?.(); }
+  }
+
+  queueForWake(msg, session) {
+    // The old browser can still emit events during capture. A client's reply
+    // to one must not schedule a new process behind the registry's sleep.
+    // The session is already suspended while the old process is exiting.
+    if (this.context.state === 'hibernating') throw new Error('context is hibernating, retry after hibernation completes');
+    if (this.mode === 'suspended') {
+      this.ids.mapIds(msg.method, msg.params, 'params', (kind, id) => {
+        if (id && !this.canRestoreId(session, kind, id)) throw new Error(`stale or unknown ${kind} id after context hibernation`);
+        return id;
+      });
+    }
+    const bytes = Buffer.byteLength(JSON.stringify(msg));
+    if (this.queueBytes + bytes > MAX_BUFFERED) throw new Error('context wake queue is full');
+    this.queue.push(msg);
+    this.queueBytes += bytes;
+    if (this.queue.length === 1) {
+      const reason = this.ids.commands.has(msg.method) ? `CDP ${msg.method}` : 'CDP command';
+      this.context.wake(reason).catch((err) => this.flush(err));
+    }
+  }
+
+  // Only the logical ids that restore() can rebind justify starting Chrome.
+  // Request ids, ordinary JS handles and other document resources die with it.
+  canRestoreId(session, kind, id) {
+    switch (kind) {
+      case 'session': return this.sessions.has(id);
+      case 'target':
+        return this.context.snapshot?.tabs.some((tab) => tab.id === id)
+          || [...this.sessions.values()].some((s) => s.frameId === id || (s.type === 'browser' && s.targetId === id));
+      case 'window':
+        return this.context.snapshot?.tabs.some((tab) => tab.id === this.windowTargets.get(id))
+          || [...this.sessions.values()].some((s) => s.type === 'page' && s.windows.has(id));
+      case 'world': return [...session.worlds.values()].some((w) => w.id === id);
+      case 'uniqueWorld': return [...session.worlds.values()].some((w) => w.uniqueId === id);
+      case 'object': return session.journal.helpers.has(id);
+      case 'initScript': return session.journal.states.has(`script:${id}`);
+      default: return false;
+    }
   }
 
   forward(msg, cb) {

@@ -93,6 +93,40 @@ test('detaching a sleeping browser session retires its children without waking',
   session.close();
 });
 
+test('a sleeping page serves discovery and cleanup, and wakes only for handles it can restore', () => {
+  const upstream = new EventEmitter();
+  upstream.close = () => upstream.emit('close');
+  const wakes = [];
+  const tab = { id: 'tab', title: 'Saved', url: 'about:blank' };
+  const session = new ContextSession({ snapshot: { tabs: [tab] }, wake: async (reason) => { wakes.push(reason); } }, upstream, schema);
+  const page = session.entry('page', tab.id, 'page', '');
+  for (const group of ['keep', 'release']) page.journal.helpers.set(group, { msg: { params: { objectGroup: group } } });
+  session.suspend();
+  const replies = [];
+  session.on('message', (data) => replies.push(JSON.parse(data)));
+  const send = (id, method, params) => session.send({ id, method, params, sessionId: page.id });
+
+  send(1, 'Target.getTargetInfo');
+  assert.equal(replies.at(-1).result.targetInfo.targetId, tab.id);
+  send(2, 'Runtime.releaseObjectGroup', { objectGroup: 'release' });
+  assert.deepEqual(replies.at(-1).result, {});
+  send(3, 'Runtime.callFunctionOn', { objectId: 'keep', arguments: [{ objectId: 'release' }] });
+  assert.match(replies.at(-1).error.message, /stale or unknown object id/);
+  send(4, 'Page.handleJavaScriptDialog', { accept: false });
+  assert.match(replies.at(-1).error.message, /No dialog is showing/);
+  send(5, 'Runtime.runIfWaitingForDebugger');
+  assert.deepEqual(replies.at(-1).result, {});
+  send(6, 'Page.screencastFrameAck', { sessionId: 1 });
+  assert.deepEqual(replies.at(-1).result, {});
+  assert.deepEqual(wakes, []);
+  assert.equal(session.queueBytes, 0);
+
+  send(7, 'Runtime.callFunctionOn', { objectId: 'keep', arguments: [{ value: { objectId: 'application data' } }] });
+  assert.deepEqual(wakes, ['CDP Runtime.callFunctionOn']);
+  assert.deepEqual(session.queue.map((msg) => msg.id), [7]);
+  session.close(true);
+});
+
 test('handles cannot cross sessions or survive restart unless explicitly rebuilt', () => {
   const ids = new ProtocolIds(schema);
   ids.bind('object', 'before', 'helper', 'a');

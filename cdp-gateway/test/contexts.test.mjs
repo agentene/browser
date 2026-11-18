@@ -366,6 +366,39 @@ test('delete wins over a queued wake and never resurrects a removed profile', as
   assert.equal(contexts.size, 0);
 });
 
+test('client commands arriving during capture and process exit cannot queue a wake', async () => {
+  const c = await contexts.create('hibernate-race');
+  try {
+    const session = await c.connect();
+    const replies = [];
+    session.on('message', (data) => replies.push(JSON.parse(data)));
+    const pipe = c.pipe;
+    const call = pipe.call.bind(pipe);
+    const phases = [];
+    pipe.call = (method, ...args) => {
+      if (c.state === 'hibernating' && ['Target.getTargets', 'Browser.close'].includes(method)) {
+        phases.push(session.mode);
+        session.send({ id: phases.length, method: 'Storage.getCookies' });
+      }
+      return call(method, ...args);
+    };
+
+    await c.hibernate();
+    await c.waking;
+    assert.deepEqual(phases, ['quiescing', 'suspended']);
+    assert.equal(c.state, 'hibernated');
+    assert.equal(c.proc, null);
+    assert.deepEqual(replies.map((r) => r.id), [1, 2]);
+    for (const r of replies) assert.match(r.error.message, /hibernating/);
+    assert.equal(session.queue.length, 0);
+
+    const reply = new Promise((resolve) => session.once('message', (data) => resolve(JSON.parse(data))));
+    session.send({ id: 3, method: 'Storage.getCookies' });
+    assert.deepEqual(await reply, { id: 3, result: { cookies: [] } });
+    assert.equal(c.state, 'running');
+  } finally { await c.destroy('test'); }
+});
+
 test('forced hibernation retains its profile and reports reduced durability after waking', async () => {
   const c = await contexts.create('forced-close');
   const marker = path.join(tmp, 'hang-close');

@@ -73,6 +73,9 @@ export class ContextJournal {
         this.helpers.set(result.result.objectId, { msg, contextId: p.contextId });
       } else this.blockers.set('helper', 'unrecognized Playwright helper; update gateway compatibility before hibernating');
     } else if (method === 'Runtime.releaseObject') this.helpers.delete(p.objectId);
+    else if (method === 'Runtime.releaseObjectGroup' && typeof p.objectGroup === 'string') {
+      for (const [id, helper] of this.helpers) if (helper.msg.params.objectGroup === p.objectGroup) this.helpers.delete(id);
+    }
     // These are ongoing sessions, not declarative configuration to replay.
     if (/^(Tracing\.start|Profiler\.start|Debugger\.enable|Page\.startScreencast|Target\.sendMessageToTarget)/.test(method)) {
       this.blockers.set(domain, `${domain} session cannot be hibernated`);

@@ -129,7 +129,7 @@ export async function consoleRoute(req, res, url, restart) {
     const context = contexts.get(name);
     if (!context) throw new HttpError(404, 'context not found');
     if (!CONSOLE_ACTIONS) throw new HttpError(403, 'console browser actions are disabled');
-    try { await (action === 'wake' ? context.wake() : context.hibernate()); }
+    try { await (action === 'wake' ? context.wake('console wake') : context.hibernate()); }
     catch (err) { throw new HttpError(409, err.message); }
     send(res, 200, { ok: true, state: context.state });
     return true;
