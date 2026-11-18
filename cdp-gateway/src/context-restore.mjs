@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { browserTabs, pageInfos } from './targets.mjs';
+import { TabListing, pageInfos } from './targets.mjs';
 import { sleep } from './util.mjs';
 
 // Match the browser startup budget: discovering a target does not mean its
@@ -22,7 +22,8 @@ async function evaluate(pipe, targetId, expression) {
 
 export async function captureTabs(context) {
   const { pipe, session } = context;
-  const listing = await browserTabs(pipe, {});
+  const observer = new TabListing(pipe);
+  const listing = await observer.read().finally(() => observer.close());
   const key = `__agentene_restore_${randomUUID()}`;
   const tabs = [];
   for (const tab of listing.tabs) {
@@ -34,7 +35,7 @@ export async function captureTabs(context) {
   const order = session ? [...session.targets.keys()] : [];
   tabs.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
   const selected = tabs.some((t) => t.id === context.selected) ? context.selected : null;
-  return { key, tabs, current: selected ?? (listing.current && context.logicalTarget(listing.current)) };
+  return { key, tabs, current: listing.current ? context.logicalTarget(listing.current) : selected };
 }
 
 export function nativeRestore(context) {

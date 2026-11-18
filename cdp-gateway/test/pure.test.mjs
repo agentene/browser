@@ -8,7 +8,6 @@ import { test } from 'node:test';
 import { browserExitAction } from '../src/browser-exit.mjs';
 import { appId, intEnv } from '../src/config.mjs';
 import { broadcast } from '../src/console-live.mjs';
-import { listedToplevels } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
 import { consoleDenied, consoleOriginDenied } from '../src/console-auth.mjs';
 import { requestPath } from '../src/respond.mjs';
@@ -211,15 +210,6 @@ test('originTabs: one tab per http(s) origin', () => {
     { targetId: 'E', url: 'chrome://newtab/' },
     { targetId: 'F', url: 'not a url' },
   ]), [['https://a.example', 'A'], ['http://b.example:8080', 'C']]);
-});
-
-test('listedToplevels: app_ids and titles of wlrctl toplevel list', () => {
-  assert.deepEqual(listedToplevels('cdp-context-1: ctx - Google Chrome for Testing\ncdp-main: a: b\ncdp-main: \n'), [
-    ['cdp-context-1', 'ctx - Google Chrome for Testing'],
-    ['cdp-main', 'a: b'],
-    ['cdp-main', ''],
-  ]);
-  assert.deepEqual(listedToplevels(''), []);
 });
 
 test('broadcast: a console that does not keep up is dropped, not buffered for', () => {

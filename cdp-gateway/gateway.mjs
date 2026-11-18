@@ -70,7 +70,7 @@
 //   main-browser.mjs    the main browser (on demand, manually stopped)
 //   browsers.mjs        main + contexts by name (pipe, pid, target owner)
 //   screen.mjs          the desktop back to SCREEN_GEOMETRY before a context window opens unwatched
-//   desktop.mjs         the browser windows (the one in front, their titles), bringing one to the front
+//   desktop.mjs         the foreground browser on the desktop, bringing a window to the front
 //   settings.mjs        the console's persisted settings (/browser/settings)
 //   console-live.mjs    the console's live state over /console/ws
 //   input-overlay.mjs   the clients' input for the Selkies page's overlay (/console/overlay)

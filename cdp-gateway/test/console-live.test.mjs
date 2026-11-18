@@ -11,14 +11,27 @@ const tab = (id) => ({ id, title: id, url: `http://fixture.test/${id}` });
 
 function browser(name, ids) {
   const context = { name, state: 'running', snapshot: null, logicalTarget: (id) => id, physicalTarget: (id) => id };
+  context.active = ids[0];
   context.pipe = Object.assign(new EventEmitter(), {
-    async call(method, params) {
-      if (method === 'Target.getTargets') return { targetInfos: ids.map((id) => ({ ...tab(id), targetId: id, type: 'page' })) };
-      if (method === 'Target.attachToTarget') return { sessionId: params.targetId };
-      if (method === 'Runtime.evaluate') return { result: { value: 0 } };
-      return {};
+    async call(method) {
+      assert.equal(method, 'Target.getTargets');
+      return { targetInfos: ids.flatMap((id) => [
+        { ...tab(id), type: 'page', targetId: id },
+        { type: 'tab', targetId: 'tab-' + id, embedderData: { tabActive: context.active === id } },
+      ]) };
     },
-    async connect() { throw new Error('no thumbnails in this fixture'); },
+    async connect({ targetId }) {
+      if (!targetId.startsWith('tab-')) throw new Error('no thumbnails in this fixture');
+      return Object.assign(new EventEmitter(), {
+        readyState: 1, targets: new Map(),
+        send({ id, method }) {
+          assert.equal(method, 'Target.setAutoAttach');
+          this.targets.set('child', targetId.slice(4));
+          this.emit('message', JSON.stringify({ id, result: {} }));
+        },
+        close() { this.emit('close'); },
+      });
+    },
   });
   return context;
 }
@@ -128,6 +141,7 @@ test('console keeps tab rows, order and current selection throughout capture and
     const before = ws.messages.find((op) => op.t === 'snapshot').browsers.find((b) => b.name === context.name);
     const ids = before.tabs.map((tab) => tab.id);
     assert.deepEqual(ids, ['first', 'second', 'third']);
+    assert.equal(before.current, 'third');
     ws.messages = [];
     for (let round = 0; round < 2; round++) {
       // Round 1 has no snapshot yet; round 2 still has the previous one.

@@ -22,14 +22,14 @@ import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
 import { DESKTOP_ENABLED, MAX_CONTEXTS, HIBERNATED_MAX, CONTEXTS_OVERFLOW } from './config.mjs';
 import { contexts } from './contexts.mjs';
-import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
+import { frontBrowser, unwatchFront, watchFront } from './desktop.mjs';
 import { unwatchInput, watchInput, workingTabs } from './input-overlay.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { hasBrowserClients } from './mux.mjs';
 import { hasPageClients } from './relay.mjs';
 import { Screencast } from './screencast.mjs';
 import { settingsView } from './settings.mjs';
-import { NO_TABS, browserTabs, releaseProbes } from './targets.mjs';
+import { NO_TABS, TabListing } from './targets.mjs';
 import { MAX_BUFFERED, log } from './util.mjs';
 
 const TICK_MS = 1000;
@@ -41,7 +41,7 @@ const THUMB_BACK_MS = 20000;
 
 const subscribers = new Set();
 const views = new Map(); // name -> what subscribers were last told: { fields, tabs, current, thumb, cast }
-const memos = new Map(); // name -> the current-tab memo of targets.mjs' pickCurrent
+const tabListings = new Map(); // physical browser pipe -> its live TabListing
 let tickTimer = null;
 let anyFront = false;
 let settingsSent = JSON.stringify(settingsView());
@@ -113,7 +113,7 @@ async function tick() {
     ops.push({ t: 'ai', ai });
   }
   const names = browserNames();
-  const { front, titles } = await desktopWindows(names);
+  const front = await frontBrowser(names);
   anyFront = !!front;
   for (const [name, view] of views) {
     if (names.includes(name)) continue;
@@ -121,14 +121,15 @@ async function tick() {
     views.delete(name);
     ops.push({ t: 'gone', name });
   }
-  for (const name of memos.keys()) if (!names.includes(name)) memos.delete(name);
   // all browsers at once: one slow to answer holds up the tick only as long
   // as the slowest (and at most a pipe call's timeout), not their sum
-  const listings = await Promise.all(names.map(async (name) => {
-    const pipe = pipeOf(name);
-    if (!memos.has(name)) memos.set(name, {});
+  const pipes = names.map(pipeOf);
+  closeTabListingsExcept(new Set(pipes));
+  const listings = await Promise.all(names.map(async (name, index) => {
+    const pipe = pipes[index];
     const context = contexts.get(name);
-    const listing = pipe ? await browserTabs(pipe, memos.get(name), titles.get(name)).catch(() => null) : null;
+    if (pipe && !tabListings.has(pipe)) tabListings.set(pipe, new TabListing(pipe));
+    const listing = pipe ? await tabListings.get(pipe).read().catch(() => null) : null;
     return { pipe, context, listing };
   }));
   for (const [i, name] of names.entries()) {
@@ -221,6 +222,14 @@ function stopCast(view) {
   view.cast = null;
 }
 
+function closeTabListingsExcept(keep) {
+  for (const [pipe, listing] of tabListings) {
+    if (keep?.has(pipe)) continue;
+    listing.close();
+    tabListings.delete(pipe);
+  }
+}
+
 export async function subscribe(ws) {
   ws.on('error', () => { /* close follows */ });
   ws.on('close', () => {
@@ -231,14 +240,8 @@ export async function subscribe(ws) {
     tickTimer = null;
     if (DESKTOP_ENABLED) unwatchFront();
     for (const view of views.values()) stopCast(view);
-    // the current-tab probes' sessions too (targets.mjs) — once a tick
-    // under way is done, or it would probe the tabs again after this
     tickRunning.then(() => {
-      if (subscribers.size) return;
-      for (const name of browserNames()) {
-        const pipe = pipeOf(name);
-        if (pipe) releaseProbes(pipe);
-      }
+      if (!subscribers.size) closeTabListingsExcept();
     });
   });
   await runTick(); // views may be stale while nobody watched
