@@ -38,6 +38,7 @@
 
 import { randomBytes } from 'node:crypto';
 import WebSocket from 'ws';
+import { notifyChange } from './changes.mjs';
 import { guardFrame } from './client-frame.mjs';
 import { INTERNAL_ID_BASE } from './config.mjs';
 import { contexts } from './contexts.mjs';
@@ -105,6 +106,18 @@ function strippedAlias(msg) {
 // open client connections
 export function openMuxes() {
   return muxes.size;
+}
+
+// Live browser-level clients, including idle ones and owners of sleeping
+// or stopped contexts. A main connection belongs only to its current pipe.
+export function hasBrowserClients(name, pipe) {
+  for (const mux of muxes) {
+    if (mux.closed || mux.client.readyState !== WebSocket.OPEN) continue;
+    if (name === 'main'
+      ? pipe && mux.main?.pipe === pipe && mux.main.readyState === WebSocket.OPEN
+      : mux.context?.name === name) return true;
+  }
+  return false;
 }
 
 // The main browser's connection for a client: started if it is not running.
@@ -546,6 +559,7 @@ export class Mux {
       this.context = context;
       this.contextWs = ws;
       context.mux = this;
+      notifyChange();
       // the alias carries the context's number (context-7 -> CONTEXT7…);
       // the timestamp tells two aliases of one number apart across restarts
       this.alias = `CONTEXT${context.name.replace(/\D/g, '')}${Date.now().toString(16).toUpperCase()}`;
@@ -655,6 +669,7 @@ export class Mux {
     this.main = main;
     main.on('message', (data) => { if (this.main === main) this.fromUpstream('main', data); });
     main.on('close', () => { if (this.main === main) this.mainGone(); });
+    notifyChange();
   }
 
   // A client command while there is no main browser that the gateway answers
@@ -759,6 +774,7 @@ export class Mux {
       return;
     }
     this.main = null;
+    notifyChange();
     log(`mux ${this.clientAddr}: the main browser is gone; the client keeps its isolated context`);
     for (const [sessionId, { targetId, parent }] of this.mainSessions) {
       this.sendClient({ method: 'Target.detachedFromTarget', sessionId: parent, params: { sessionId, targetId } });
@@ -872,12 +888,14 @@ export class Mux {
     this.contextWs?.close(true); // pending commands were answered above
     this.contextWs = null;
     this.context = null;
+    notifyChange();
   }
 
   close(reason) {
     if (this.closed) return;
     this.closed = true;
     muxes.delete(this);
+    notifyChange();
     this.context?.destroy(reason);
     this.main?.close();
     if (this.client.readyState === WebSocket.OPEN) this.client.close();

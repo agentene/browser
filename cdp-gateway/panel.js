@@ -715,7 +715,7 @@
       actions);
     if (isMain) {
       actions.append(el('button', { class: 'danger', title: t('stopTitle'),
-        onclick: async () => await ask(t('stopConfirm'), t('stop'))
+        onclick: async () => (!browsers.get(name)?.hasClients || await ask(t('stopConfirm'), t('stop')))
           && call('POST', `${base}/stop`).catch(showError) }, t('stop')));
     }
     if (!isMain) {
@@ -724,7 +724,7 @@
           && call('POST', `${base}/hibernate`).catch(showError) }, t('hibernate'));
       actions.append(v.hibernate);
       actions.append(el('button', { class: 'danger', title: t('deleteTitle'),
-        onclick: async () => await ask(t('deleteConfirm', name), t('delete'))
+        onclick: async () => (!browsers.get(name)?.hasClients || await ask(t('deleteConfirm', name), t('delete')))
           && call('DELETE', base).catch(showError) }, t('delete')));
     }
     v.meta = el('div', { class: 'meta' });

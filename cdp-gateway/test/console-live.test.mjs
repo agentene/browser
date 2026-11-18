@@ -3,6 +3,9 @@ import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import { subscribe } from '../src/console-live.mjs';
 import { contexts } from '../src/contexts.mjs';
+import { mainBrowser } from '../src/main-browser.mjs';
+import { Mux } from '../src/mux.mjs';
+import { relay } from '../src/relay.mjs';
 
 const tab = (id) => ({ id, title: id, url: `http://fixture.test/${id}` });
 
@@ -40,6 +43,81 @@ function registry(t, browsers) {
   t.mock.method(contexts, 'names', () => browsers.map((c) => c.name));
   t.mock.method(contexts, 'get', (name) => browsers.find((c) => c.name === name));
 }
+
+function connection(pipe) {
+  return Object.assign(new EventEmitter(), {
+    pipe, readyState: 1, bufferedAmount: 0,
+    send() {},
+    close() { if (this.readyState === 3) return; this.readyState = 3; this.emit('close'); },
+    terminate() { this.close(); },
+  });
+}
+
+function mainFixture(t) {
+  const { state, pipe } = mainBrowser;
+  t.after(() => Object.assign(mainBrowser, { state, pipe }));
+  mainBrowser.state = 'running';
+  mainBrowser.pipe = browser('main', []).pipe;
+}
+
+test('console reports idle CDP owners per browser, even while their context is asleep or stopped', async (t) => {
+  const context = browser('context-clients', []);
+  const unowned = browser('context-console', []);
+  registry(t, [context, unowned]);
+  mainFixture(t);
+  const states = async () => Object.fromEntries((await snapshot()).map((b) => [b.name, b.hasClients]));
+  const empty = { main: false, [context.name]: false, [unowned.name]: false };
+  assert.deepEqual(await states(), empty, 'console subscriptions and internal probes are not clients');
+
+  const client = connection();
+  const mux = new Mux(client, 'test', null);
+  const other = connection();
+  const otherMux = new Mux(other, 'test', null);
+  t.after(() => { client.close(); other.close(); });
+  context.connect = async () => connection(context.pipe);
+  context.destroy = () => {};
+  t.mock.method(contexts, 'create', async () => context);
+  await mux.attachContext({ id: 1, params: {} });
+  assert.deepEqual(await states(), { ...empty, [context.name]: true }, 'an idle context owner need not use main');
+
+  for (const state of ['hibernated', 'stopped']) {
+    context.state = state;
+    context.pipe = null;
+    assert.deepEqual(await states(), { ...empty, [context.name]: true }, `${state} keeps its owner connected`);
+  }
+  mux.adoptMain(connection(mainBrowser.pipe));
+  otherMux.adoptMain(connection(mainBrowser.pipe));
+  assert.deepEqual(await states(), { ...empty, main: true, [context.name]: true });
+  mux.main.close();
+  assert.deepEqual(await states(), { ...empty, main: true, [context.name]: true }, 'another main client remains');
+  other.close();
+  assert.deepEqual(await states(), { ...empty, [context.name]: true }, 'main disconnection leaves the context owner');
+  client.close();
+  assert.deepEqual(await states(), empty, 'a closed client no longer prompts');
+});
+
+test('console counts direct page clients only on their browser and removes disconnected ones', async (t) => {
+  const context = browser('context-page-client', []);
+  registry(t, [context]);
+  mainFixture(t);
+  const states = async () => Object.fromEntries((await snapshot()).map((b) => [b.name, b.hasClients]));
+  const client = connection();
+  const upstream = connection(context.pipe);
+  const mainClient = connection();
+  t.after(() => { client.close(); mainClient.close(); });
+  relay(client, upstream);
+  assert.deepEqual(await states(), { main: false, [context.name]: true });
+  relay(mainClient, connection(mainBrowser.pipe));
+  assert.deepEqual(await states(), { main: true, [context.name]: true });
+  upstream.close();
+  assert.equal(client.readyState, 3);
+  assert.deepEqual(await states(), { main: true, [context.name]: false });
+  // A stale upstream must not make a replacement browser look connected.
+  mainBrowser.pipe = browser('main-restarted', []).pipe;
+  assert.deepEqual(await states(), { main: false, [context.name]: false });
+  mainClient.close();
+  assert.deepEqual(await states(), { main: false, [context.name]: false });
+});
 
 test('console keeps tab rows, order and current selection throughout capture and wake', async (t) => {
   const context = browser('context-live', ['third', 'second', 'first']);

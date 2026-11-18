@@ -25,6 +25,8 @@ import { contexts } from './contexts.mjs';
 import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
 import { unwatchInput, watchInput, workingTabs } from './input-overlay.mjs';
 import { mainBrowser } from './main-browser.mjs';
+import { hasBrowserClients } from './mux.mjs';
+import { hasPageClients } from './relay.mjs';
 import { Screencast } from './screencast.mjs';
 import { settingsView } from './settings.mjs';
 import { NO_TABS, browserTabs, releaseProbes } from './targets.mjs';
@@ -78,9 +80,13 @@ function consolePoke() {
 onChange(consolePoke);
 
 function browserFields(name, front) {
-  if (name === 'main') return { main: true, state: mainBrowser.state, front };
+  // Input activity expires and internal probes also use CDP. Only real
+  // client connections determine whether Stop/Delete needs confirmation.
+  const pipe = name === 'main' ? mainBrowser.pipe : contexts.get(name)?.pipe;
+  const hasClients = hasBrowserClients(name, pipe) || hasPageClients(pipe);
+  if (name === 'main') return { main: true, state: mainBrowser.state, front, hasClients };
   const s = contexts.get(name);
-  return { color: s.color, client: s.client, createdAt: s.createdAt, pid: s.proc?.pid ?? null, front,
+  return { color: s.color, client: s.client, createdAt: s.createdAt, pid: s.proc?.pid ?? null, front, hasClients,
     state: s.state, occupied: s.slot, hibernatedAt: s.hibernatedAt, lastError: s.lastError, restoreWarning: s.restoreWarning, blockedReason: s.blockedReason };
 }
 
