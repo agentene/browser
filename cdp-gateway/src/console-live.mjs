@@ -84,6 +84,16 @@ function browserFields(name, front) {
     state: s.state, occupied: s.slot, hibernatedAt: s.hibernatedAt, lastError: s.lastError, restoreWarning: s.restoreWarning, blockedReason: s.blockedReason };
 }
 
+// A transition is not an empty browser. During capture, the previous sleep's
+// snapshot can still be present; keep the published rows until the new one is
+// complete. Restoration exposes only saved logical targets, never partial
+// physical targets from a process that is still starting.
+function savedListing(context) {
+  if (['hibernated', 'waking'].includes(context?.state)) return context.snapshot;
+  if (['closing', 'stopped'].includes(context?.state)) return NO_TABS;
+  return null;
+}
+
 async function tick() {
   const ops = [];
   const settings = settingsView();
@@ -108,23 +118,26 @@ async function tick() {
   for (const name of memos.keys()) if (!names.includes(name)) memos.delete(name);
   // all browsers at once: one slow to answer holds up the tick only as long
   // as the slowest (and at most a pipe call's timeout), not their sum
-  const listings = await Promise.all(names.map((name) => {
+  const listings = await Promise.all(names.map(async (name) => {
     const pipe = pipeOf(name);
     if (!memos.has(name)) memos.set(name, {});
-    if (name === 'main' && !mainBrowser.running) return NO_TABS;
-    // null: starting up or shutting down — keep what the consoles have
     const context = contexts.get(name);
-    if (!pipe) return context?.snapshot ?? NO_TABS;
-    return browserTabs(pipe, memos.get(name), titles.get(name)).then((listing) => context ? {
-      tabs: listing.tabs.map((t) => ({ ...t, id: context.logicalTarget(t.id) })),
-      current: listing.current && context.logicalTarget(listing.current),
-    } : listing).catch(() => null);
+    const listing = pipe ? await browserTabs(pipe, memos.get(name), titles.get(name)).catch(() => null) : null;
+    return { pipe, context, listing };
   }));
   for (const [i, name] of names.entries()) {
-    const listing = listings[i];
-    if (!listing) continue;
-    if (name !== 'main' && !contexts.get(name)) continue; // destroyed meanwhile
+    const context = contexts.get(name);
+    if (name !== 'main' && !context) continue; // destroyed meanwhile
     const pipe = pipeOf(name);
+    const observed = listings[i];
+    // Even another browser's slow probe can span an entire stop/restart.
+    // Check the lifecycle and pipe again before translating physical ids.
+    let listing = !pipe ? (name === 'main' ? NO_TABS : savedListing(context))
+      : pipe === observed.pipe && context === observed.context ? observed.listing : null;
+    if (pipe && listing && context) listing = {
+      tabs: listing.tabs.map((t) => ({ ...t, id: context.logicalTarget(t.id) })),
+      current: listing.current && context.logicalTarget(listing.current),
+    };
     let view = views.get(name);
     if (!view) views.set(name, view = { fields: {}, tabs: new Map(), current: null, thumb: null, cast: null });
     const changed = {};
@@ -135,24 +148,25 @@ async function tick() {
       Object.assign(view.fields, changed);
       ops.push({ t: 'browser', name, ...changed });
     }
-    // tabs keep the order they were first seen in (least recently active
-    // first), so a console's list does not jump around on every tab switch
-    const set = [];
-    const seen = new Set();
-    for (const tab of listing.tabs.toReversed()) {
-      seen.add(tab.id);
-      const old = view.tabs.get(tab.id);
-      if (old && old.title === tab.title && old.url === tab.url) continue;
-      view.tabs.set(tab.id, tab);
-      set.push(tab);
-    }
-    const del = [...view.tabs.keys()].filter((id) => !seen.has(id));
-    for (const id of del) view.tabs.delete(id);
-    if (set.length || del.length) ops.push({ t: 'tabs', name, set, del });
-    if (view.thumb && !view.tabs.has(view.thumb.id)) view.thumb = null; // no dead weight in snapshots
-    if (listing.current !== view.current) {
-      view.current = listing.current;
-      ops.push({ t: 'current', name, id: view.current });
+    if (listing) {
+      // Keep the first-seen order across switches, hibernation and wake.
+      const set = [];
+      const seen = new Set();
+      for (const tab of listing.tabs.toReversed()) {
+        seen.add(tab.id);
+        const old = view.tabs.get(tab.id);
+        if (old && old.title === tab.title && old.url === tab.url) continue;
+        view.tabs.set(tab.id, tab);
+        set.push(tab);
+      }
+      const del = [...view.tabs.keys()].filter((id) => !seen.has(id));
+      for (const id of del) view.tabs.delete(id);
+      if (set.length || del.length) ops.push({ t: 'tabs', name, set, del });
+      if (view.thumb && !view.tabs.has(view.thumb.id)) view.thumb = null; // no dead weight in snapshots
+      if (listing.current !== view.current) {
+        view.current = listing.current;
+        ops.push({ t: 'current', name, id: view.current });
+      }
     }
     syncCast(name, view, pipe);
     view.cast?.reschedule(); // it may have come to the front, or gone behind

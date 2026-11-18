@@ -9,7 +9,7 @@ import {
   CONTEXT_COLORS, CONTEXTS_DIR, MAIN_PROFILE, MAX_CONTEXTS, CONTEXTS_OVERFLOW, HIBERNATED_MAX, WAYLAND,
   appId, readFlags,
 } from './config.mjs';
-import { browserReady, launchChromium, prepareBrowserLaunch } from './launch.mjs';
+import { browserReady, launchChromium, openChromiumSession, prepareBrowserLaunch } from './launch.mjs';
 import { restoreScreen } from './screen.mjs';
 import { cloneProfile, preparePrefs } from './profile.mjs';
 import { copyCookies, restoreLocalStorage, snapshotLocalStorage } from './storage-sync.mjs';
@@ -121,7 +121,8 @@ export class Context {
     let flags = readFlags();
     flags = flags.concat([
       `--user-data-dir=${this.profile}`,
-      // Start empty; restoreTabs() explicitly opens a window for native restore.
+      // Start empty; native restoration opens the saved window via Chrome's
+      // existing-profile command, without creating a temporary blank tab.
       // The pipe keeps an empty Chromium alive, so watchPages() handles last-tab closure.
       '--no-startup-window',
       ...(restore ? ['--restore-last-session'] : []),
@@ -162,7 +163,7 @@ export class Context {
     });
     await browserReady(proc, pipe, STARTUP_TIMEOUT_MS, logPath);
     if (this.destroyed || !this.alive()) throw new Error('context was deleted or its owner disconnected');
-
+    if (restore) await openChromiumSession(proc, flags, logFile, env, STARTUP_TIMEOUT_MS);
   }
 
   async connect() {

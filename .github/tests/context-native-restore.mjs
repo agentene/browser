@@ -65,6 +65,42 @@ async function listing() {
   });
 }
 
+// Observe the same incremental feed used by both consoles. A final snapshot
+// alone misses a delete/reinsert flicker and the resulting change of order.
+async function watchTabs(name) {
+  const socket = new WebSocket(consoleEndpoint.replace(/^http/, 'ws') + '/console/ws');
+  const ready = Promise.withResolvers();
+  const rows = new Map();
+  const changes = [];
+  let before;
+  socket.onerror = ready.reject;
+  socket.onmessage = ({ data }) => {
+    for (const op of JSON.parse(data).ops ?? []) {
+      if (op.t === 'snapshot') {
+        const card = op.browsers.find((b) => b.name === name);
+        for (const tab of card.tabs) rows.set(tab.id, tab);
+        before = [...rows.keys()];
+        ready.resolve();
+      } else if (op.name === name && op.t === 'tabs') {
+        for (const tab of op.set) rows.set(tab.id, tab);
+        for (const id of op.del) rows.delete(id);
+        changes.push([...rows.keys()]);
+      }
+    }
+  };
+  const timer = setTimeout(() => ready.reject(new Error('console observer timed out')), 10000);
+  try { await ready.promise; }
+  catch (err) { socket.close(); throw err; }
+  finally { clearTimeout(timer); }
+  return {
+    check() {
+      for (const ids of changes) assert.deepEqual(ids, before, 'console tab rows/order must remain stable throughout hibernation and wake');
+      changes.length = 0;
+    },
+    close() { socket.close(); },
+  };
+}
+
 async function evaluate(page, expression) {
   const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, page.sessionId);
   assert.ok(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
@@ -98,52 +134,54 @@ async function checkWindows(titles, windowSize, selections, slow = false) {
   assert.deepEqual([...windows.values()].map((tabs) => tabs.length), [windowSize, windowSize]);
   await send('Storage.setCookies', { browserContextId, cookies: [{ name: 'kept', value: 'yes', url: origin }] });
 
-  // Exercise both possible selections in both windows. The left window is
-  // the global selection; the right window must keep its selection as well.
-  for (const [round, selected] of selections.entries()) {
-    for (const title of [...selected].reverse()) {
-      await send('Target.activateTarget', { targetId: pages.find((p) => p.title === title).targetId });
+  const observer = await watchTabs(name);
+  try {
+    // Exercise both possible selections in both windows. The left window is
+    // the global selection; the right window must keep its selection as well.
+    for (const [round, selected] of selections.entries()) {
+      for (const title of [...selected].reverse()) {
+        await send('Target.activateTarget', { targetId: pages.find((p) => p.title === title).targetId });
+      }
+      const before = [];
+      const loads = new Map();
+      for (const page of pages) {
+        const state = await evaluate(page, "({ visible: document.visibilityState === 'visible', loads: Number(localStorage.getItem('loads:' + location.pathname)) })");
+        if (state.visible) before.push(page.title);
+        loads.set(page.title, state.loads);
+      }
+      assert.deepEqual(before, selected, 'fixture must have one selected tab in each window');
+      const response = await fetch(`${consoleEndpoint}/console/api/${name}/hibernate`, {
+        method: 'POST', headers: { 'X-CDP-Console': '1' },
+      });
+      assert.equal(response.status, 200, await response.text());
+      if (slow && round === 0) slowPath = `/${titles[0]}`;
+      const { cookies } = await send('Storage.getCookies', { browserContextId });
+      assert.equal(cookies.find((c) => c.name === 'kept')?.value, 'yes');
+      assert.equal((await listing()).browsers.find((b) => b.name === name).restoreWarning, '');
+      // Identity probes must preserve the selected tab of every window.
+      const visible = [];
+      for (const page of pages) {
+        const state = await evaluate(page, `({
+          identity: sessionStorage.getItem('identity'), visible: document.visibilityState,
+          url: location.href, volatile: typeof window.volatileState,
+          loads: Number(localStorage.getItem('loads:' + location.pathname)),
+          markers: Object.keys(sessionStorage).filter((k) => k.startsWith('__agentene_restore_')),
+        })`);
+        assert.equal(state.identity, page.title);
+        assert.equal(state.volatile, 'undefined');
+        assert.equal(state.loads, loads.get(page.title) + 1, `${page.title}: restore must load the document once, without a second reload`);
+        assert.deepEqual(state.markers, []);
+        assert.equal(state.url, `${origin}/${page.title}#first`);
+        if (state.visible === 'visible') visible.push(page.title);
+        assert.equal((await send('Browser.getWindowForTarget', { targetId: page.targetId })).windowId, page.windowId);
+        const history = await send('Page.getNavigationHistory', {}, page.sessionId);
+        assert.ok(history.entries[history.currentIndex + 1].url.endsWith('#second'));
+      }
+      assert.deepEqual(visible, selected, 'native restoration must preserve every window selection');
+      observer.check();
+      console.log(`PASS native multi-window restore: tabs=${titles.length} selected=${selected.join(',')}; stable console rows/order; one load per document; history, storage and window identity preserved`);
     }
-    const before = [];
-    const loads = new Map();
-    for (const page of pages) {
-      const state = await evaluate(page, "({ visible: document.visibilityState === 'visible', loads: Number(localStorage.getItem('loads:' + location.pathname)) })");
-      if (state.visible) before.push(page.title);
-      loads.set(page.title, state.loads);
-    }
-    assert.deepEqual(before, selected, 'fixture must have one selected tab in each window');
-    const response = await fetch(`${consoleEndpoint}/console/api/${name}/hibernate`, {
-      method: 'POST', headers: { 'X-CDP-Console': '1' },
-    });
-    assert.equal(response.status, 200, await response.text());
-    if (slow && round === 0) slowPath = `/${titles[0]}`;
-    const { cookies } = await send('Storage.getCookies', { browserContextId });
-    assert.equal(cookies.find((c) => c.name === 'kept')?.value, 'yes');
-    assert.equal((await listing()).browsers.find((b) => b.name === name).restoreWarning, '');
-    // Chrome can briefly expose its initial tab during startup. Assert the
-    // settled selections here; the unit test separately forbids identity
-    // probes from adding any Target.activateTarget calls.
-    const visible = [];
-    for (const page of pages) {
-      const state = await evaluate(page, `({
-        identity: sessionStorage.getItem('identity'), visible: document.visibilityState,
-        url: location.href, volatile: typeof window.volatileState,
-        loads: Number(localStorage.getItem('loads:' + location.pathname)),
-        markers: Object.keys(sessionStorage).filter((k) => k.startsWith('__agentene_restore_')),
-      })`);
-      assert.equal(state.identity, page.title);
-      assert.equal(state.volatile, 'undefined');
-      assert.equal(state.loads, loads.get(page.title) + 1, `${page.title}: restore must load the document once, without a second reload`);
-      assert.deepEqual(state.markers, []);
-      assert.equal(state.url, `${origin}/${page.title}#first`);
-      if (state.visible === 'visible') visible.push(page.title);
-      assert.equal((await send('Browser.getWindowForTarget', { targetId: page.targetId })).windowId, page.windowId);
-      const history = await send('Page.getNavigationHistory', {}, page.sessionId);
-      assert.ok(history.entries[history.currentIndex + 1].url.endsWith('#second'));
-    }
-    assert.deepEqual(visible, selected, 'native restoration must preserve every window selection');
-    console.log(`PASS native multi-window restore: tabs=${titles.length} selected=${selected.join(',')}; one load per document; history, storage and window identity preserved`);
-  }
+  } finally { observer.close(); }
   await send('Target.disposeBrowserContext', { browserContextId });
   for (let n = 0; ; n++) {
     if (!(await listing()).browsers.some((b) => b.name === name)) break;

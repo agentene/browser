@@ -19,16 +19,12 @@ function restoredBrowser(t, { readyAt = 0, missing = false, loaded = false } = {
     storage: new Map([['business', tab.id], ...(missing && tab.id === 'second' ? [] : [[key, tab.id]])]),
   }]));
   const sessions = new Map();
-  const attached = [];
   const closed = [];
   const loads = [];
   let serial = 0;
   const pipe = {
     async call(method, params = {}, options = {}) {
-      if (method === 'Target.createTarget') {
-        pages.set('bootstrap', { window: 2, loaded: true, storage: new Map() });
-        return { targetId: 'bootstrap' };
-      }
+      assert.notEqual(method, 'Target.createTarget', 'native restoration must not open a temporary page');
       if (method === 'Target.getTargets') {
         now += 1000;
         if (params.filter?.some((rule) => rule.type === 'tab')) {
@@ -44,7 +40,6 @@ function restoredBrowser(t, { readyAt = 0, missing = false, loaded = false } = {
       if (method === 'Target.attachToTarget') {
         const sessionId = `session-${++serial}`;
         sessions.set(sessionId, params.targetId);
-        attached.push(params.targetId);
         if (params.targetId.startsWith('tab-')) {
           // Chromium loads a deferred WebContents when its tab target is
           // attached, without selecting it or reloading a live renderer.
@@ -65,7 +60,7 @@ function restoredBrowser(t, { readyAt = 0, missing = false, loaded = false } = {
       return { result: { value } };
     },
   };
-  return { context: { pipe, snapshot: { key, tabs } }, pages, selected, activations, sessions, attached, closed, loads, time: () => now };
+  return { context: { pipe, snapshot: { key, tabs } }, pages, selected, activations, sessions, closed, loads, time: () => now };
 }
 
 test('native restore preserves each window selection while matching duplicate URLs by identity', async (t) => {
@@ -79,8 +74,7 @@ test('native restore preserves each window selection while matching duplicate UR
   assert.deepEqual(browser.selected, selected, 'the other window must retain its selected tab');
   assert.deepEqual(browser.activations, [], 'identity probes must not generate focus/visibility transitions');
   assert.equal(browser.loads.length, 4, 'deferred documents must be loaded in the background');
-  assert.ok(!browser.attached.includes('bootstrap'), 'the bootstrap page must not be probed for identity');
-  assert.deepEqual(browser.closed, ['bootstrap']);
+  assert.deepEqual(browser.closed, [], 'native restoration must not close any page');
   assert.equal(browser.sessions.size, 0);
   for (const [id, page] of browser.pages) {
     assert.deepEqual([...page.storage], [['business', id.slice('physical-'.length)]]);
@@ -109,6 +103,6 @@ test('native restore still rejects missing identity on an identical URL within a
   const browser = restoredBrowser(t, { missing: true });
   await assert.rejects(restoreTabs(browser.context, true), /native tab identity could not be verified \(3\/4 tabs/);
   assert.ok(browser.time() <= 20_000, 'a missing marker must not wait forever');
-  assert.deepEqual(browser.closed, ['bootstrap']);
+  assert.deepEqual(browser.closed, []);
   assert.equal(browser.sessions.size, 0);
 });
