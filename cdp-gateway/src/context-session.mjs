@@ -441,7 +441,12 @@ export class ContextSession extends EventEmitter {
   }
 
   async replayOne(s, state) {
-    const params = this.ids.translate(state.method, state.params, 'params', 'in', s.id);
+    let params = this.ids.translate(state.method, state.params, 'params', 'in', s.id);
+    if (state.method === 'Page.addScriptToEvaluateOnNewDocument' && params.worldName && params.source === '') {
+      // Playwright registers its utility world with an empty script. Native
+      // restore can load child frames before this session reattaches.
+      params = { ...params, runImmediately: true };
+    }
     const r = await this.rpc(state.method, params, s.physical);
     if (state.method === 'Page.addScriptToEvaluateOnNewDocument') this.ids.bind('initScript', r.identifier, state.result.identifier, s.id);
   }

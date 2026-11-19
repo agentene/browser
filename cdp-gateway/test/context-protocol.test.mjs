@@ -203,6 +203,27 @@ test('restoration accepts current interception replies and rejects old ones even
   session.close();
 });
 
+test('wake installs empty named worlds immediately and preserves init script timing', async () => {
+  const session = new ContextSession({}, new EventEmitter(), schema);
+  const page = session.entry('page-session', 'page', 'page', '');
+  const registrations = [
+    { source: '', worldName: 'utility' },
+    { source: '' },
+    { source: 'init()', worldName: 'application' },
+    { source: 'init()', worldName: 'application', runImmediately: true },
+  ];
+  for (const [i, params] of registrations.entries()) {
+    page.journal.record({ method: 'Page.addScriptToEvaluateOnNewDocument', params }, { identifier: String(i) });
+  }
+  const timings = [];
+  session.rpc = async (_method, params) => {
+    timings.push(params.runImmediately);
+    return { identifier: String(timings.length) };
+  };
+  await session.replay(page);
+  assert.deepEqual(timings, [true, undefined, undefined, true]);
+});
+
 test('journal replays setters and registrations, never business actions or arbitrary code', () => {
   const j = new ContextJournal();
   for (const method of ['Runtime.evaluate', 'Runtime.callFunctionOn', 'Input.dispatchMouseEvent', 'Page.navigate']) {

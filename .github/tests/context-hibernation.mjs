@@ -276,6 +276,21 @@ try {
   const config = path.join(tmp, 'config.json');
   await fs.writeFile(config, JSON.stringify({ browser: { cdpEndpoint: endpoint, isolated: true } }));
   await cli('open', '--config=' + config);
+  const name = (await listing()).browsers.find((v) => !v.main).name;
+  await cli('goto', 'chrome://newtab/');
+  await cli('eval', "sessionStorage.setItem('restore-marker', 'new-tab')");
+  await cli('tab-new', fixture);
+  await action(name, 'hibernate');
+  await action(name, 'wake');
+  await cli('tab-select', '0');
+  assert.equal(JSON.parse(await cli('--raw', 'eval', "sessionStorage.getItem('restore-marker')")), 'new-tab',
+    'tab-select must reach the natively restored new tab');
+  // tab-select swallows individual WebMCP timeouts. Probe the same frames
+  // directly so a missing utility world fails even on a slow CI runner.
+  await cli('run-code', 'async page => Promise.all(page.frames().map(frame => frame.webmcp.tools({ timeout: 5000 })))');
+  await cli('tab-close', '1');
+  console.log('PASS real CLI: tab-select and WebMCP in every frame of a natively restored Chrome new tab');
+
   await cli('goto', 'data:text/html,<title>First</title>First');
   await cli('tab-new', 'data:text/html,<title>Selected</title>Selected');
   await cli('tab-new', 'data:text/html,<title>Duplicate</title>Duplicate');
@@ -283,7 +298,6 @@ try {
   await cli('tab-new');
   await cli('tab-select', '1');
   const before = await cli('tab-list');
-  const name = (await listing()).browsers.find((v) => !v.main).name;
   assert.ok(before.split('\n').find((l) => l.includes('(current)'))?.includes('Selected'), before);
 
   await action(name, 'hibernate');

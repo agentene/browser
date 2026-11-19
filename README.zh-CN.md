@@ -241,6 +241,7 @@ CDP 控制台在 **`http://localhost:8080/console/`**,由 Web HTTP/HTTPS 入口�
 
 * console 和侧栏分别显示运行与休眠数量、保存的标签以及 **休眠** / **唤醒** 按钮。休眠和唤醒过程中,标签列表保留原有条目与顺序。原生恢复直接打开保存的窗口,不会先新增再关闭一个临时空白标签。点击休眠卡片或标签也会唤醒。console 刷新和缩略图采集不更新活跃时间;LRU 按客户端 CDP 指令和 console 显式操作计算。
 * 休眠期间,CDP 连接、context alias 和顶层 Playwright `Page` 对象保持有效。需要浏览器的指令会自动唤醒;`context.pages()` 是本地列表,不会触发唤醒。原来已有标签时,未修改的 playwright-cli `tab-list` 唤醒不会多开空白页,`tab-new`(带或不带 URL)则恰好新增一个标签。`tab-close` 关闭最后一个标签后会停止进程并结束该 Page,刚唤醒时也一样;`tab-new` 会重新启动同一个 context,只创建一个新标签,无需重新 `open`。原本没有标签时,仍遵循 CLI 自动创建默认页面的行为。
+* 对于 Chrome 已经加载的子帧，网关会恢复 Playwright 的隔离执行环境。唤醒后第一次用 `playwright-cli tab-select` 选中 Chrome 的“新标签页”，CLI 就能查询背景子帧中的 WebMCP 工具。
 * 卡片显示 **正在休眠** 时，需要 Chromium 执行的客户端命令会收到 CDP 错误。进入 **已休眠** 后，对已保存页面发起的新操作可以立即唤醒浏览器。网关在 `/tmp/cdp-gateway.log` 中记录唤醒来源，例如 `waking (console focus)` 或 `waking (CDP Runtime.evaluate)`。
 * 页面文档会重新加载:JS 内存、旧 JSHandle/ElementHandle、子 frame 和 worker 的身份不保留。重新加载可能打断正在执行的命令和依赖导航状态的读取。休眠后读取旧响应体、访问旧 JS 句柄、应答已关闭的对话框或旧拦截请求，都会收到协议错误，浏览器保持休眠。恢复过程中产生的新请求仍可正常拦截和应答。网关只重建已识别的 Playwright 辅助对象和声明式配置,不会重放任意业务脚本或输入操作。兼容测试覆盖 CLI 0.1.23 和 0.1.24;发现未识别的辅助对象时,会暂时禁止该浏览器休眠,直到网关更新兼容性。
 * 优先使用 Chrome 原生会话恢复。通过临时随机 sessionStorage 键校验标签身份(相同 URL 的标签不会合并),原生恢复成功后删除该键。身份校验会让延迟加载的标签在后台加载,不主动激活它们,以保留 Chrome 在每个窗口中恢复的选中标签;为较慢的启动保留 15 秒身份校验时间。这是轮询预算,并非整个唤醒操作的总超时。无法核对身份、标签无法保存标记,或请求拦截、业务初始化脚本、自定义请求头或 user-agent 必须在导航前安装时,整个浏览器改为按 URL 快照恢复。此兜底保留 profile,不保证标签历史和 sessionStorage。失败原因显示在卡片上,原生恢复失败也会记录在 `/tmp/cdp-gateway.log`;唤醒失败仍保留 profile,供后续重试。
