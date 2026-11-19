@@ -82,6 +82,18 @@ test('request targets that nginx would read differently are refused', async () =
   assert.equal(await rawStatus('/api/state'), 200);
 });
 
+test('login pages and the shared client support a configured console prefix', async () => {
+  const response = await fetch(`${base}/page`, { headers: { 'X-Auth-Base': '/tools/admin/__auth/', 'X-Auth-Home': '/tools/admin/' } });
+  const html = await response.text();
+  assert.equal(response.status, 401);
+  assert.match(html, /data-base="\/tools\/admin\/__auth\/"/);
+  assert.match(html, /data-home="\/tools\/admin\/"/);
+  const client = await fetch(`${base}/client.js`);
+  assert.equal(client.status, 200);
+  assert.match(client.headers.get('content-type'), /javascript/);
+  assert.match(await client.text(), /AgenteneAuthClient/);
+});
+
 test('setup needs the setup code; with the login skipped, the API key guards changes', async () => {
   // no code, a wrong one: refused (and nothing is set up)
   assert.equal((await call('POST', 'setup', { skip: true })).status, 403);

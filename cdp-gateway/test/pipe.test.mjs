@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { pipeArgs } from '../src/launch.mjs';
 import { CLOSED, CdpPipe, OPEN } from '../src/pipe.mjs';
-import { browserTabs, listEntry, pickCurrent, releaseProbes, titleRanks, versionEntry } from '../src/targets.mjs';
+import { listEntry, TabListing, versionEntry } from '../src/targets.mjs';
 
 // The fake chromium: what it got (parsed), and an answer per command.
 //   answers: method -> params => result, in place of the default answer
@@ -41,7 +41,7 @@ function fakeBrowser({ answers = {}, hold = () => false } = {}) {
       const { id, method, params = {}, sessionId } = msg;
       const reply = (result) => emit({ id, result, ...(sessionId ? { sessionId } : {}) });
       if (answers[method]) {
-        reply(answers[method](params));
+        reply(answers[method](params, msg));
       } else if (method === 'Target.attachToBrowserTarget' || method === 'Target.attachToTarget') {
         const child = `S${nextSession++}`;
         emit({ method: 'Target.attachedToTarget', params: { sessionId: child, targetInfo: { targetId: params.targetId ?? 'BROWSER', type: params.targetId ? 'page' : 'browser' } }, ...(sessionId ? { sessionId } : {}) });
@@ -257,77 +257,6 @@ test('a context created for a connection that closed before the reply is dispose
   pipe.close();
 });
 
-test('console probes: one session and one query per tab while a tab keeps quiet; all released', async () => {
-  let quiet = true;
-  const pages = [{ targetId: 'T1', type: 'page', title: 'a', url: 'about:a' }, { targetId: 'T2', type: 'page', title: 'b', url: 'about:b' }];
-  const { pipe, got, held, answer } = fakeBrowser({
-    answers: {
-      'Target.getTargets': () => ({ targetInfos: pages }),
-      'Runtime.evaluate': () => ({ result: { type: 'number', value: 2 } }),
-    },
-    // T2's session is S2: a dialog is open there
-    // and T3's attach is slow
-    hold: (m) => (m.method === 'Runtime.evaluate' && m.sessionId === 'S2' && quiet)
-      || (m.method === 'Target.attachToTarget' && m.params.targetId === 'T3'),
-  });
-  const memo = {};
-  for (let i = 0; i < 3; i++) {
-    const { tabs, current } = await browserTabs(pipe, memo);
-    assert.deepEqual(tabs.map((t) => t.id), ['T1', 'T2']);
-    assert.equal(current, 'T1');
-  }
-  const count = (method, sessionId) => got.filter((m) => m.method === method && (!sessionId || m.sessionId === sessionId)).length;
-  assert.equal(count('Target.attachToTarget'), 2);
-  assert.equal(count('Runtime.evaluate', 'S2'), 1);
-  // the dialog closes: T2 answers (in front now) and is asked again
-  quiet = false;
-  for (const msg of held.splice(0)) answer(msg);
-  await tick();
-  await browserTabs(pipe, memo);
-  assert.equal(count('Runtime.evaluate', 'S2'), 2);
-  assert.equal(count('Target.attachToTarget'), 2);
-  // the console closes: both probe sessions detached, a probe still
-  // attaching is detached once attached
-  pages.push({ targetId: 'T3', type: 'page', title: 'c', url: 'about:c' });
-  await browserTabs(pipe, memo);
-  releaseProbes(pipe);
-  await tick();
-  assert.deepEqual(got.filter((m) => m.method === 'Target.detachFromTarget').map((m) => m.params.sessionId), ['S1', 'S2']);
-  for (const msg of held.splice(0)) answer(msg);
-  await tick();
-  await tick();
-  assert.deepEqual(got.filter((m) => m.method === 'Target.detachFromTarget').map((m) => m.params.sessionId), ['S1', 'S2', 'S3']);
-  pipe.close();
-});
-
-test('console probes: a tick under way when the console closes attaches nothing new', async () => {
-  let slow = false;
-  const { pipe, got, held, answer } = fakeBrowser({
-    answers: { 'Target.getTargets': () => ({ targetInfos: [{ targetId: 'T1', type: 'page', title: '', url: '' }, { targetId: 'T2', type: 'page', title: '', url: '' }] }) },
-    hold: (m) => m.method === 'Target.getTargets' && slow,
-  });
-  const memo = {};
-  await browserTabs(pipe, memo);
-  assert.equal(pipe.listenerCount('detached'), 1);
-  slow = true;
-  const tick = browserTabs(pipe, memo); // the tab list still on its way
-  await new Promise((resolve) => setImmediate(resolve));
-  releaseProbes(pipe);
-  assert.equal(pipe.listenerCount('detached'), 0);
-  for (const msg of held.splice(0)) answer(msg);
-  const { current } = await tick;
-  assert.equal(current, 'T1'); // the memo's
-  await new Promise((resolve) => setImmediate(resolve));
-  const attached = got.filter((m) => m.method === 'Target.attachToTarget').length;
-  const detached = got.filter((m) => m.method === 'Target.detachFromTarget').length;
-  assert.deepEqual([attached, detached], [2, 2]);
-  // the next console starts over
-  slow = false;
-  await browserTabs(pipe, memo);
-  assert.equal(got.filter((m) => m.method === 'Target.attachToTarget').length, 4);
-  pipe.close();
-});
-
 test('a connection whose client cannot keep up stops the pipe being read, and lets go', async () => {
   const { pipe, fromChrome } = fakeBrowser();
   const conn = await pipe.connect();
@@ -373,53 +302,54 @@ test('listEntry / versionEntry: chromium\'s /json shapes on the public host', ()
   });
 });
 
-test('titleRanks: the tab each window title shows, the window in front ranking highest', () => {
-  const pages = [
-    { targetId: 'A', title: 'Alpha' },
-    { targetId: 'AB', title: 'Alpha - Beta' },
-    { targetId: 'C', title: 'Gamma' },
-    { targetId: 'E', title: '' },
-  ];
-  const product = 'Google Chrome for Testing';
-  assert.deepEqual([...titleRanks(pages, [`Gamma - ${product}`, `Alpha - Beta - ${product}`])], [['C', 2], ['AB', 1]]);
-  assert.deepEqual([...titleRanks(pages, [`Alpha - ${product}`])], [['A', 1]]);
-  assert.deepEqual([...titleRanks(pages, ['Gamma'])], [['C', 1]]); // no product suffix
-  assert.deepEqual([...titleRanks(pages, [`Untitled - ${product}`])], []);
-  assert.deepEqual([...titleRanks(pages, [])], []);
-});
-
-test('the window title decides when every tab says it is in front (Playwright focus emulation)', async () => {
-  const pages = [{ targetId: 'T1', type: 'page', title: 'one', url: '' }, { targetId: 'T2', type: 'page', title: 'two', url: '' }];
-  const { pipe } = fakeBrowser({
-    answers: {
-      'Target.getTargets': () => ({ targetInfos: pages }),
-      'Runtime.evaluate': () => ({ result: { type: 'number', value: 2 } }),
+test('the console follows the primary page ID of the selected tab with identical titles and URLs', async () => {
+  const page = (targetId, subtype) => ({ targetId, type: 'page', title: 'New Tab', url: 'chrome://newtab/', subtype });
+  const pages = [page('P2'), page('R', 'prerender'), page('P1')];
+  const children = { A: 'P1', B: 'P2' };
+  const sessions = new Map();
+  let active = 'B';
+  const { pipe, got, emit } = fakeBrowser({ answers: {
+    'Target.getTargets': ({ filter }) => {
+      assert.deepEqual(filter, [{ type: 'tab' }, { type: 'page' }]);
+      return { targetInfos: [...pages, ...Object.keys(children).map((targetId) => ({
+        targetId, type: 'tab', embedderData: { tabActive: targetId === active },
+      }))] };
     },
-  });
-  const memo = {};
-  const product = 'Google Chrome for Testing';
-  assert.equal((await browserTabs(pipe, memo, [`two - ${product}`])).current, 'T2');
-  assert.equal((await browserTabs(pipe, memo, [`one - ${product}`])).current, 'T1');
-  assert.equal((await browserTabs(pipe, memo, [`two - ${product}`, `one - ${product}`])).current, 'T2');
-  // a title no tab has (yet): the tabs' own answers, the memo between equals
-  assert.equal((await browserTabs(pipe, memo, [`loading - ${product}`])).current, 'T2');
-  assert.equal((await browserTabs(pipe, memo)).current, 'T2');
-  releaseProbes(pipe);
-  pipe.close();
-});
-
-test('pickCurrent: the focused tab; of several, the one that just became so', () => {
-  const memo = {};
-  assert.equal(pickCurrent(memo, []), null);
-  // headed: one tab is visible and focused
-  assert.equal(pickCurrent(memo, [['A', 0], ['B', 2], ['C', 1]]), 'B');
-  // the user switched tabs
-  assert.equal(pickCurrent(memo, [['A', 2], ['B', 0], ['C', 1]]), 'A');
-  // focus emulation: several tabs count as focused — the new one wins,
-  // and stays current while nothing changes
-  assert.equal(pickCurrent(memo, [['A', 2], ['B', 0], ['C', 2]]), 'C');
-  assert.equal(pickCurrent(memo, [['A', 2], ['B', 0], ['C', 2]]), 'C');
-  // no answers (a dialog open everywhere): the last current stays while it exists
-  assert.equal(pickCurrent(memo, [['A', null], ['C', null]]), 'C');
-  assert.equal(pickCurrent(memo, [['A', null]]), 'A');
+    'Target.attachToTarget': ({ targetId }) => {
+      const sessionId = 'S' + sessions.size;
+      sessions.set(sessionId, targetId);
+      return { sessionId };
+    },
+    'Target.setAutoAttach': (params, { sessionId }) => {
+      assert.equal(params.waitForDebuggerOnStart, false);
+      const id = children[sessions.get(sessionId)];
+      for (const info of [page(id), page('R', 'prerender')]) {
+        emit({ method: 'Target.attachedToTarget', params: { sessionId: 'child-' + info.targetId, targetInfo: info }, sessionId });
+      }
+      return {};
+    },
+  } });
+  const observer = new TabListing(pipe);
+  try {
+    for (active of ['B', 'A', 'B']) {
+      const listing = await observer.read();
+      assert.deepEqual(listing.tabs.map(t => t.id), ['P2', 'P1']);
+      assert.equal(listing.current, children[active]);
+    }
+    // Chrome may replace the tab's primary page on activation of a prerender.
+    pages[0] = page('R');
+    pages.splice(1, 1);
+    children.B = 'R';
+    const owner = [...sessions.keys()].at(-1);
+    emit({ method: 'Target.detachedFromTarget', params: { sessionId: 'child-P2' }, sessionId: owner });
+    assert.equal((await observer.read()).current, 'R');
+    active = null;
+    assert.equal((await observer.read()).current, null);
+    assert.ok(!got.some(m => ['Runtime.evaluate', 'Target.activateTarget', 'Target.createTarget'].includes(m.method)));
+    assert.equal(got.filter(m => m.method === 'Target.attachToTarget').length,
+      got.filter(m => m.method === 'Target.detachFromTarget').length);
+  } finally {
+    observer.close();
+    pipe.close();
+  }
 });

@@ -14,14 +14,14 @@ import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { targetAddress } from './browsers.mjs';
 import { cdpOriginDenied } from './cdp-origin.mjs';
-import { BROWSER_ENABLED, OVERLAY_AVAILABLE, WS_OPTIONS } from './config.mjs';
+import { OVERLAY_AVAILABLE, WS_OPTIONS } from './config.mjs';
 import { consoleDenied, consoleOriginDenied } from './console-auth.mjs';
 import { subscribe } from './console-live.mjs';
 import { subscribeOverlay } from './input-overlay.mjs';
 import { mainBrowser } from './main-browser.mjs';
 import { Mux } from './mux.mjs';
 import { relay } from './relay.mjs';
-import { requestPath, viaWeb } from './respond.mjs';
+import { requestPath } from './respond.mjs';
 import { log } from './util.mjs';
 import { withRequestLanguage } from './language.mjs';
 
@@ -41,10 +41,7 @@ function refuse(socket, status) {
 }
 
 // What the upgrade connects to, or the HTTP status to refuse it with.
-async function resolveTarget(req, p) {
-  if (p === null) return { refuse: 400 };
-  // from the web UI port: the console's WebSockets only (respond.mjs)
-  if (viaWeb(req) && !CONSOLE_SOCKETS.has(p)) return { refuse: 404 };
+async function resolveCdp(req, p) {
   if (p.startsWith('/devtools/')) {
     const denied = cdpOriginDenied(req);
     if (denied) {
@@ -52,7 +49,6 @@ async function resolveTarget(req, p) {
       return { refuse: denied[0] };
     }
   }
-  if (!BROWSER_ENABLED && p.startsWith('/devtools/')) return { refuse: 404 };
   if (p.startsWith('/devtools/browser/')) {
     if (mainBrowser.state === 'stopped' || mainBrowser.stopping) return { kind: 'browser', upstream: null };
     await mainBrowser.ensure();
@@ -60,7 +56,7 @@ async function resolveTarget(req, p) {
   }
   if (p.startsWith('/devtools/page/')) {
     const targetId = p.slice('/devtools/page/'.length);
-    const target = await targetAddress(targetId, true);
+    const target = await targetAddress(targetId, 'page WebSocket');
     if (!target) return { refuse: 404 };
     const { pipe, id, context } = target;
     if (context) context.relays++;
@@ -71,6 +67,10 @@ async function resolveTarget(req, p) {
       return { kind: 'page', upstream };
     } catch (err) { if (context) context.relays--; throw err; }
   }
+  return { refuse: 404 };
+}
+
+async function resolveConsole(req, p) {
   if (CONSOLE_SOCKETS.has(p)) {
     if (p === '/console/overlay' && !OVERLAY_AVAILABLE) return { refuse: 404 };
     const denied = (await consoleDenied(req)) ?? consoleOriginDenied(req);
@@ -80,11 +80,15 @@ async function resolveTarget(req, p) {
   return { refuse: 404 };
 }
 
-export function handleUpgrade(req, socket, head) {
-  return withRequestLanguage(req.headers['accept-language'], () => upgrade(req, socket, head));
+export function handleCdpUpgrade(req, socket, head) {
+  return withRequestLanguage(req.headers['accept-language'], () => upgrade(req, socket, head, resolveCdp));
 }
 
-async function upgrade(req, socket, head) {
+export function handleConsoleUpgrade(req, socket, head) {
+  return withRequestLanguage(req.headers['accept-language'], () => upgrade(req, socket, head, resolveConsole));
+}
+
+async function upgrade(req, socket, head, resolveTarget) {
   // node's HTTP server drops its own error listener from an upgraded socket,
   // and resolving the target may take a while (a stopped main browser
   // starts): a connection reset meanwhile would be an unhandled 'error'
@@ -94,7 +98,7 @@ async function upgrade(req, socket, head) {
   const p = requestPath(req);
   let target;
   try {
-    target = await resolveTarget(req, p);
+    target = p === null ? { refuse: 400 } : await resolveTarget(req, p);
   } catch (err) {
     log(`upgrade ${p}: ${err.message}`);
     target = { refuse: 502 };

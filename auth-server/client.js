@@ -1,9 +1,9 @@
-// auth-server/keepalive.js — keeps this browser's login session alive while a
-// page of the web UI (the Selkies page: nginx injects this script) or the CDP
-// console (cdp-gateway/dashboard.html loads it) is open, idle background tab
-// included.
+// auth-server/client.js — shared authentication client for the standalone
+// console and the Selkies sidebar. nginx injects it into both entry pages
+// when authentication is enabled. It mounts the same account controls and
+// keeps the session alive, including in idle background tabs.
 //
-// Served by the auth service next to its API (…/__auth/keepalive.js), so it
+// Served by the auth service next to its API (<console prefix>/__auth/client.js), so it
 // only loads where the built-in login is on (ENABLE_AUTH=true). The session
 // cookie is HttpOnly, so the server decides: POST api/renew hands out a fresh
 // cookie once the current one is due (store.mjs: SESSION_RENEW_AFTER_MS) and
@@ -19,10 +19,41 @@
 //   * signed out (401) or no login at all (renewIn null) = it stops.
 (() => {
   'use strict';
-  if (window.AgenteneKeepalive) return;
-  window.AgenteneKeepalive = true;
+  if (window.AgenteneAuthClient) return;
 
-  const RENEW = new URL('api/renew', document.currentScript.src).href;
+  const BASE = new URL('./', document.currentScript.src);
+  let language = 'en-US';
+  let uiReady;
+  function controls() {
+    uiReady ??= new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = new URL('ui.js', BASE).href;
+      script.onload = () => resolve(window.AgenteneAuth);
+      script.onerror = () => { script.remove(); reject(new Error('Could not load account controls')); };
+      document.head.append(script);
+    }).catch((error) => { uiReady = undefined; throw error; });
+    return uiReady;
+  }
+
+  function setLang(next) {
+    language = next;
+    window.AgenteneAuth?.setLang(next);
+  }
+
+  async function mount({ language: initialLanguage, ...options }) {
+    setLang(initialLanguage);
+    try {
+      const auth = await controls();
+      auth.setLang(language); // language may have changed while the script loaded
+      auth.mount(options);
+    } catch (error) {
+      options.onError?.(error);
+    }
+  }
+
+  window.AgenteneAuthClient = { mount, setLang };
+
+  const RENEW = new URL('api/renew', BASE).href;
   const MAX_SLEEP_MS = 3600 * 1000;
   const RETRY_MS = 5 * 60 * 1000; // network or server trouble
 

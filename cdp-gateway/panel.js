@@ -3,12 +3,11 @@
 // delete; start/stop of the main browser) next to the live desktop.
 //
 // nginx injects it into the Selkies entry page (sub_filter before </head>,
-// entrypoint/lib/nginx.sh) and proxies cdp-console/ — relative to the page,
-// so SELKIES_SUBFOLDER works — to /console/ on the gateway. Same origin as
+// entrypoint/lib/nginx.sh) and maps CONSOLE_SUBPATH to the console socket.
+// Its script URL supplies the API base, independently of BROWSER_SUBPATH. Same origin as
 // Selkies on purpose: nginx checks the built-in login's session cookie
 // (ENABLE_AUTH). Its settings page also carries the built-in
-// login's controls (login, CDP API key, log out): __auth/ui.js, served by
-// the auth service next to the page.
+// login's controls through the shared AgenteneAuthClient injected by nginx.
 //
 // Keyboard: the Selkies core grabs keys in the window capture phase and only
 // leaves those whose target sits under an `allow-native-input` element;
@@ -20,8 +19,9 @@
   if (window.__cdpConsolePanel) return;
   window.__cdpConsolePanel = true;
 
-  const API = new URL('cdp-console/api', document.baseURI).href;
-  const WS = new URL('cdp-console/ws', document.baseURI);
+  const BASE = new URL('./', document.currentScript.src);
+  const API = new URL('api', BASE).href;
+  const WS = new URL('ws', BASE);
   WS.protocol = WS.protocol === 'https:' ? 'wss:' : 'ws:';
   const PANEL_WIDTH = 380; // until the viewer drags the panel's left edge
   const MIN_WIDTH = 300;
@@ -342,7 +342,7 @@
     $('.settings-restart').title = t('restartHint');
     settingsEditor.render();
     window.AgenteneInputOverlay?.setLang(lang);
-    window.AgenteneAuth?.setLang(lang);
+    window.AgenteneAuthClient?.setLang(lang);
     for (const v of views.values()) v.card.remove();
     views.clear();
     browsers.forEach((b, name) => update(name));
@@ -478,16 +478,8 @@
     }
   });
 
-  // The built-in login's rows in the settings page and their dialogs (in the shadow
-  // root, so the panel's keyboard rules cover them); absent without
-  // ENABLE_AUTH.
-  const authUi = document.createElement('script');
-  authUi.src = new URL('__auth/ui.js', document.baseURI).href;
-  authUi.onload = () => {
-    window.AgenteneAuth?.setLang(lang);
-    window.AgenteneAuth?.mount({ menu: settingsContent, root, onError: showError });
-  };
-  document.head.append(authUi);
+  // Shared account controls render their dialogs inside the panel's shadow root.
+  window.AgenteneAuthClient?.mount({ menu: settingsContent, root, onError: showError, language: lang });
 
   // --- open / close ----------------------------------------------------------
   // The live state streams in only while the panel is open.
@@ -723,7 +715,7 @@
       actions);
     if (isMain) {
       actions.append(el('button', { class: 'danger', title: t('stopTitle'),
-        onclick: async () => await ask(t('stopConfirm'), t('stop'))
+        onclick: async () => (!browsers.get(name)?.hasClients || await ask(t('stopConfirm'), t('stop')))
           && call('POST', `${base}/stop`).catch(showError) }, t('stop')));
     }
     if (!isMain) {
@@ -732,7 +724,7 @@
           && call('POST', `${base}/hibernate`).catch(showError) }, t('hibernate'));
       actions.append(v.hibernate);
       actions.append(el('button', { class: 'danger', title: t('deleteTitle'),
-        onclick: async () => await ask(t('deleteConfirm', name), t('delete'))
+        onclick: async () => (!browsers.get(name)?.hasClients || await ask(t('deleteConfirm', name), t('delete')))
           && call('DELETE', base).catch(showError) }, t('delete')));
     }
     v.meta = el('div', { class: 'meta' });
@@ -762,13 +754,17 @@
   // with it.
   function fillCard(context, v) {
     const n = context.tabs.size;
-    const state = context.state ?? 'running';
+    // Only a saved hibernation is a wake; reopening a stopped context is a start.
+    const state = context.state === 'waking' && !context.hibernatedAt ? 'starting' : context.state ?? 'running';
     const sleeping = state === 'hibernated';
-    const pending = !['running', 'hibernated'].includes(state);
-    const stateKey = { starting: 'stateStarting', hibernated: 'stateHibernated', hibernating: 'stateHibernating', waking: 'stateWaking', destroying: 'stateDestroying' }[state];
-    v.chip.textContent = stateKey ? `${t(stateKey)} · ${t('tabs', n)}` : t('tabs', n);
+    const pending = !['running', 'hibernated', 'stopped'].includes(state);
+    const stateKey = { starting: 'stateStarting', stopped: 'stateStopped', closing: 'stateClosing', hibernated: 'stateHibernated', hibernating: 'stateHibernating', waking: 'stateWaking', destroying: 'stateDestroying' }[state];
+    const stateOnly = ['closing', 'stopped', 'starting'].includes(state);
+    v.chip.textContent = stateOnly ? t(stateKey) : stateKey ? `${t(stateKey)} · ${t('tabs', n)}` : t('tabs', n);
     v.card.classList.toggle('hibernated', sleeping);
-    v.show.textContent = t(sleeping ? 'wake' : 'show');
+    const startAction = state === 'stopped' || state === 'starting';
+    v.show.textContent = t(sleeping ? 'wake' : startAction ? 'startBrowser' : 'show');
+    v.show.title = t(startAction ? 'startBrowser' : 'showTitle');
     v.show.disabled = pending;
     if (v.hibernate) {
       v.hibernate.hidden = !actionsEnabled || state !== 'running';
@@ -917,7 +913,7 @@
     return [op.name];
   }
 
-  // --- live state: WebSocket to the gateway (cdp-console/ws) -----------------
+  // --- live state: WebSocket to the gateway (/console/ws) -----------------
   // A snapshot, then only changes. Reconnects with backoff while open and
   // the page is visible: a subscriber keeps the gateway's once-a-second tick
   // and the thumbnail screencasts going, so a Selkies page left open with the

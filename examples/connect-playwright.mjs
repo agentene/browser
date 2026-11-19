@@ -6,7 +6,7 @@
 //   node examples/connect-playwright.mjs https://example.com
 //
 // The browser runs HEADED on the container's Xvfb desktop by default, so you
-// can watch this visit live in the Selkies stream (http://localhost:8080).
+// can watch this visit live in the Selkies stream (http://localhost:8080/browser/).
 //
 // With a CDP API key set in the console (README "Login and CDP API key"):
 //   CDP_API_KEY=<key> node examples/connect-playwright.mjs

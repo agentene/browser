@@ -20,12 +20,26 @@
       .config-section[hidden], .config-row[hidden] { display:none; }
       .config-section h4 { margin:0; font-size:14px; }
       .config-row { display:grid; gap:5px; min-width:0; font-size:13px; }
-      .config-row input:not([type=checkbox]), .config-row select { box-sizing:border-box; width:100%; max-width:360px; min-width:0; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); font:inherit; }
-      .config-row input[type=checkbox] { justify-self:start; accent-color:var(--accent); }
+      .config-field { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; min-height:35px; }
+      .config-field > span { min-width:0; overflow-wrap:anywhere; }
+      .config-field input:not([type=checkbox]), .config-field select { box-sizing:border-box; flex:none; max-width:min(80%,360px); min-width:0; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); font:inherit; }
+      .config-field select { min-width:min(16em,60%); text-overflow:ellipsis; }
+      @media (forced-colors:none) {
+        .config-field:has(> select) { position:relative; }
+        .config-field:has(> select) > select { appearance:none; padding-inline-end:30px; }
+        .config-field:has(> select)::after {
+          content:""; position:absolute; inset-inline-end:12px; top:50%; width:7px; height:7px;
+          border:solid var(--muted); border-width:0 2px 2px 0;
+          transform:translateY(-75%) rotate(45deg); pointer-events:none;
+        }
+        .config-field:has(> select:disabled)::after { opacity:.5; }
+      }
+      .config-field input[type=number] { width:7em; }
+      .config-field input[type=checkbox] { flex:none; width:18px; height:18px; margin:0; accent-color:var(--accent); }
       .config-row small, .config-result, .config-capability { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
       .config-row :disabled { opacity:.5; }
       .config-result { grid-column:1 / -1; margin:0; white-space:pre-line; }
-      .config-result:empty { display:none; }
+      .config-row small:empty, .config-result:empty { display:none; }
       .config-capability { margin:0; }
     `;
     root.append(style, result);
@@ -62,7 +76,7 @@
         for (const [key, field] of Object.entries(fields)) {
           const name = `${section}.${key}`;
           const row = el('label', 'config-row');
-          const title = el('span'), hint = el('small');
+          const line = el('span', 'config-field'), title = el('span'), hint = el('small');
           const input = el(field.type === 'select' ? 'select' : 'input');
           input.name = name;
           if (field.type === 'select') {
@@ -80,7 +94,8 @@
             if (name === 'contexts.overflow') render();
             onDirty();
           });
-          row.append(title, input, hint); group.append(row);
+          line.append(title, input);
+          row.append(line, hint); group.append(row);
           rows.set(name, { section, key, element: row, input, title, hint });
         }
         root.append(group);
@@ -92,7 +107,7 @@
       for (const [name, row] of rows) {
         const field = state.fields[row.section][row.key];
         const value = (draft || state.values)[row.section][row.key];
-        row.title.textContent = label(name);
+        row.title.textContent = t('settingLabel', label(name));
         row.element.hidden = name === 'contexts.maxHibernated' && (draft || state.values).contexts.overflow === 'reject';
         row.input.disabled = !field.available || row.element.hidden;
         if (name === 'browser.language' || name === 'desktop.resolution') {
@@ -104,14 +119,20 @@
         if (field.type === 'boolean') row.input.checked = value;
         else if (document.activeElement !== row.input && row.input.getRootNode().activeElement !== row.input) row.input.value = value;
         if (field.options) for (const option of row.input.options) option.textContent = optionLabel(field, option.value, name);
-        row.hint.textContent = !field.available ? t('settingUnavailable')
-          : field.apply === 'restart' ? t('settingRestart')
-          : name === 'browser.language' ? t(state.capabilities.browser ? 'settingLanguage' : 'settingLanguageOnly')
-          : field.apply === 'next-start' ? t('settingNextStart') : t('settingLive');
-        if (name === 'browser.language') row.hint.textContent += ` · ${t('settingLanguageAuto')}`;
-        if (dirty.has(name)) row.hint.textContent += t('currentlySaved', textValue(state.values[row.section][row.key], field, name));
-        if (field.available && name === 'desktop.resolution') row.hint.textContent += t('settingResolution');
-        if (field.available && name === 'overlay.mode') row.hint.textContent += t('settingAllViewers');
+        const hints = [];
+        if (!field.available) {
+          hints.push(t('settingUnavailable'));
+        } else if (field.apply === 'restart') {
+          hints.push(t('settingRestart'));
+        } else if (name === 'browser.language') {
+          hints.push(t(state.capabilities.browser ? 'settingLanguage' : 'settingLanguageOnly'));
+        } else if (field.apply === 'next-start') {
+          hints.push(t('settingNextStart'));
+        }
+        if (name === 'browser.language') hints.push(t('settingLanguageAuto'));
+        if (field.available && name === 'desktop.resolution') hints.push(t('settingResolution'));
+        if (dirty.has(name)) hints.push(t('currentlySaved', textValue(state.values[row.section][row.key], field, name)));
+        row.hint.textContent = hints.join(' · ');
       }
       const messages = [];
       if (state?.pendingRestart?.length) messages.push(t('restartRequired', state.pendingRestart.map(label).join(', ')));

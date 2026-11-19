@@ -24,7 +24,7 @@ import {
 
 // A session lasts SESSION_TTL_MS from its token's issue; a token older than
 // SESSION_RENEW_AFTER_MS is replaced on the next renewal (POST api/renew,
-// which keepalive.js sends from every open web UI / console page). So a
+// which client.js sends from every open web UI / console page). So a
 // session ends 6-7 days after its last open page, not 7 days after login.
 export const SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 export const SESSION_RENEW_AFTER_MS = 24 * 3600 * 1000;

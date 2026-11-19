@@ -1,5 +1,5 @@
 // /console/*: the dashboard, the sidebar and input overlay scripts nginx
-// injects into the Selkies page (nginx proxies /cdp-console/ on the web port here), and the
+// injects into the Selkies page (all served on the web port), and the
 // console's actions, POST/DELETE /console/api/<name>… (its state comes over
 // the /console/ws WebSocket, console-live.mjs):
 //   GET/POST /console/api/browsers          capabilities / create a console-owned browser
@@ -129,7 +129,7 @@ export async function consoleRoute(req, res, url, restart) {
     const context = contexts.get(name);
     if (!context) throw new HttpError(404, 'context not found');
     if (!CONSOLE_ACTIONS) throw new HttpError(403, 'console browser actions are disabled');
-    try { await (action === 'wake' ? context.wake() : context.hibernate()); }
+    try { await (action === 'wake' ? context.wake('console wake') : context.hibernate()); }
     catch (err) { throw new HttpError(409, err.message); }
     send(res, 200, { ok: true, state: context.state });
     return true;
@@ -144,8 +144,6 @@ export async function consoleRoute(req, res, url, restart) {
     return true;
   }
   if (action === 'focus' && req.method === 'POST') {
-    const context = contexts.get(name);
-    if (context) { await context.wake(); context.touch(); }
     if (name === 'main' && !mainBrowser.running) {
       send(res, 409, { error: `the main browser is ${mainBrowser.state}` });
     } else if (!(await focus(name, targetId))) {

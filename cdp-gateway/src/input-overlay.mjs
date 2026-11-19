@@ -39,7 +39,7 @@ import WebSocket from 'ws';
 import { browserNames, pipeOf } from './browsers.mjs';
 import { onChange } from './changes.mjs';
 import { INPUT_OVERLAY, WAYLAND } from './config.mjs';
-import { desktopWindows, unwatchFront, watchFront } from './desktop.mjs';
+import { frontBrowser, unwatchFront, watchFront } from './desktop.mjs';
 import { readScreen } from './screen.mjs';
 import { MAX_BUFFERED, log } from './util.mjs';
 
@@ -486,7 +486,7 @@ async function hiddenBecause(t, name, facts) {
 async function frontName() {
   if (Date.now() - front.at < FRONT_MS) return front;
   try {
-    const { front: name } = await desktopWindows(browserNames());
+    const name = await frontBrowser(browserNames());
     front = { at: Date.now(), name, known: name !== null };
   } catch {
     front = { at: Date.now(), name: null, known: false };

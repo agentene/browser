@@ -6,21 +6,17 @@
 #   shell access:    docker compose exec browser bash
 #   rebuild only:    docker compose build
 #
-# Every runtime knob reads from a .env file next to this file (create it with
-# `cp .env.example .env`): values there override the defaults baked in below
-# via ${VAR:-default} substitution. Variables NOT listed under environment:
-# still reach the container through the env_file pass-through (e.g. native
-# SELKIES_* settings).
+# Runtime knobs read from a .env file next to this file (create it with
+# `cp .env.example .env`) or the shell. Most entries below supply Compose
+# defaults via ${VAR:-default}; web path defaults belong to the image, so
+# their entries only forward configured values. Variables NOT listed under
+# environment: still reach the container through env_file (e.g. native SELKIES_*).
 #
-# Ports come in two independent sets, both settable in .env:
-#   * CONTAINER side — what nginx listens on inside the container:
-#     NGINX_LISTEN_HTTP_PORT (default 80, web HTTP), NGINX_LISTEN_HTTPS_PORT (default 443, web
-#     HTTPS — only when ENABLE_HTTPS=true) and CDP_LISTEN_PORT (default 9222,
-#     CDP). Change these e.g. with host networking (compose.host.yaml) or a
-#     shared network namespace, or when sibling containers dial a specific
-#     port.
-#   * HOST side — what docker publishes: NGINX_HTTP_PORT / NGINX_HTTPS_PORT /
-#     CDP_PORT, mapped onto the container-side ports above.
+# Configure three access ports in .env: HTTP_PORT (8080),
+# HTTPS_PORT (8443) and CDP_PORT (9222).
+# Bridge mode publishes them to fixed container ports 80 / 443 / 9222.
+# With compose.host.yaml the services listen on the chosen ports directly.
+# LISTEN_ADDR selects the host address in both modes (unset/empty = 127.0.0.1).
 # The HTTPS port is not published at all by default; opt in via
 # COMPOSE_FILE=compose.yaml:compose.https.yaml in .env (see
 # compose.https.yaml) so a non-HTTPS setup does not occupy a host port.
@@ -32,12 +28,7 @@
 # The entrypoint starts everything in one container:
 #   Xvfb (or labwc) -> PulseAudio -> Selkies (unix socket) -> Chrome
 #   (+ CDP gateway) -> nginx front door
-#   nginx serves: NGINX_LISTEN_HTTP_PORT (web UI, HTTP)
-#                 + NGINX_LISTEN_HTTPS_PORT (web UI, HTTPS, ENABLE_HTTPS=true)
-#                 + CDP_LISTEN_PORT (chromium CDP endpoint)
-#                 + one listener per PORT_FORWARDS entry (extra forwards to
-#                   sibling containers on the same docker network — see the
-#                   environment: section)
+#   nginx serves the web UI, CDP and any extra PORT_FORWARDS listeners.
 
 services:
   browser:
@@ -59,19 +50,21 @@ services:
 
     # Pass everything in .env through to the container as-is; covers variables
     # not explicitly listed under environment: below. `environment:` entries
-    # (which read the same .env via substitution) win on conflict, so both
-    # mechanisms always agree. Missing .env is not an error.
+    # resolve values from the shell or .env and take precedence over env_file.
+    # Missing .env is not an error.
     env_file:
       - path: .env
         required: false
 
-    # host port : container port. The container side follows the listen
-    # ports configured under environment: below. The HTTPS port is
-    # deliberately absent here; it is published by the compose.https.yaml
-    # overlay.
+    # Publish HTTP and CDP on the selected host address. The HTTPS overlay
+    # publishes the web UI's TLS port.
     ports:
-      - "${NGINX_HTTP_PORT:-8080}:${NGINX_LISTEN_HTTP_PORT:-80}" # web UI, HTTP (always on)
-      - "${CDP_PORT:-9222}:${CDP_LISTEN_PORT:-9222}" # chromium CDP endpoint
+      - target: &http-target 80
+        published: "${HTTP_PORT:-8080}"
+        host_ip: &listen-address "${LISTEN_ADDR:-127.0.0.1}"
+      - target: &cdp-target 9222
+        published: "${CDP_PORT:-9222}"
+        host_ip: *listen-address
 
     volumes:
       # Browser data persisted on the host: the profile (user-data/: cookies,
@@ -101,24 +94,19 @@ services:
       # printed in the container log (docker compose logs browser).
       AUTH_SETUP_CODE: "${AUTH_SETUP_CODE:-}"
 
-      # --- nginx front door ---
-      # Ports nginx LISTENS ON inside the container (not the published host
-      # ports — those are NGINX_HTTP_PORT / NGINX_HTTPS_PORT / CDP_PORT).
-      NGINX_LISTEN_HTTP_PORT: "${NGINX_LISTEN_HTTP_PORT:-80}" # web UI, HTTP
-      NGINX_LISTEN_HTTPS_PORT: "${NGINX_LISTEN_HTTPS_PORT:-443}" # web UI, HTTPS
-      CDP_LISTEN_PORT: "${CDP_LISTEN_PORT:-9222}" # public CDP endpoint
-      # Address every nginx listener binds to; empty = all interfaces. Mainly
-      # for the compose.host.yaml overlay (no port mapping there to restrict
-      # exposure): 127.0.0.1 keeps the CDP endpoint (open until a CDP API key
-      # is set) and the web UI host-local.
-      NGINX_LISTEN_ADDR: "${NGINX_LISTEN_ADDR:-}"
+      # Bridge listeners use fixed container ports and accept Docker's
+      # forwarded traffic. The host overlay uses the configured ports and address.
+      HTTP_PORT: *http-target
+      HTTPS_PORT: "443"
+      CDP_PORT: *cdp-target
+      LISTEN_ADDR: "0.0.0.0"
       # Host names the web UI and the CDP port answer to (comma-separated; a
       # leading dot = subdomains too), besides IP addresses and localhost;
       # others get 421. Guards an open web UI / console (login skipped or
       # ENABLE_AUTH=false) against DNS rebinding. Empty = any host name.
       ALLOWED_HOSTS: "${ALLOWED_HOSTS:-}"
-      # true = nginx also serves HTTPS on NGINX_LISTEN_HTTPS_PORT (published to the
-      # host only via the compose.https.yaml overlay, which also mounts ./tls).
+      # true = also serve HTTPS. The HTTPS overlay publishes it in bridge
+      # mode and mounts ./tls for certificates.
       # Certificates: an existing valid pair in ./tls is reused as-is;
       # otherwise a self-signed pair is generated once and then reused.
       ENABLE_HTTPS: "${ENABLE_HTTPS:-false}"
@@ -140,11 +128,15 @@ services:
 
       # --- Selkies ---
       # Authentication is managed by ENABLE_AUTH and the console.
-      # URL path prefix the web UI is served under, e.g. "/desk" ->
+      # URL path prefix the desktop is served under, e.g. "/desk" ->
       # http://host:port/desk/ (slashes optional; empty = site root). An
       # outer reverse proxy mounting it at a subpath must forward the path
       # UNCHANGED (no prefix stripping). / and /desk redirect to /desk/.
-      SELKIES_SUBFOLDER: "${SELKIES_SUBFOLDER:-}"
+      # Also forward CONSOLE_SUBPATH, including its shared __auth/ routes.
+      # Forward optional values from the shell or .env; config.sh supplies defaults.
+      BROWSER_SUBPATH:
+      # Console prefix: slashes optional; an explicit empty value means root.
+      CONSOLE_SUBPATH:
       # Extra CLI flags passed to `selkies`
       SELKIES_EXTRA_ARGS: "${SELKIES_EXTRA_ARGS:-}"
       # Browser/desktop preferences are configured in the web Settings page,
@@ -177,7 +169,7 @@ services:
       # Every isolated CDP context (browser.newContext(), playwright-cli
       # "isolated": true) gets its own chromium on a clone of the profile above:
       # inherits its logins, shares nothing back; destroyed when the context
-      # closes. Dashboard: http://host:${CDP_PORT}/console/
+      # closes. Dashboard: http://host:${HTTP_PORT}${CONSOLE_SUBPATH}/
       # Web page origins that may use the CDP API (comma-separated, * = any),
       # like chromium's --remote-allow-origins; empty = none: any request
       # with an Origin header (a page's WebSocket or fetch) is refused.
@@ -212,25 +204,10 @@ services:
       RUN_USER: "${RUN_USER:-browser}"
 
     healthcheck:
-      # The web UI on container port NGINX_LISTEN_HTTP_PORT counts as healthy
-      # once Selkies answers through nginx: 200, a 302 to SELKIES_SUBFOLDER,
-      # or 401 when a login is on (502 = Selkies not up). With
-      # ENABLE_SELKIES=false there is no web listener, so the CDP endpoint is
-      # probed instead — /json/list, which does not
-      # start a stopped main browser; 401 there means a CDP API key is set
-      # (the probe has none) and counts as up. A dead service is caught by the entrypoint itself (it
-      # exits and docker restarts the container). $$ = evaluated in the
-      # container at check time, not by compose.
-      test:
-        - CMD-SHELL
-        - >-
-          if [ "$${ENABLE_SELKIES:-true}" = false ]; then
-          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${CDP_LISTEN_PORT:-9222}/json/list)" in
-          2??|401) true ;; *) false ;; esac;
-          else
-          case "$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${NGINX_LISTEN_HTTP_PORT:-80}/)" in
-          2??|3??|401) true ;; *) false ;; esac;
-          fi
+      # Probe the console and every enabled public service without starting
+      # Chromium. A protected endpoint's 401 counts as ready. Container-side
+      # listen ports are independent of Docker's host-side published ports.
+      test: ["CMD", "/usr/local/lib/docker-entrypoint/helpers/healthcheck.sh"]
       interval: 30s
       timeout: 5s
       retries: 3

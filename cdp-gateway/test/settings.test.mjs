@@ -102,6 +102,27 @@ test('saved preferences alone control startup, and all legacy environment values
   ].map((key) => [key, 'invalid-ignored-value'])));
 });
 
+test('capacity limits migrate old saved caps and enforce inclusive integer bounds on edits', () => {
+  settingsProcess(`
+    assert.equal(config.MAX_CONTEXTS, 100);
+    assert.equal(config.HIBERNATED_MAX, 200);
+    await patch({ browser: { language: 'en-US' } });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file)).contexts, { maxRunning: 100, maxHibernated: 200 });
+
+    const { fields } = settingsView();
+    for (const [key, min, max] of [['maxRunning', 1, 100], ['maxHibernated', 0, 200]]) {
+      assert.deepEqual([fields.contexts[key].min, fields.contexts[key].max], [min, max]);
+      for (const value of [min, max]) {
+        const view = await patch({ contexts: { [key]: value } });
+        assert.equal(view.effective.contexts[key], value);
+      }
+      for (const value of [min - 1, max + 1, min + 0.5]) {
+        await assert.rejects(patch({ contexts: { [key]: value } }), { status: 400 });
+      }
+    }
+  `, { contexts: { maxRunning: 10_000, maxHibernated: 201 } });
+});
+
 test('atomic persistence, live application, restart state, conflicts and retry after an apply failure', () => {
   settingsProcess(`
     const original = settingsView();

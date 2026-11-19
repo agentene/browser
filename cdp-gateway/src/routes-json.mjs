@@ -87,7 +87,7 @@ export async function jsonRoute(req, res, url) {
   const m = p.match(/^\/json\/(activate|close)\/([^/]+)$/);
   if (m) {
     const [, action, targetId] = m;
-    const target = await targetAddress(targetId, true);
+    const target = await targetAddress(targetId, `/json/${action}`);
     if (!target) {
       send(res, 404, `No such target id: ${targetId}`, TEXT);
     } else if (action === 'activate') {

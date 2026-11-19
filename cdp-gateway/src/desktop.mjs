@@ -1,5 +1,5 @@
 // The browsers' windows on the desktop (what the Selkies stream shows): which
-// one is in front and what their titles say, and bringing one to the front.
+// one is in front and bringing a browser to the front.
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -19,51 +19,21 @@ export async function applyRaiseNewWindows(on) {
   if (await run(RAISE_SWITCH, [String(on)]) !== 0) throw new Error(`${path.basename(RAISE_SWITCH)} ${on} failed`);
 }
 
-// The windows in `wlrctl toplevel list` output ("<app_id>: <title>" lines),
-// as [app_id, title] pairs.
-export function listedToplevels(text) {
-  return text.split('\n').filter((line) => line.includes(':')).map((line) => {
-    const colon = line.indexOf(':');
-    return [line.slice(0, colon), line.slice(colon + 1).replace(/^ /, '')];
-  });
-}
-
-// The browsers' windows on the desktop: front, the browser whose window is
-// in front (or null), and titles, each browser's window titles, the one in
-// front first. Chromium titles a window after the tab in front of it — the
-// one tab state no CDP client can blur (targets.mjs). Wayland: what labwc
-// lists (two wlrctl calls: every window, the focused one). X11: what
-// front-window.py reports whenever it changes, top to bottom (while
-// watchFront runs).
-let x11Windows = []; // [pid, title], topmost first
+// Only the browser in front matters to the desktop marker and input overlay.
+// The selected tab comes directly from Chrome over its pipe.
+let x11FrontPid = null;
 let frontWatch = null;
 
-export async function desktopWindows(names) {
-  const titles = new Map();
-  const add = (name, title) => {
-    const list = titles.get(name) ?? [];
-    if (!list.includes(title)) titles.set(name, [...list, title]);
-  };
-  if (!WAYLAND) {
-    const byPid = (pid) => names.find((name) => browserPid(name) === pid);
-    for (const [pid, title] of x11Windows) {
-      const name = byPid(pid);
-      if (name) add(name, title);
-    }
-    return { front: x11Windows.length ? byPid(x11Windows[0][0]) ?? null : null, titles };
+export async function frontBrowser(names) {
+  if (!WAYLAND) return names.find((name) => browserPid(name) === x11FrontPid) ?? null;
+  const running = names.filter((name) => name !== 'main' || mainBrowser.running);
+  if (!running.length) return null;
+  const focused = await output('wlrctl', ['toplevel', 'list', 'state:focused']);
+  for (const line of focused.split('\n')) {
+    const name = running.find((candidate) => line.startsWith(`${appId(candidate)}:`));
+    if (name) return name;
   }
-  const shown = names.filter((name) => name !== 'main' || mainBrowser.running);
-  if (!shown.length) return { front: null, titles };
-  const [focused, all] = (await Promise.all([
-    output('wlrctl', ['toplevel', 'list', 'state:focused']),
-    output('wlrctl', ['toplevel', 'list']),
-  ])).map(listedToplevels);
-  const byAppId = (id) => shown.find((name) => appId(name) === id);
-  for (const [id, title] of [...focused, ...all]) {
-    const name = byAppId(id);
-    if (name) add(name, title);
-  }
-  return { front: focused.map(([id]) => byAppId(id)).find(Boolean) ?? null, titles };
+  return null;
 }
 
 // X11: front-window.py runs while anyone needs the window in front — the
@@ -78,11 +48,12 @@ export function watchFront() {
   frontWatch = child;
   let buffered = '';
   child.stdout.on('data', (chunk) => {
+    if (frontWatch !== child) return;
     const lines = (buffered + chunk).split('\n');
     buffered = lines.pop();
     if (!lines.length) return;
     try {
-      x11Windows = JSON.parse(lines.at(-1));
+      x11FrontPid = JSON.parse(lines.at(-1));
     } catch {
       return;
     }
@@ -92,8 +63,9 @@ export function watchFront() {
   child.on('error', () => { /* no python3: no front marker */ });
   child.on('exit', () => {
     // A lost X connection clears the front marker.
-    if (frontWatch === child) frontWatch = null;
-    x11Windows = [];
+    if (frontWatch !== child) return;
+    frontWatch = null;
+    x11FrontPid = null;
   });
 }
 
@@ -102,15 +74,31 @@ export function unwatchFront() {
   if (frontUsers) return;
   frontWatch?.stdin.end();
   frontWatch = null;
-  x11Windows = [];
+  x11FrontPid = null;
 }
 
 // Bring a context's (or the main browser's) window to the front of the desktop
 // so it shows up in the Selkies stream, with the tab targetId in front if
 // one is given (else the tab in front stays). A browser whose tabs were all
-// closed (it keeps running without a window) gets a blank tab to show.
+// closed gets a fresh process and a blank tab to show.
 // Resolves false when there is nothing to focus: no such browser or tab.
 export async function focus(name, targetId) {
+  const context = contexts.get(name);
+  if (!context) return focusWindow(name, targetId);
+  // Coalesce repeated Show clicks, including the empty check + createTarget.
+  if (!targetId && context.focusing) return context.focusing;
+  const task = (async () => {
+    await context.wake('console focus');
+    context.holds++;
+    try { return await focusWindow(name, targetId); }
+    finally { context.holds--; }
+  })();
+  if (targetId) return task;
+  context.focusing = task.finally(() => { context.focusing = null; });
+  return context.focusing;
+}
+
+async function focusWindow(name, targetId) {
   const pipe = pipeOf(name);
   if (!pipe) return false;
   const context = contexts.get(name);

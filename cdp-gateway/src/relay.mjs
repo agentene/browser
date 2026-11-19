@@ -3,9 +3,21 @@
 // page's own WebSocket on chromium's DevTools port was.
 
 import WebSocket from 'ws';
+import { notifyChange } from './changes.mjs';
 import { guardFrame } from './client-frame.mjs';
 import { forward } from './flow.mjs';
 import { log } from './util.mjs';
+
+const relays = new Set();
+
+export function hasPageClients(pipe) {
+  if (!pipe) return false;
+  for (const { client, upstream } of relays) {
+    if (upstream.pipe === pipe && upstream.readyState === WebSocket.OPEN
+      && client.readyState === WebSocket.OPEN) return true;
+  }
+  return false;
+}
 
 // upstream: an open page connection (pipe.connect({ targetId })). Every
 // client frame is checked (client-frame.mjs's guardFrame, the same decision
@@ -14,6 +26,9 @@ import { log } from './util.mjs';
 // local files (file-access.mjs), or one opening a CDP channel of its own.
 // What passes goes upstream as the command the check read.
 export function relay(client, upstream) {
+  const connection = { client, upstream };
+  relays.add(connection);
+  notifyChange();
   client.on('message', (raw) => {
     const checked = guardFrame(raw);
     if (checked.notes) for (const note of checked.notes) log(`page relay: ${note}`);
@@ -32,6 +47,8 @@ export function relay(client, upstream) {
   const closeBoth = () => {
     if (closed) return;
     closed = true;
+    relays.delete(connection);
+    notifyChange();
     upstream.close();
     client.terminate();
   };

@@ -83,48 +83,53 @@ export class ProtocolIds {
     t.used.delete(id);
   }
 
-  // params/result are traversed only according to the protocol schema.
   translate(method, value, part, direction, session = '') {
+    return this.mapIds(method, value, part, (kind, id) => this.id(kind, id, direction, session));
+  }
+
+  // Translation and wake validation visit the same protocol fields, including
+  // nested CallArguments. Application values are opaque to both.
+  mapIds(method, value, part, mapId) {
     const def = (part === 'event' ? this.events : this.commands).get(method);
     if (!def) return value;
-    const out = this.object(value, part === 'result' ? def.returns : def.parameters, def.domain, direction, session);
+    const out = this.object(value, part === 'result' ? def.returns : def.parameters, def.domain, mapId);
     // These two execution-context identifiers are strings in CDP's schema.
     if (method === 'Runtime.executionContextCreated' && out?.context?.uniqueId) {
-      out.context.uniqueId = this.id('uniqueWorld', out.context.uniqueId, direction, session);
+      out.context.uniqueId = mapId('uniqueWorld', out.context.uniqueId);
     }
     // auxData is formally an untyped object, but Chromium's documented
     // execution-context extension carries the owning frame here. Leaving
     // its physical id would make Playwright ignore a new page's worlds.
     if (method === 'Runtime.executionContextCreated' && out?.context?.auxData?.frameId) {
       out.context.auxData = { ...out.context.auxData,
-        frameId: this.id('target', out.context.auxData.frameId, direction, session) };
+        frameId: mapId('target', out.context.auxData.frameId) };
     }
     if (method === 'Runtime.executionContextDestroyed' && out?.executionContextUniqueId) {
-      out.executionContextUniqueId = this.id('uniqueWorld', out.executionContextUniqueId, direction, session);
+      out.executionContextUniqueId = mapId('uniqueWorld', out.executionContextUniqueId);
     }
-    if (out?.uniqueContextId) out.uniqueContextId = this.id('uniqueWorld', out.uniqueContextId, direction, session);
+    if (out?.uniqueContextId) out.uniqueContextId = mapId('uniqueWorld', out.uniqueContextId);
     return out;
   }
 
-  object(value, properties, domain, direction, session) {
+  object(value, properties, domain, mapId) {
     if (!value || typeof value !== 'object') return value;
     const out = { ...value };
     for (const p of properties ?? []) {
-      if (Object.hasOwn(value, p.name)) out[p.name] = this.walk(value[p.name], p, domain, direction, session);
+      if (Object.hasOwn(value, p.name)) out[p.name] = this.walk(value[p.name], p, domain, mapId);
     }
     return out;
   }
 
-  walk(value, def, domain, direction, session) {
+  walk(value, def, domain, mapId) {
     if (value === undefined || value === null) return value;
     if (def.$ref) {
       const ref = def.$ref.includes('.') ? def.$ref : `${domain}.${def.$ref}`;
-      if (KINDS.has(ref)) return this.id(KINDS.get(ref), value, direction, session);
+      if (KINDS.has(ref)) return mapId(KINDS.get(ref), value);
       const type = this.types.get(ref);
-      return type ? this.walk(value, type, type.domain, direction, session) : value;
+      return type ? this.walk(value, type, type.domain, mapId) : value;
     }
-    if (def.type === 'array' && Array.isArray(value)) return value.map((v) => this.walk(v, def.items, domain, direction, session));
-    if (def.type === 'object') return this.object(value, def.properties, domain, direction, session);
+    if (def.type === 'array' && Array.isArray(value)) return value.map((v) => this.walk(v, def.items, domain, mapId));
+    if (def.type === 'object') return this.object(value, def.properties, domain, mapId);
     return value;
   }
 }

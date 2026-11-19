@@ -8,10 +8,9 @@ import { test } from 'node:test';
 import { browserExitAction } from '../src/browser-exit.mjs';
 import { appId, intEnv } from '../src/config.mjs';
 import { broadcast } from '../src/console-live.mjs';
-import { listedToplevels } from '../src/desktop.mjs';
 import { cdpOriginDenied, normalizeOrigin, parseAllowedOrigins } from '../src/cdp-origin.mjs';
 import { consoleDenied, consoleOriginDenied } from '../src/console-auth.mjs';
-import { requestPath, viaWeb } from '../src/respond.mjs';
+import { requestPath } from '../src/respond.mjs';
 import { MAX_BUFFERED, connectionsTo } from '../src/util.mjs';
 import { adjustPrefs, cloned, cloneProfile } from '../src/profile.mjs';
 import { cookieKey, cookieParam, originTabs } from '../src/storage-sync.mjs';
@@ -33,22 +32,11 @@ test('appId matches the entrypoint convention', () => {
 
 const req = (headers, method = 'GET') => ({ method, headers });
 
-test('consoleDenied: reads on either port rely on nginx authentication', () => {
-  for (const headers of [{}, { 'x-cdp-console-via': 'web' }]) {
-    assert.equal(consoleDenied(req(headers)), null);
-    assert.equal(consoleDenied(req(headers, 'HEAD')), null);
-  }
-});
-
-test('consoleDenied: every write needs X-CDP-Console, on either port', async () => {
-  const via = { 'x-cdp-console-via': 'web' };
-  assert.deepEqual(await consoleDenied(req(via, 'POST')), [403, 'missing X-CDP-Console header']);
-  assert.equal(await consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'POST')), null);
-  assert.equal(await consoleDenied(req({ ...via, 'x-cdp-console': '1' }, 'DELETE')), null);
-  // the CDP port has the same CSRF guard (a cross-site form POST)
+test('consoleDenied: reads rely on nginx authentication and writes need the console header', () => {
+  for (const method of ['GET', 'HEAD']) assert.equal(consoleDenied(req({}, method)), null);
   for (const method of ['POST', 'PATCH', 'DELETE']) {
-    assert.deepEqual(await consoleDenied(req({}, method)), [403, 'missing X-CDP-Console header']);
-    assert.equal(await consoleDenied(req({ 'x-cdp-console': '1' }, method)), null);
+    assert.deepEqual(consoleDenied(req({}, method)), [403, 'missing X-CDP-Console header']);
+    assert.equal(consoleDenied(req({ 'x-cdp-console': '1' }, method)), null);
   }
 });
 
@@ -65,11 +53,6 @@ test('requestPath: only targets nginx and the WHATWG parser read alike', () => {
   for (const url of ['//console/json/version', '///console/devtools/browser/x', '//x/json/version', '/console/..\\json/version', '/console\\..\\devtools/browser/x', '/a\tb', '/a b', '/a\nb', '/a\x7f', 'http://x/json/version', '*', '']) {
     assert.equal(at(url), null, JSON.stringify(url));
   }
-});
-
-test('viaWeb: the marker nginx sets on the web port', () => {
-  assert.equal(viaWeb(req({ 'x-cdp-console-via': 'web' })), true);
-  assert.equal(viaWeb(req({})), false);
 });
 
 test('cdpOriginDenied: CDP clients and address-bar visits pass, web pages do not', () => {
@@ -227,15 +210,6 @@ test('originTabs: one tab per http(s) origin', () => {
     { targetId: 'E', url: 'chrome://newtab/' },
     { targetId: 'F', url: 'not a url' },
   ]), [['https://a.example', 'A'], ['http://b.example:8080', 'C']]);
-});
-
-test('listedToplevels: app_ids and titles of wlrctl toplevel list', () => {
-  assert.deepEqual(listedToplevels('cdp-context-1: ctx - Google Chrome for Testing\ncdp-main: a: b\ncdp-main: \n'), [
-    ['cdp-context-1', 'ctx - Google Chrome for Testing'],
-    ['cdp-main', 'a: b'],
-    ['cdp-main', ''],
-  ]);
-  assert.deepEqual(listedToplevels(''), []);
 });
 
 test('broadcast: a console that does not keep up is dropped, not buffered for', () => {

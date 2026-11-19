@@ -284,7 +284,7 @@
     $('.settings-restart').textContent = t('restartContainer');
     $('.settings-restart').title = t('restartHint');
     settingsEditor.render();
-    window.AgenteneAuth?.setLang(lang);
+    window.AgenteneAuthClient?.setLang(lang);
     renderSummary();
     for (const v of views.values()) v.card.remove();
     views.clear();
@@ -419,20 +419,8 @@
     }
   });
 
-  // The built-in login's rows in the settings page (login, CDP API key, log out) and
-  // their dialogs: served by the auth service next to the console
-  // (ENABLE_AUTH=true; without it the script is not there).
-  const authUi = document.createElement('script');
-  authUi.src = new URL('../__auth/ui.js', location.href).href;
-  authUi.onload = () => {
-    window.AgenteneAuth?.setLang(lang);
-    window.AgenteneAuth?.mount({ menu: settingsContent, root: document.body, onError: showError });
-  };
-  document.head.append(authUi);
-  // ...and the session keepalive, so an idle console tab stays signed in
-  const authKeepalive = document.createElement('script');
-  authKeepalive.src = new URL('../__auth/keepalive.js', location.href).href;
-  document.head.append(authKeepalive);
+  // nginx supplies the same authentication client to both console interfaces.
+  window.AgenteneAuthClient?.mount({ menu: settingsContent, root: document.body, onError: showError, language: lang });
 
   function el(tag, attrs = {}, ...children) {
     const node = document.createElement(tag);
@@ -590,7 +578,7 @@
       actions);
     if (isMain) {
       actions.append(el('button', { class: 'danger', title: t('stopTitle'),
-        onclick: async () => await ask(t('stopConfirm'), t('stop'))
+        onclick: async () => (!browsers.get(name)?.hasClients || await ask(t('stopConfirm'), t('stop')))
           && call('POST', `${base}/stop`).catch(showError) }, t('stop')));
     }
     if (!isMain) {
@@ -599,7 +587,7 @@
           && call('POST', `${base}/hibernate`).catch(showError) }, t('hibernate'));
       actions.append(v.hibernate);
       actions.append(el('button', { class: 'danger', title: t('deleteTitle'),
-        onclick: async () => await ask(t('deleteConfirm', name), t('delete'))
+        onclick: async () => (!browsers.get(name)?.hasClients || await ask(t('deleteConfirm', name), t('delete')))
           && call('DELETE', base).catch(showError) }, t('delete')));
     }
     v.meta = el('div', { class: 'meta' });
@@ -628,13 +616,17 @@
   // flicker, focus and list scroll position stay).
   function fillCard(context, v) {
     const n = context.tabs.size;
-    const state = context.state ?? 'running';
+    // Only a saved hibernation is a wake; reopening a stopped context is a start.
+    const state = context.state === 'waking' && !context.hibernatedAt ? 'starting' : context.state ?? 'running';
     const sleeping = state === 'hibernated';
-    const pending = !['running', 'hibernated'].includes(state);
-    const stateKey = { starting: 'stateStarting', hibernated: 'stateHibernated', hibernating: 'stateHibernating', waking: 'stateWaking', destroying: 'stateDestroying' }[state];
-    v.chip.textContent = stateKey ? `${t(stateKey)} · ${t('tabs', n)}` : t('tabs', n);
+    const pending = !['running', 'hibernated', 'stopped'].includes(state);
+    const stateKey = { starting: 'stateStarting', stopped: 'stateStopped', closing: 'stateClosing', hibernated: 'stateHibernated', hibernating: 'stateHibernating', waking: 'stateWaking', destroying: 'stateDestroying' }[state];
+    const stateOnly = ['closing', 'stopped', 'starting'].includes(state);
+    v.chip.textContent = stateOnly ? t(stateKey) : stateKey ? `${t(stateKey)} · ${t('tabs', n)}` : t('tabs', n);
     v.card.classList.toggle('hibernated', sleeping);
-    v.show.textContent = t(sleeping ? 'wake' : 'show');
+    const startAction = state === 'stopped' || state === 'starting';
+    v.show.textContent = t(sleeping ? 'wake' : startAction ? 'startBrowser' : 'show');
+    v.show.title = t(startAction ? 'startBrowser' : 'showTitle');
     v.show.disabled = pending;
     if (v.hibernate) {
       v.hibernate.hidden = !actionsEnabled || state !== 'running';

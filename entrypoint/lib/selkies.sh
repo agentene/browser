@@ -10,7 +10,7 @@ selkies_start() {
     selkies_media_defaults
     [ -n "${SELKIES_EXTRA_ARGS:-}" ] && read -r -a extra_args <<< "${SELKIES_EXTRA_ARGS}"
 
-    log "starting selkies on ${SELKIES_SOCKET} (${DISPLAY_BACKEND}, path ${SELKIES_SUBFOLDER:-/}, fronted by nginx)"
+    log "starting selkies on ${SELKIES_SOCKET} (${DISPLAY_BACKEND}, path ${BROWSER_SUBPATH:-/}, fronted by nginx)"
     # TLS terminates at nginx, so selkies itself always serves plain HTTP on
     # the socket nginx proxies to. A unix socket, not a loopback port: a page
     # in the browser could open a loopback port's origin and use the desktop
@@ -21,7 +21,7 @@ selkies_start() {
     start_service - \
         "${DROP[@]}" selkies \
         --unix-socket="${SELKIES_SOCKET}" \
-        --subfolder="${SELKIES_SUBFOLDER}" \
+        --subfolder="${BROWSER_SUBPATH}" \
         "${SELKIES_BACKEND_ARGS[@]}" \
         "${extra_args[@]}" \
         --enable-resize='true|locked' \

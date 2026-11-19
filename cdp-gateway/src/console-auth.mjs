@@ -1,7 +1,7 @@
-// Authentication is enforced by nginx's auth_request on both public ports.
+// Authentication is enforced by nginx's auth_request on the web listeners.
 // Keep CSRF and WebSocket origin checks here as well.
 
-// Every write (POST/PATCH/DELETE), on either port, needs the X-CDP-Console
+// Every write (POST/PATCH/DELETE) needs the X-CDP-Console
 // header: no cross-site form or image can send one, and a cross-site fetch
 // that does needs a CORS preflight the gateway never grants.
 export function consoleDenied(req) {
