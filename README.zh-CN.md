@@ -610,7 +610,9 @@ node update-chrome-node.mjs --node 22        # 强制指定 Node 主版本,而�
 
 [![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
-每个 pull request 以及每次推送到 `main` 都会运行 [`ci.yaml`](.github/workflows/ci.yaml):静态检查(hadolint、`docker build --check`、shellcheck、`node --check`、`py_compile`)、完整镜像构建、运行时冒烟测试(CDP 端点、Web UI、CDP 网关、Wayland 与 X11 桌面)。关窗测试会检查隔离浏览器进程是否退出、配置目录是否保留。如果 `wlrctl` 在关闭 Wayland 窗口时收到 `SIGSEGV`，测试还会检查目标窗口是否已从合成器的窗口列表中消失。在桌面缩放测试前后，CI 都会通过 Selkies 的 Unix 套接字访问 `/browser/`，确认桌面仍可用。
+每个 pull request 以及每次推送到 `main` 或 `dev` 都会运行相同的 `lint` 和 `verify` 作业。`lint` 运行静态检查（hadolint、`docker build --check`、shellcheck、`node --check`、`py_compile`）和单元测试。随后，`verify` 构建 `linux/amd64` 镜像，将其加载到运行器的本地 Docker，再用该镜像对 CDP 端点、Web UI、CDP 网关以及 Wayland 和 X11 桌面运行冒烟测试。推送到 `dev` 的流水线在 `verify` 后结束。[CI 工作流](.github/workflows/ci.yaml)
+
+关窗测试会检查隔离浏览器进程是否退出、配置目录是否保留。如果 `wlrctl` 在关闭 Wayland 窗口时收到 `SIGSEGV`，测试还会检查目标窗口是否已从合成器的窗口列表中消失。在桌面缩放测试前后，CI 都会通过 Selkies 的 Unix 套接字访问 `/browser/`，确认桌面仍可用。
 
 只有 `main` 会发布版本 —— `dev` 与特性分支只做测试。合入 `main` 的变更构成一次发布时(见下文),同一次 CI 运行会构建并发布 `linux/amd64` 镜像(Dockerfile 只支持这一种架构);只有改了 `VERSION` 的发布才打 git 标签:
 
