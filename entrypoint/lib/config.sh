@@ -5,19 +5,20 @@
 # (settings.json / the web UI); their schema is cdp-gateway/src/settings-schema.mjs.
 # The former preference variables are warned about and ignored by settings.sh.
 #
-# Environment reference (compose host-side ports and mounts are in compose.yaml):
+# Environment reference (Compose publishing and mounts are in compose.yaml):
 #   ENABLE_SELKIES=true           start desktop streaming and audio services
 #   ENABLE_CDP=true               enable on-demand browsers and public CDP; false keeps web settings
 #   ENABLE_AUTH=true              built-in login and CDP API key service
 #   AUTH_SETUP_CODE=""            setup code; empty generates and logs one
 #   ENABLE_HTTPS=false            additionally serve TLS on the web UI
-#   NGINX_LISTEN_HTTP_PORT=80      container HTTP listener
-#   NGINX_LISTEN_HTTPS_PORT=443    container HTTPS listener
-#   CDP_LISTEN_PORT=9222          container public CDP listener
-#   NGINX_LISTEN_ADDR=""           listener address; empty = all interfaces
+#   HTTP_PORT=80                  web HTTP listener (Compose access default 8080)
+#   HTTPS_PORT=443                web HTTPS listener (Compose access default 8443)
+#   CDP_PORT=9222                 public CDP listener
+#   LISTEN_ADDR=127.0.0.1         listener address; unset/empty = IPv4 loopback
 #   ALLOWED_HOSTS=""               accepted host names (IP addresses/localhost always work)
 #   PORT_FORWARDS=""               extra nginx proxies: LISTEN=HOST:PORT, space/comma separated
-#   SELKIES_SUBFOLDER=""           web UI path prefix, e.g. /desk
+#   BROWSER_SUBPATH=/browser      desktop path prefix; explicit empty = site root
+#   CONSOLE_SUBPATH=/console      console path prefix; explicit empty = site root
 #   SELKIES_EXTRA_ARGS=""          extra Selkies arguments (selkies.sh)
 #   DISPLAY_BACKEND=wayland       wayland (labwc) or x11 (Xvfb/picom)
 #   TZ=UTC                        container timezone, inherited by processes
@@ -41,7 +42,7 @@ config_load() {
     settings_load
     config_sockets
     config_display
-    config_selkies
+    config_web_paths
     config_nginx
     config_tls
     config_chromium
@@ -67,6 +68,7 @@ config_sockets() {
     SOCKET_DIR=/tmp/agentene
     SELKIES_SOCKET="${SOCKET_DIR}/selkies.sock"
     CDP_GATEWAY_SOCKET="${SOCKET_DIR}/cdp-gateway.sock"
+    CONSOLE_SOCKET="${SOCKET_DIR}/console.sock"
     AUTH_SOCKET="${SOCKET_DIR}/auth.sock"
 }
 
@@ -94,40 +96,62 @@ config_display() {
     esac
 }
 
-config_selkies() {
-    # URL path prefix of the web UI (empty = root). Normalized to the form both
-    # selkies and the nginx locations expect: "/a/b" — leading slash, no
-    # trailing one. Restricted to URL-safe path characters, as the value lands
-    # verbatim in nginx location/return directives.
-    SELKIES_SUBFOLDER="${SELKIES_SUBFOLDER:-}"
-    SELKIES_SUBFOLDER="${SELKIES_SUBFOLDER#"${SELKIES_SUBFOLDER%%[!/]*}"}"   # strip leading /
-    SELKIES_SUBFOLDER="${SELKIES_SUBFOLDER%"${SELKIES_SUBFOLDER##*[!/]}"}"   # strip trailing /
-    case "${SELKIES_SUBFOLDER:+/${SELKIES_SUBFOLDER}/}" in   # empty = root, nothing to check
+# config_subpath <variable> <default>: both web applications use the same
+# URL-safe normalization. An explicitly empty value means the site root.
+config_subpath() {
+    local name="$1" value="$2"
+    if [ -v "${name}" ]; then value="${!name}"; fi
+    value="${value#"${value%%[!/]*}"}"
+    value="${value%"${value##*[!/]}"}"
+    case "${value:+/${value}/}" in
         *[!A-Za-z0-9._~/-]*|*//*|*/./*|*/../*)
-            die "SELKIES_SUBFOLDER='${SELKIES_SUBFOLDER}' must be a plain URL path like /desk or /a/b" ;;
+            die "${name}='${value}' must be a plain URL path like /desk or /a/b" ;;
     esac
-    [ -n "${SELKIES_SUBFOLDER}" ] && SELKIES_SUBFOLDER="/${SELKIES_SUBFOLDER}"
-    return 0
+    printf -v "${name}" '%s' "${value:+/${value}}"
+}
+
+# Sets BROWSER_SUBPATH / CONSOLE_SUBPATH and the derived AUTH_SUBPATH.
+# Startup and health checks share these defaults, normalization and validation.
+# Nested application prefixes are fine; they must not shadow the containing
+# application's own resources, API or WebSocket paths.
+config_web_paths() {
+    config_subpath BROWSER_SUBPATH /browser
+    config_subpath CONSOLE_SUBPATH /console
+    AUTH_SUBPATH="${CONSOLE_SUBPATH}/__auth"
+    [ "${ENABLE_SELKIES:-true}" = "true" ] || return 0
+    if [ "${BROWSER_SUBPATH}" = "${CONSOLE_SUBPATH}" ]; then
+        die "BROWSER_SUBPATH and CONSOLE_SUBPATH must use different paths"
+    fi
+    local child
+    case "${BROWSER_SUBPATH}" in
+        "${CONSOLE_SUBPATH}/"*)
+            child="${BROWSER_SUBPATH#"${CONSOLE_SUBPATH}/"}"
+            case "${child}" in
+                api|api/*|ws|ws/*|overlay|overlay/*|__auth|__auth/*|i18n.js|i18n.js/*|settings-ui.js|settings-ui.js/*|panel.js|panel.js/*|overlay.js|overlay.js/*)
+                    die "BROWSER_SUBPATH='${BROWSER_SUBPATH}' overlaps a console resource" ;;
+            esac ;;
+    esac
+    case "${CONSOLE_SUBPATH}" in
+        "${BROWSER_SUBPATH}/"*)
+            child="${CONSOLE_SUBPATH#"${BROWSER_SUBPATH}/"}"
+            case "${child}" in
+                api|api/*|assets|assets/*|index.html|index.html/*)
+                    die "CONSOLE_SUBPATH='${CONSOLE_SUBPATH}' overlaps a desktop resource" ;;
+            esac ;;
+    esac
 }
 
 config_nginx() {
-    # nginx public listen ports INSIDE the container (host-side publishing of
-    # these ports is a separate choice made by docker: compose "ports:" /
-    # docker -p — NGINX_HTTP_PORT / NGINX_HTTPS_PORT / CDP_PORT in compose).
-    NGINX_LISTEN_HTTP_PORT="${NGINX_LISTEN_HTTP_PORT:-80}"        # web UI over HTTP (always on)
-    NGINX_LISTEN_HTTPS_PORT="${NGINX_LISTEN_HTTPS_PORT:-443}"     # web UI over HTTPS (ENABLE_HTTPS=true only)
-    CDP_LISTEN_PORT="${CDP_LISTEN_PORT:-9222}"  # public CDP endpoint
-    ENABLE_HTTPS="${ENABLE_HTTPS:-false}"   # true = also serve HTTPS on ${NGINX_LISTEN_HTTPS_PORT}
-    # Address every nginx listener binds to (empty = all interfaces). Matters with
-    # network_mode: host, where there is no docker port mapping to restrict
-    # exposure: 127.0.0.1 keeps the unauthenticated CDP endpoint host-local.
-    NGINX_LISTEN_ADDR="${NGINX_LISTEN_ADDR:-}"
-    case "${NGINX_LISTEN_ADDR}" in
-        '') LISTEN_PREFIX="" ;;
-        *[!0-9A-Fa-f.:\[\]]*) die "NGINX_LISTEN_ADDR='${NGINX_LISTEN_ADDR}' must be an IPv4/IPv6 address" ;;
-        \[*) LISTEN_PREFIX="${NGINX_LISTEN_ADDR}:" ;;
-        *:*) LISTEN_PREFIX="[${NGINX_LISTEN_ADDR}]:" ;;   # bare IPv6 -> [addr]:port
-        *) LISTEN_PREFIX="${NGINX_LISTEN_ADDR}:" ;;
+    HTTP_PORT="${HTTP_PORT:-80}"
+    HTTPS_PORT="${HTTPS_PORT:-443}"
+    CDP_PORT="${CDP_PORT:-9222}"
+    ENABLE_HTTPS="${ENABLE_HTTPS:-false}"
+    LISTEN_ADDR="${LISTEN_ADDR:-127.0.0.1}"
+    case "${LISTEN_ADDR}" in
+        *[!0-9A-Fa-f.:\[\]]*) die "LISTEN_ADDR='${LISTEN_ADDR}' must be an IPv4/IPv6 address" ;;
+        \[*) LISTEN_PREFIX="${LISTEN_ADDR}:" ;;
+        *:*) LISTEN_PREFIX="[${LISTEN_ADDR}]:" ;;   # bare IPv6 -> [addr]:port
+        *) LISTEN_PREFIX="${LISTEN_ADDR}:" ;;
     esac
     # Extra reverse proxies served by the same nginx front door (empty = none).
     # Parsed and validated in nginx.sh.
@@ -223,9 +247,6 @@ config_cdp_gateway() {
         true|false) ;;
         *) die "CDP_CONSOLE_RESTART='${CDP_CONSOLE_RESTART}' must be true or false" ;;
     esac
-    # The settings sidebar remains available in desktop-only mode.
-    CDP_CONSOLE_PANEL_ACTIVE="${ENABLE_SELKIES}"
-
 }
 
 config_auth() {
@@ -251,7 +272,7 @@ config_auth() {
 # only surface as an obscure nginx startup failure.
 config_check_ports() {
     local port_var port_val
-    for port_var in NGINX_LISTEN_HTTP_PORT NGINX_LISTEN_HTTPS_PORT CDP_LISTEN_PORT; do
+    for port_var in HTTP_PORT HTTPS_PORT CDP_PORT; do
         port_val="${!port_var}"
         case "${port_val}" in
             ''|*[!0-9]*) die "${port_var}='${port_val}' is not a port number" ;;

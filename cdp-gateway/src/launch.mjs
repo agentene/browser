@@ -7,6 +7,7 @@ import { CdpPipe } from './pipe.mjs';
 import { prepareLanguage } from './profile.mjs';
 import { resolveLanguage } from './language.mjs';
 import { rememberVersion } from './version.mjs';
+import { killGroup } from './util.mjs';
 
 const HIDE_WEBDRIVER = 'AutomationControlled';
 
@@ -44,6 +45,44 @@ export function launchChromium(flags, output, label, env) {
   const pipe = new CdpPipe(proc.stdio[3], proc.stdio[4], label);
   proc.once('exit', () => pipe.close());
   return { proc, pipe };
+}
+
+// Ask the existing profile's ProcessSingleton to open its saved session,
+// without creating a bootstrap page. Keep --no-startup-window on the owning
+// process: with the DevTools pipe it also keeps Chrome alive after its last
+// window closes, so the context can stop cleanly and retain its logical CDP
+// connection. This short-lived command has no DevTools pipe or listener.
+export function openChromiumSession(owner, flags, output, env, timeout) {
+  return new Promise((resolve, reject) => {
+    if (owner.exitCode !== null || owner.signalCode !== null) {
+      reject(new Error('chromium exited before opening its saved session'));
+      return;
+    }
+    // Positional startup URLs belong to a fresh launch, not to this restore.
+    const args = flags.filter((arg) => arg.startsWith('--') && arg !== '--'
+      && !/^--(?:no-startup-window|remote-debugging-pipe|remote-debugging-port)(?:=|$)/.test(arg));
+    const child = spawn(CHROME_BIN, args, {
+      env, detached: true, stdio: ['ignore', output, output],
+    });
+    let failure;
+    const finish = (err) => {
+      clearTimeout(timer);
+      owner.off('exit', onExit);
+      // If the owner vanished before forwarding, the command might have
+      // started another browser. Never leave it or its renderers behind.
+      if (child.pid) killGroup(child.pid, 'SIGKILL');
+      if (failure || err) reject(failure || err); else resolve();
+    };
+    const cancel = (err) => {
+      failure ??= err;
+      if (child.pid) killGroup(child.pid, 'SIGKILL');
+    };
+    const onExit = () => cancel(new Error('chromium exited while opening its saved session'));
+    const timer = setTimeout(() => cancel(new Error('opening the saved browser session timed out')), timeout);
+    owner.once('exit', onExit);
+    child.once('error', finish);
+    child.once('exit', (code) => finish(code === 0 ? null : new Error(`opening the saved browser session failed (${code})`)));
+  });
 }
 
 // Capture one language for both the profile and child environment. The gateway

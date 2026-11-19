@@ -29,9 +29,9 @@ before(async () => {
       return conn;
     },
   };
-  const { handleUpgrade } = await import('../src/upgrade.mjs');
+  const { handleCdpUpgrade } = await import('../src/upgrade.mjs');
   gateway = http.createServer();
-  gateway.on('upgrade', handleUpgrade);
+  gateway.on('upgrade', handleCdpUpgrade);
   gateway.listen(0, '127.0.0.1');
   await once(gateway, 'listening');
 });
@@ -87,13 +87,6 @@ test('a browser page (Origin header) is refused on the CDP WebSockets', async ()
 test('a page WebSocket for a target no browser has is a 404', async () => {
   // no browser runs here: nobody owns the target
   assert.equal(await upgradeStatus('/devtools/page/NOSUCH'), 404);
-});
-
-test('the input overlay\'s WebSocket is a 404 without a desktop', async () => {
-  assert.equal(await upgradeStatus('/console/overlay'), 404);
-  assert.equal(await upgradeStatus('/console/overlay', 'X-CDP-Console-Via: web\r\n'), 404);
-  // the web UI port still reaches no CDP WebSocket
-  assert.equal(await upgradeStatus('/devtools/browser/x', 'X-CDP-Console-Via: web\r\n'), 404);
 });
 
 test('a stopped main browser is not started for a browser connection', async () => {

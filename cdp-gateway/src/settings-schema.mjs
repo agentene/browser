@@ -36,9 +36,9 @@ export const SCHEMA = {
       scope: 'console', apply: 'next-start', valid: (v) => v === 'auto' || canonicalLanguage(v) !== null },
   },
   contexts: {
-    maxRunning: number(4, 1, 10000, 'browser'),
+    maxRunning: number(4, 1, 100, 'browser'),
     overflow: choice('hibernate', ['hibernate', 'reject'], 'browser'),
-    maxHibernated: number(16, 0, 10000, 'browser'),
+    maxHibernated: number(16, 0, 200, 'browser'),
   },
   desktop: {
     raiseNewWindows: bool(true, 'desktop', 'live'),
@@ -56,6 +56,14 @@ export const isObject = (v) => typeof v === 'object' && v !== null && !Array.isA
 // One-way compatibility for persisted files, never an environment fallback.
 // Removed preferences no longer affect startup and disappear on the next save.
 export function migrateSettings(saved) {
+  if (isObject(saved.contexts)) {
+    // Older releases accepted up to 10,000 for both capacity limits.
+    for (const key of ['maxRunning', 'maxHibernated']) {
+      const value = saved.contexts[key];
+      const { max } = SCHEMA.contexts[key];
+      if (Number.isSafeInteger(value) && value > max && value <= 10_000) saved.contexts[key] = max;
+    }
+  }
   if (isObject(saved.desktop)) {
     const { width, height } = saved.desktop;
     const size = `${width}x${height}`;

@@ -6,7 +6,7 @@
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs",
-    "check": "for f in server.mjs src/*.mjs test/*.mjs ui.js; do node --check \"$f\" || exit 1; done",
+    "check": "for f in server.mjs src/*.mjs test/*.mjs ui.js client.js; do node --check \"$f\" || exit 1; done",
     "test": "node --test 'test/*.test.mjs'"
   }
 }

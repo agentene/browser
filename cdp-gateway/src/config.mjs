@@ -17,9 +17,10 @@ export function intEnv(name, fallback, source = env) {
   return n;
 }
 
-// The gateway's own unix socket (nginx proxies the CDP port here): no TCP
-// port a page in the browser could open (pipe.mjs)
-export const SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
+// Separate listeners for CDP and web management, in the same process. Neither
+// exposes a TCP port a page in the browser could open (pipe.mjs).
+export const CDP_SOCKET_PATH = env.CDP_GATEWAY_SOCKET || '/tmp/agentene/cdp-gateway.sock';
+export const CONSOLE_SOCKET_PATH = env.CONSOLE_SOCKET || '/tmp/agentene/console.sock';
 export const CONSOLE_ACTIONS = env.CDP_CONSOLE_ACTIONS !== 'false';
 export const CONSOLE_RESTART = env.CDP_CONSOLE_RESTART !== 'false';
 export const SETTINGS_FILE = env.CDP_GATEWAY_SETTINGS_FILE || '/browser/settings/settings.json';
@@ -49,7 +50,7 @@ export const SCREEN_SIZE = env.CDP_GATEWAY_SCREEN_SIZE || '';
 export const PROTOCOL_FILE = env.CDP_GATEWAY_PROTOCOL_FILE || '/opt/chrome-for-testing/devtools-protocol.json';
 // its /json/version, captured the same way (version.mjs)
 export const VERSION_FILE = env.CDP_GATEWAY_VERSION_FILE || '/opt/chrome-for-testing/devtools-version.json';
-export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_LISTEN_PORT || 9222}`;
+export const PUBLIC_FALLBACK = `127.0.0.1:${env.CDP_PORT || 9222}`;
 export const WAYLAND = env.DISPLAY_BACKEND === 'wayland';
 // desktop-raise-new-windows.sh, which hands the console's "new windows to
 // the front" to the desktop; empty when the browsers have no desktop

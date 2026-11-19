@@ -27,8 +27,8 @@ runtime smoke tests.
 | `compose.yaml` | Base stack; reads `.env` (`env_file` passes unlisted vars through, e.g. native `SELKIES_*`) |
 | `compose.https.yaml`, `compose.gpu.yaml`, `compose.gpu-nvidia.yaml`, `compose.host.yaml` | Opt-in overlays (HTTPS publishing + the `./tls` cert mount; Intel/AMD `/dev/dri`; NVIDIA CDI; host networking — keep it last in `COMPOSE_FILE`) |
 | `.env.example` | The commonly changed runtime knobs, documented (the full reference is the READMEs' Configuration section + `entrypoint/lib/config.sh`) |
-| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`/console/` on the CDP port), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies is on (settings-only without CDP)), `overlay.js` (the CDP clients' input — pointer, clicks, keys, typed text — drawn over the Selkies stream, injected next to the sidebar; fed by `src/input-overlay.mjs`, `CDP_INPUT_OVERLAY`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the X browser windows, topmost first, with their titles — the console's front marker and current tab) |
-| `auth-server/` | Built-in login + CDP API key (`ENABLE_AUTH=true`, default): `server.mjs` (dependency-free Node service on a unix socket that nginx asks about every web UI / console request — `check/web`, a session cookie — and every CDP request — `check/cdp`, the API key once one is set — via `auth_request`; also serves the setup/login form nginx shows in place on 401, the account page and the auth API under `<subfolder>/__auth/` and `/__auth/`), `src/` (`store.mjs`: `/browser/settings/auth.json`, scrypt/SHA-256 hashes, sessions; `secrets.mjs`; `limiter.mjs`), `page.html` (setup/login/account page), `ui.js` (the console's *Access* rows + dialogs, loaded by `dashboard.html` and `panel.js`), `keepalive.js` (renews the session cookie via `api/renew` while a page is open, idle tabs included; nginx injects it into the Selkies page, `dashboard.html` loads it), `test/` (`node --test`, not shipped) |
+| `cdp-gateway/` | CDP gateway (always in front of the CDP port): `gateway.mjs` (Node entry point; the gateway itself is the ES modules in `src/`, one per concern — the module map is in `gateway.mjs`'s header; sole dep `ws` pinned via `package-lock.json`, installed with `npm ci` in the image; `test/` holds `node --test` unit tests, not shipped in the image), `dashboard.html` (`CONSOLE_SUBPATH`, default `/console/`, on the web port, served by the dedicated console socket), `panel.js` (the same console as a sidebar nginx injects into the Selkies page whenever Selkies is on (settings-only without CDP)), `overlay.js` (the CDP clients' input — pointer, clicks, keys, typed text — drawn over the Selkies stream, injected next to the sidebar; fed by `src/input-overlay.mjs`, `CDP_INPUT_OVERLAY`), `raise-window.py` (X restacking for the dashboard; `wlrctl` on Wayland), `front-window.py` (reports the PID of the topmost X browser window for the front marker. The console reads the selected tab from Chrome's tab targets in `targets.mjs`) |
+| `auth-server/` | Built-in login + CDP API key (`ENABLE_AUTH=true`, default): `server.mjs` (dependency-free Node service on a unix socket that nginx asks about every web UI / console request — `check/web`, a session cookie — and every CDP request — `check/cdp`, the API key once one is set — via `auth_request`; also serves the setup/login form nginx shows in place on 401, the account page and the auth API under `<console prefix>/__auth/` on the web listeners), `src/` (`store.mjs`: `/browser/settings/auth.json`, scrypt/SHA-256 hashes, sessions; `secrets.mjs`; `limiter.mjs`), `page.html` (setup/login/account page), `ui.js` (the shared *Access* rows + dialogs), `client.js` (nginx injects this shared authentication bootstrap into both entry pages; it mounts `ui.js`, synchronizes language and renews the session via `api/renew`, idle tabs included), `test/` (`node --test`, not shipped) |
 | `VERSION` | The project's own version, `X.Y.Z` (semver, hand-edited). Git release tags are `v<VERSION>` (code releases; a Chrome bump publishes only the `<VERSION>-<chrome-version>` image tag) — see [Releases](#releases) |
 | `update-chrome-node.mjs` | Version-sync script — resolves the Stable channel of the Chrome for Testing feed + the newest Node LTS, and rewrites the Chrome/Node pins in `Dockerfile` + `compose.yaml` + the README build-arg tables together |
 | `.github/workflows/ci.yaml` | lint → build → smoke tests (CDP, web UI, CDP gateway, Wayland, X11) → release-tag → publish (GHCR + Docker Hub, `linux/amd64` only) |
@@ -52,9 +52,12 @@ grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' VERSION                   # X.Y.Z, one line
 node --check update-chrome-node.mjs
 for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js cdp-gateway/i18n.js; do node --check "$f"; done
 npm ci --prefix cdp-gateway && npm test --prefix cdp-gateway   # gateway unit tests
-for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
+for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/client.js; do node --check "$f"; done
 npm test --prefix auth-server                                  # auth server unit tests (no deps)
 python3 -m py_compile entrypoint/helpers/*.py .github/tests/*.py
+python3 .github/tests/compose-paths.py                         # unset/empty/override forwarding
+python3 .github/tests/compose-ports.py                         # bridge publishing and host listeners
+python3 .github/tests/listen-address.py                        # default, empty, IPv4 and IPv6 addresses
 docker build --check .
 ```
 
@@ -64,15 +67,15 @@ Build and smoke-test:
 docker compose build
 
 # CDP path (Selkies off)
-docker run -d --name cdp-smoke -p 9222:9222 -e ENABLE_SELKIES=false \
+docker run -d --name cdp-smoke -e LISTEN_ADDR=0.0.0.0 -p 127.0.0.1:9222:9222 -e ENABLE_SELKIES=false \
   agentene/browser:latest
 curl -sf http://127.0.0.1:9222/json/version | jq -e '.Browser and .webSocketDebuggerUrl'
 docker rm -f cdp-smoke
 
 # Web-UI path (CDP off)
-docker run -d --name web-smoke -p 8080:80 -e ENABLE_CDP=false \
+docker run -d --name web-smoke -e LISTEN_ADDR=0.0.0.0 -p 127.0.0.1:8080:80 -e ENABLE_CDP=false \
   agentene/browser:latest
-curl -sf http://127.0.0.1:8080/ | grep -qi '<html'
+curl -sf http://127.0.0.1:8080/browser/ | grep -qi '<html'
 docker rm -f web-smoke
 ```
 
@@ -110,11 +113,15 @@ node update-chrome-node.mjs --node 22        # force the Node major
    changes go into the heredocs in `entrypoint/lib/nginx.sh` (certificates:
    `entrypoint/lib/tls.sh`) that generate `/tmp/nginx/nginx.conf`;
    `nginx -t` runs on the generated file before start.
-4. **Two separate port sets — keep them apart.** Container-side listen ports
-   are `NGINX_LISTEN_HTTP_PORT` / `NGINX_LISTEN_HTTPS_PORT` / `CDP_LISTEN_PORT` (defaults
-   80/443/9222); host-side published ports are `NGINX_HTTP_PORT` /
-   `NGINX_HTTPS_PORT` / `CDP_PORT`. Compose `ports:` and the healthcheck
-   must reference the container-side variables, never a literal port.
+4. **Use three port variables.** `HTTP_PORT`, `HTTPS_PORT` and `CDP_PORT`
+   default to 8080/8443/9222 for Compose access. Bridge mode publishes them
+   on `LISTEN_ADDR` and sets the container listeners to 80/443/9222 on
+   `0.0.0.0`. Host mode passes the configured ports and address directly to
+   the listeners. Startup and the healthcheck read the same container values.
+   `LISTEN_ADDR` defaults to `127.0.0.1` when unset or empty. With plain
+   `docker run`, the three port variables configure the image listeners
+   (defaults 80/443/9222). Bridge publishing needs `-e LISTEN_ADDR=0.0.0.0`
+   and an explicit host IP in `-p` for host-local access.
 5. **Runtime preferences belong in the web settings schema and both console UIs**,
    with shared defaults/validation in `cdp-gateway/src/settings-schema.mjs` and
    startup adaptation through `entrypoint/lib/settings.sh`. Never add an env
@@ -177,10 +184,11 @@ node update-chrome-node.mjs --node 22        # force the Node major
   (self-signed counts as valid); self-sign ONLY when no usable pair exists;
   a broken pair fails fast, never gets silently replaced.
 * **Built-in login (`ENABLE_AUTH`).** nginx stays the only enforcement
-  point: every web UI request and the CDP port's `/console` go through
+  point: desktop and console requests on the web listeners go through
   `auth_request` to the auth service's `check/web`, the CDP API through
-  `check/cdp`; on 401 nginx serves the auth service's page in place (no
-  redirects, so subfolders and the console URL just work). Its own
+  `check/cdp`; on a web 401 nginx serves the auth service's page in place
+  (no redirects); a CDP 401 is JSON. Public account routes live only at
+  the web listener's `<CONSOLE_SUBPATH>/__auth/`. Its own
   locations are exempt (`auth_request off`). The CDP API stays open while no
   API key is set, so CDP clients never need changes by default; the session
   cookie never opens the CDP API. Its state is console-managed in
@@ -196,7 +204,7 @@ node update-chrome-node.mjs --node 22        # force the Node major
   --unix-socket`), never to the public CDP port (it may need a key).
 * **The CDP gateway always owns the CDP port** (not a knob — there is
   no nginx → chromium path, the browsers have no port). nginx proxies the
-  whole CDP listener to the gateway without `sub_filter`, passing the Host
+  whole CDP listener to its dedicated `cdp-gateway.sock` without `sub_filter`, passing the Host
   the client dialed: the gateway builds `/json/*` from CDP over the pipes
   (`targets.mjs`; `/json/protocol` is captured from the binary at image
   build) with ws:// URLs on that host — changing it breaks
@@ -248,9 +256,21 @@ node update-chrome-node.mjs --node 22        # force the Node major
   that boundary.
 
 The gateway also provides settings-only mode with `ENABLE_CDP=false`: it stays
-supervised on its Unix socket, serves the console settings and restart action,
-and refuses browser/CDP operations. nginx publishes no CDP listener in that mode.
-The sidebar remains on the web UI. Settings writes require a revision; reductions
+supervised on `console.sock`, serves the console settings and restart action,
+and refuses browser operations. Neither the CDP socket nor its public listener
+is opened in that mode. The web HTTP listener (and HTTPS when enabled) always
+serves `CONSOLE_SUBPATH` (default `/console`), including with Selkies disabled. The gateway uses distinct
+HTTP and WebSocket handlers for its two sockets; never select a handler from a
+request header. nginx maps the public console prefix to the socket's fixed
+internal `/console/`; internal probes and stop hooks use that socket path.
+`BROWSER_SUBPATH` controls only the desktop (default `/browser`). Both prefixes share validation,
+allow explicit empty/root values and reject conflicting namespaces. The sidebar
+uses the console's configured public prefix; both pages share the authentication
+client under that prefix's `__auth/`. The Compose healthcheck is the shared
+`entrypoint/helpers/healthcheck.sh`, which calls `config_web_paths` for the same
+path defaults, normalization and validation, and reads container-side listen ports.
+Compose forwards optional path values without defining their defaults. The sidebar
+remains on the web UI. Settings writes require a revision; reductions
 that delete sleepers also require confirmation bound to the exact removal list.
 
 ## Releases

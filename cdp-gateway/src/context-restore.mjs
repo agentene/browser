@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { browserTabs, pageInfos } from './targets.mjs';
+import { TabListing, pageInfos } from './targets.mjs';
 import { sleep } from './util.mjs';
 
 // Match the browser startup budget: discovering a target does not mean its
@@ -22,7 +22,8 @@ async function evaluate(pipe, targetId, expression) {
 
 export async function captureTabs(context) {
   const { pipe, session } = context;
-  const listing = await browserTabs(pipe, {});
+  const observer = new TabListing(pipe);
+  const listing = await observer.read().finally(() => observer.close());
   const key = `__agentene_restore_${randomUUID()}`;
   const tabs = [];
   for (const tab of listing.tabs) {
@@ -34,7 +35,7 @@ export async function captureTabs(context) {
   const order = session ? [...session.targets.keys()] : [];
   tabs.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
   const selected = tabs.some((t) => t.id === context.selected) ? context.selected : null;
-  return { key, tabs, current: selected ?? (listing.current && context.logicalTarget(listing.current)) };
+  return { key, tabs, current: listing.current ? context.logicalTarget(listing.current) : selected };
 }
 
 export function nativeRestore(context) {
@@ -89,15 +90,15 @@ export async function restoreTabs(context, native) {
   const { pipe, snapshot } = context;
   const found = new Map();
   if (native) {
-    // --no-startup-window preserves the automation lifetime but defers session restore until a window opens. Remove this bootstrap tab before attaching the client's session.
-    const { targetId: bootstrap } = await pipe.call('Target.createTarget', { url: 'about:blank' });
+    // launch() already requested native session restoration. Match only the
+    // saved pages; there is no extra page to create and close during wake.
     const tabSessions = new Map();
     const deadline = Date.now() + RESTORE_TIMEOUT_MS;
     try {
       while (Date.now() < deadline) {
         await attachRestoredTabs(pipe, tabSessions);
         for (const info of await pageInfos(pipe)) {
-          if (info.targetId === bootstrap || [...found.values()].includes(info.targetId)) continue;
+          if ([...found.values()].includes(info.targetId)) continue;
           // Chrome restores the selected tab in every window. Probe without
           // activating: cycling candidates changes those selections and fires
           // focus/visibility events in pages. A slow document can be retried.
@@ -109,12 +110,6 @@ export async function restoreTabs(context, native) {
       }
     } finally {
       await Promise.allSettled([...tabSessions.values()].map((sessionId) => pipe.call('Target.detachFromTarget', { sessionId })));
-      await pipe.call('Target.closeTarget', { targetId: bootstrap });
-    }
-    const closeDeadline = Date.now() + 5000;
-    while ((await pageInfos(pipe)).some((t) => t.targetId === bootstrap)) {
-      if (Date.now() >= closeDeadline) throw new Error('native restore bootstrap tab did not close');
-      await sleep(50);
     }
   }
   if (native && found.size !== snapshot.tabs.length) throw new Error(`native tab identity could not be verified (${found.size}/${snapshot.tabs.length} tabs matched within ${RESTORE_TIMEOUT_MS / 1000}s)`);

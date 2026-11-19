@@ -24,6 +24,27 @@ const schema = { domains: [
   ], events: [{ name: 'executionContextCreated', parameters: [{ name: 'context', $ref: 'ExecutionContextDescription' }] }] },
 ] };
 
+test('closing retires logical pages and windows but preserves browser configuration for reopening', () => {
+  const upstream = new EventEmitter();
+  upstream.close = () => upstream.emit('close');
+  const context = { snapshot: { tabs: [] } };
+  const session = new ContextSession(context, upstream, schema);
+  const events = [];
+  session.on('message', (data) => events.push(JSON.parse(data)));
+  session.entry('page-session', 'page', 'page', '');
+  session.targets.set('page', { targetId: 'page', type: 'page' });
+  session.windowTargets.set(1, 'page');
+  session.root.journal.record({ method: 'Target.setDiscoverTargets', params: { discover: true } }, {});
+  session.suspend({ keepPages: false });
+  assert.equal(session.readyState, 1);
+  assert.equal(session.mode, 'suspended');
+  assert.deepEqual([...session.sessions.keys()], ['']);
+  assert.equal(session.targets.size, 0);
+  assert.equal(session.windowTargets.size, 0);
+  assert.ok(session.root.journal.states.has('Target.setDiscoverTargets'));
+  assert.deepEqual(events.map((e) => e.method), ['Target.detachedFromTarget', 'Target.targetDestroyed']);
+});
+
 test('typed rewrites leave application objectId/sessionId/frameId properties untouched', () => {
   const ids = new ProtocolIds(schema);
   ids.restart();
@@ -70,6 +91,40 @@ test('detaching a sleeping browser session retires its children without waking',
   assert.deepEqual(replies.filter((m) => m.method).map((m) => m.params.sessionId), ['browser-session', 'page-session']);
   assert.deepEqual(replies.at(-1).result, {});
   session.close();
+});
+
+test('a sleeping page serves discovery and cleanup, and wakes only for handles it can restore', () => {
+  const upstream = new EventEmitter();
+  upstream.close = () => upstream.emit('close');
+  const wakes = [];
+  const tab = { id: 'tab', title: 'Saved', url: 'about:blank' };
+  const session = new ContextSession({ snapshot: { tabs: [tab] }, wake: async (reason) => { wakes.push(reason); } }, upstream, schema);
+  const page = session.entry('page', tab.id, 'page', '');
+  for (const group of ['keep', 'release']) page.journal.helpers.set(group, { msg: { params: { objectGroup: group } } });
+  session.suspend();
+  const replies = [];
+  session.on('message', (data) => replies.push(JSON.parse(data)));
+  const send = (id, method, params) => session.send({ id, method, params, sessionId: page.id });
+
+  send(1, 'Target.getTargetInfo');
+  assert.equal(replies.at(-1).result.targetInfo.targetId, tab.id);
+  send(2, 'Runtime.releaseObjectGroup', { objectGroup: 'release' });
+  assert.deepEqual(replies.at(-1).result, {});
+  send(3, 'Runtime.callFunctionOn', { objectId: 'keep', arguments: [{ objectId: 'release' }] });
+  assert.match(replies.at(-1).error.message, /stale or unknown object id/);
+  send(4, 'Page.handleJavaScriptDialog', { accept: false });
+  assert.match(replies.at(-1).error.message, /No dialog is showing/);
+  send(5, 'Runtime.runIfWaitingForDebugger');
+  assert.deepEqual(replies.at(-1).result, {});
+  send(6, 'Page.screencastFrameAck', { sessionId: 1 });
+  assert.deepEqual(replies.at(-1).result, {});
+  assert.deepEqual(wakes, []);
+  assert.equal(session.queueBytes, 0);
+
+  send(7, 'Runtime.callFunctionOn', { objectId: 'keep', arguments: [{ value: { objectId: 'application data' } }] });
+  assert.deepEqual(wakes, ['CDP Runtime.callFunctionOn']);
+  assert.deepEqual(session.queue.map((msg) => msg.id), [7]);
+  session.close(true);
 });
 
 test('handles cannot cross sessions or survive restart unless explicitly rebuilt', () => {
@@ -146,6 +201,27 @@ test('restoration accepts current interception replies and rejects old ones even
   assert.equal(session.queue.length, 0);
   assert.equal(session.pending.size, 0);
   session.close();
+});
+
+test('wake installs empty named worlds immediately and preserves init script timing', async () => {
+  const session = new ContextSession({}, new EventEmitter(), schema);
+  const page = session.entry('page-session', 'page', 'page', '');
+  const registrations = [
+    { source: '', worldName: 'utility' },
+    { source: '' },
+    { source: 'init()', worldName: 'application' },
+    { source: 'init()', worldName: 'application', runImmediately: true },
+  ];
+  for (const [i, params] of registrations.entries()) {
+    page.journal.record({ method: 'Page.addScriptToEvaluateOnNewDocument', params }, { identifier: String(i) });
+  }
+  const timings = [];
+  session.rpc = async (_method, params) => {
+    timings.push(params.runImmediately);
+    return { identifier: String(timings.length) };
+  };
+  await session.replay(page);
+  assert.deepEqual(timings, [true, undefined, undefined, true]);
 });
 
 test('journal replays setters and registrations, never business actions or arbitrary code', () => {

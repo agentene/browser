@@ -10,12 +10,11 @@
 //                    WebSocket (CSRF / cross-site WebSocket hijacking).
 //   GET /check/cdp   the CDP API: 204 without an API key or with the right
 //                    one (Authorization: Bearer <key> or X-API-Key), else 401
-// and proxies its public paths (<web prefix>/__auth/ and /__auth/ on the
-// CDP port) here, with that prefix stripped:
+// and proxies <console prefix>/__auth/ here, with that prefix stripped:
 //   GET  /                the account page (login, API key, log out)
 //   GET  /ui.js           settings rows + dialogs for the console pages
-//   GET  /keepalive.js    renews the session while a web UI / console page
-//                         is open (loaded by the Selkies page and the console)
+//   GET  /client.js       shared account-controls bootstrap and session renewal
+//                         (injected by nginx into both console interfaces)
 //   GET  /api/state       {setUp, login, authorized, username, apiKey, cdp}
 //   POST /api/setup       {code, username, password} | {code, skip: true}
 //                         (first start; code: the setup code the entrypoint
@@ -65,7 +64,7 @@ const store = new AuthStore(FILE, log);
 const limiter = new Limiter();
 const PAGE = fs.readFileSync(path.join(ROOT, 'page.html'), 'utf8');
 const UI = fs.readFileSync(path.join(ROOT, 'ui.js'));
-const KEEPALIVE = fs.readFileSync(path.join(ROOT, 'keepalive.js'));
+const CLIENT = fs.readFileSync(path.join(ROOT, 'client.js'));
 
 // --- request helpers -------------------------------------------------------------
 
@@ -146,7 +145,7 @@ function pathHeader(req, name, fallback) {
 }
 
 // The page in a mode, with its API base (nginx: X-Auth-Base) and the page
-// it links back to (X-Auth-Home: the web UI, or the console on the CDP port).
+// it links back to (X-Auth-Home: the configured console entry path).
 function page(req, res, mode, status) {
   const html = PAGE.replace('{{BASE}}', pathHeader(req, 'x-auth-base', '/__auth/'))
     .replace('{{HOME}}', pathHeader(req, 'x-auth-home', '/'))
@@ -272,8 +271,8 @@ async function route(req, res) {
     return page(req, res, mode, 401);
   }
   if (p === '/' && req.method === 'GET') return page(req, res, 'account', 200);
-  if ((p === '/ui.js' || p === '/keepalive.js') && req.method === 'GET') {
-    return send(res, 200, p === '/ui.js' ? UI : KEEPALIVE, { 'Content-Type': 'text/javascript; charset=UTF-8', 'Cache-Control': 'no-cache' });
+  if ((p === '/ui.js' || p === '/client.js') && req.method === 'GET') {
+    return send(res, 200, p === '/ui.js' ? UI : CLIENT, { 'Content-Type': 'text/javascript; charset=UTF-8', 'Cache-Control': 'no-cache' });
   }
   const m = p.match(/^\/api\/([a-z]+)$/);
   if (m) return api(req, res, m[1]);

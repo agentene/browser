@@ -2,10 +2,9 @@
 // HTTP endpoints (/json/*) answered — the browsers have none — and the tabs
 // the console shows.
 
-// How long the console waits for a tab to say whether it is in front: a tab
-// with a dialog open or paused in a debugger does not answer until it is
-// back. Only the wait is cut short — the probe itself goes on (Probes).
-const PROBE_TIMEOUT_MS = 1000;
+import { CdpClient } from './cdp-client.mjs';
+import { CLOSED } from './pipe.mjs';
+import { sleep } from './util.mjs';
 
 // Every target the way chromium's /json/list had it: pages, iframes,
 // workers, browser UI — not the tab and browser targets (Target.getTargets'
@@ -47,147 +46,150 @@ export function versionEntry(version, host, browserId) {
 
 export const NO_TABS = { tabs: [], current: null };
 
-// The tab in front by what the tabs say of themselves. Chromium's /json/list
-// put the most recently activated tab first; Target.getTargets has no such
-// order, so each tab says itself (Probes): 2 = visible and focused (the tab
-// in front of the focused window), 1 = visible (in front of its window), 0 =
-// hidden, null = no answer.
-//   memo: what the last call saw, per browser ({ candidates, current }):
-//         focus emulation can make several tabs "focused" at once;
-//         prefer the one that just became so.
-export function pickCurrent(memo, levels) {
-  const top = Math.max(0, ...levels.map(([, level]) => level ?? 0));
-  const best = top ? levels.filter(([, level]) => level === top).map(([id]) => id) : [];
-  const fresh = best.filter((id) => !memo.candidates?.has(id));
-  memo.candidates = new Set(best);
-  if (fresh.length) memo.current = fresh[0];
-  else if (!best.includes(memo.current)) {
-    const stillThere = levels.some(([id]) => id === memo.current);
-    memo.current = best[0] ?? (stillThere ? memo.current : levels[0]?.[0] ?? null);
+// Chrome exposes the selected flag on tab targets. A tab owns a primary
+// page and may own a prerender too. Auto-attachment reports the actual
+// child IDs before its reply and follows replacements while the tab is open.
+async function observeTab(pipe, tabId) {
+  const cdp = await CdpClient.connect(pipe, { targetId: tabId });
+  try {
+    await cdp.send('Target.setAutoAttach', {
+      autoAttach: true, flatten: true, waitForDebuggerOnStart: false, filter: [{ type: 'page' }],
+    });
+    return { tabId, cdp };
+  } catch (err) {
+    cdp.close();
+    throw err;
   }
-  return memo.current ?? null;
 }
 
-// The gateway's probes of a pipe's tabs while a console watches: one
-// session per tab, kept while the tab is there (a session given up on would
-// stay attached, out of reach), and one query at a time however long the
-// tab keeps quiet (asked again only once the query answered or its call
-// timed out). Released as a whole when no console watches any more; a tick
-// still under way then holds a released set, which attaches nothing new.
-class Probes {
-  #pipe;
-  #byTarget = new Map(); // targetId -> { session: Promise of a sessionId, inflight: Promise of a level | null }
-  #released = false;
+// Every window has a selected tab. Chrome's windows API gives us the ID
+// of the last focused window even when automation emulates focus in every
+// renderer. Its bookmark-manager WebUI exposes that API. The static strings
+// resource is an inert document, so the manager's UI never runs. A dedicated
+// CDP session owns the hidden target and disposes it on detach.
+const WINDOW_READER_ORIGIN = 'chrome://bookmarks';
 
-  constructor(pipe) {
-    this.#pipe = pipe;
-    this.onDetached = (sessionId) => { // the tab closed
-      for (const [targetId, probe] of this.#byTarget) {
-        probe.session.then((s) => { if (s === sessionId) this.#drop(targetId, probe); }, () => {});
-      }
+async function openWindowReader(pipe, browserContextId) {
+  const owner = await CdpClient.connect(pipe);
+  try {
+    const { targetId } = await owner.send('Target.createTarget', {
+      url: `${WINDOW_READER_ORIGIN}/strings.m.js`, browserContextId, hidden: true, background: true,
+    });
+    const { sessionId } = await owner.send('Target.attachToTarget', { targetId, flatten: true });
+    const ready = Promise.withResolvers();
+    let world;
+    owner.on('Runtime.executionContextCreated', ({ context }, session) => {
+      if (session !== sessionId || !context.auxData?.isDefault || context.origin !== WINDOW_READER_ORIGIN) return;
+      world = context.uniqueId;
+      ready.resolve();
+    });
+    await owner.send('Runtime.enable', {}, { sessionId });
+    // Discovery can precede navigation commit. A busy browser can finish
+    // later and supply its window on the next console tick.
+    if (!world) await Promise.race([ready.promise, sleep(1000)]);
+    return {
+      async read() {
+        if (!owner.ws.targets.has(sessionId)) throw new Error('window observer detached');
+        if (!world) return null;
+        const { result } = await owner.send('Runtime.evaluate', {
+          uniqueContextId: world,
+          expression: `(async () => {
+            const { id, focused } = await chrome.windows.getLastFocused();
+            if (focused) return { id, focused };
+            const [tab] = await chrome.tabs.query({ windowId: id, active: true });
+            return { id, focused, lastAccessed: tab?.lastAccessed };
+          })()`,
+          awaitPromise: true, returnByValue: true,
+        }, { sessionId, timeout: 1000 });
+        return Number.isInteger(result?.value?.id) ? result.value : null;
+      },
+      close: () => owner.close(),
     };
-    pipe.on('detached', this.onDetached);
+  } catch (err) {
+    owner.close();
+    throw err;
+  }
+}
+
+// One reader per physical browser, used by serial console ticks or once at
+// hibernation. Only the selected tab needs an attached session. Multiple
+// windows also need a window lookup in each profile (including incognito).
+export class TabListing {
+  constructor(pipe) {
+    this.pipe = pipe;
+    this.tab = null;
+    this.readers = new Map();
+    this.lastWindow = null;
   }
 
-  // 2 = visible and focused, 1 = visible, 0 = hidden, null = no answer in
-  // time (PROBE_TIMEOUT_MS)
-  level(targetId) {
-    if (this.#released) return Promise.resolve(null);
-    const probe = this.#probe(targetId);
-    probe.inflight ??= probe.session
-      .then((sessionId) => this.#pipe.call('Runtime.evaluate', {
-        expression: "document.visibilityState === 'visible' ? (document.hasFocus() ? 2 : 1) : 0",
-        returnByValue: true,
-        silent: true,
-      }, { sessionId }))
-      .then(({ result }) => (typeof result?.value === 'number' ? result.value : null), () => null)
-      .finally(() => { probe.inflight = null; });
-    return within(probe.inflight, PROBE_TIMEOUT_MS, null);
-  }
-
-  // Detaches every probe session, those still being attached once they are.
-  release() {
-    this.#released = true;
-    this.#pipe.off('detached', this.onDetached);
-    for (const { session } of this.#byTarget.values()) {
-      session.then((sessionId) => this.#pipe.call('Target.detachFromTarget', { sessionId })).catch(() => {});
+  async read() {
+    const { targetInfos } = await this.pipe.call('Target.getTargets', { filter: [{ type: 'tab' }, { type: 'page' }] });
+    const pages = targetInfos.filter((t) => t.type === 'page' && !t.subtype);
+    const tabs = pages.map((t) => ({ id: t.targetId, title: t.title, url: t.url }));
+    const active = targetInfos.filter((t) => t.type === 'tab' && t.embedderData?.tabActive);
+    const profiles = new Set(active.length > 1 ? active.map((t) => t.browserContextId) : []);
+    this.closeReadersExcept(profiles);
+    const selected = active.length > 1 ? await this.frontTab(active, profiles) : active[0];
+    if (this.tab?.tabId !== selected?.targetId || this.tab?.cdp.ws.readyState === CLOSED) {
+      this.tab?.cdp.close();
+      this.tab = selected ? await observeTab(this.pipe, selected.targetId).catch(() => null) : null;
     }
-    this.#byTarget.clear();
+    // PipeConnection tracks attachments and detachments on this session.
+    const children = new Set(this.tab?.cdp.ws.targets.values());
+    const primary = pages.filter((p) => children.has(p.targetId));
+    const current = primary.length === 1 ? primary[0].targetId : null;
+    return { tabs, current };
   }
 
-  #probe(targetId) {
-    let probe = this.#byTarget.get(targetId);
-    if (!probe) {
-      const session = this.#pipe.call('Target.attachToTarget', { targetId, flatten: true }).then((r) => r.sessionId);
-      probe = { session, inflight: null };
-      this.#byTarget.set(targetId, probe);
-      session.catch(() => this.#drop(targetId, probe)); // the tab is gone (or the browser)
+  async frontTab(active, profiles) {
+    const [windows, reports] = await Promise.all([
+      Promise.all(active.map(async (tab) => {
+        const window = await this.pipe.call('Browser.getWindowForTarget', { targetId: tab.targetId }).catch(() => null);
+        return [window?.windowId, tab];
+      })),
+      Promise.all([...profiles].map((id) => this.readWindow(id))),
+    ]);
+    const tabsByWindow = new Map(windows);
+    const known = reports.filter((w) => w && tabsByWindow.has(w.id));
+    // With no focused window (e.g. a background browser), compare Chrome's
+    // last activation times across regular and incognito profiles. A tie
+    // keeps the previously observed window instead of using discovery order.
+    const latest = Math.max(...known.map((w) => w.lastAccessed ?? 0));
+    const recent = new Set(known.filter((w) => (w.lastAccessed ?? 0) === latest).map((w) => w.id));
+    const [newest] = recent;
+    const last = known.length === profiles.size && recent.size === 1 ? newest : this.lastWindow;
+    const windowId = known.find((w) => w.focused)?.id ?? last;
+    if (windowId == null || !tabsByWindow.has(windowId)) return null;
+    this.lastWindow = windowId;
+    return tabsByWindow.get(windowId);
+  }
+
+  async readWindow(contextId) {
+    let reader = this.readers.get(contextId);
+    try {
+      if (!reader) {
+        reader = await openWindowReader(this.pipe, contextId);
+        this.readers.set(contextId, reader);
+      }
+      return await reader.read();
+    } catch {
+      reader?.close();
+      this.readers.delete(contextId);
+      return null;
     }
-    return probe;
   }
 
-  #drop(targetId, probe) {
-    if (this.#byTarget.get(targetId) === probe) this.#byTarget.delete(targetId);
-  }
-}
-
-const probes = new WeakMap(); // pipe -> its Probes while a console watches
-
-function within(promise, ms, fallback) {
-  let timer;
-  const late = new Promise((resolve) => { timer = setTimeout(resolve, ms, fallback); });
-  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
-}
-
-// Whether a window shows a tab: chromium titles a window
-// "<title of its tab in front> - <product>".
-function shows(windowTitle, tabTitle) {
-  return windowTitle === tabTitle || windowTitle.startsWith(`${tabTitle} - `);
-}
-
-// The tabs the window titles show, the tab of the window in front ranking
-// highest (a tab no window shows has no entry). Of the tabs one title fits,
-// the longest title is the one ("A" and "A - B" both fit "A - B - Chrome").
-//   windowTitles: the browser's window titles, the one in front first
-//                 (desktop.mjs' desktopWindows)
-export function titleRanks(pages, windowTitles) {
-  const ranks = new Map();
-  windowTitles.forEach((windowTitle, i) => {
-    const fits = pages.filter((t) => t.title && shows(windowTitle, t.title));
-    const longest = Math.max(0, ...fits.map((t) => t.title.length));
-    for (const t of fits) {
-      if (t.title.length === longest && !ranks.has(t.targetId)) ranks.set(t.targetId, windowTitles.length - i);
+  closeReadersExcept(keep) {
+    for (const [contextId, reader] of this.readers) {
+      if (keep?.has(contextId)) continue;
+      reader.close();
+      this.readers.delete(contextId);
     }
-  });
-  return ranks;
-}
-
-// A browser's tabs and the one in front. The window titles say it first: a
-// tab cannot blur them, while what it says of itself a CDP client can —
-// Playwright's focus emulation leaves every tab it drives visible and
-// focused. What the tabs say (pickCurrent) decides between tabs of one
-// title, and alone when no title fits (a page still loading) or there are
-// no mapped windows yet; it keeps its memo either way, so that a title
-// fitting no tab for a moment does not move the current tab. Throws when
-// the browser does not answer.
-export async function browserTabs(pipe, memo, windowTitles = []) {
-  let tabProbes = probes.get(pipe);
-  if (!tabProbes) probes.set(pipe, tabProbes = new Probes(pipe));
-  const pages = await pageInfos(pipe);
-  const levels = await Promise.all(pages.map(async (t) => [t.targetId, await tabProbes.level(t.targetId)]));
-  let current = pickCurrent(memo, levels);
-  const ranks = titleRanks(pages, windowTitles);
-  const top = Math.max(0, ...ranks.values());
-  const shown = levels.filter(([id]) => ranks.get(id) === top);
-  if (shown.length && !shown.some(([id]) => id === current)) {
-    const best = Math.max(...shown.map(([, level]) => level ?? 0));
-    current = memo.current = shown.find(([, level]) => (level ?? 0) === best)[0];
   }
-  return { tabs: pages.map((t) => ({ id: t.targetId, title: t.title, url: t.url })), current };
-}
 
-// Detaches the probe sessions of a pipe (no console is watching any more).
-export function releaseProbes(pipe) {
-  probes.get(pipe)?.release();
-  probes.delete(pipe);
+  close() {
+    this.tab?.cdp.close();
+    this.tab = null;
+    this.closeReadersExcept();
+  }
 }

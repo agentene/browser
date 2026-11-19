@@ -11,14 +11,12 @@
 # empty array and every "${DROP[@]}" prefix is a no-op.
 #
 # Sets: DROP (command prefix), RUN_UID, RUN_GID, RUN_NAME, RUN_GROUPS (all
-# empty in root mode — RUN_UID is THE root-mode test for other modules),
-# RUN_NGINX_USER (nginx `user` directive value, empty = default).
+# empty in root mode — RUN_UID is THE root-mode test for other modules).
 
 privileges_setup() {
     RUN_USER="${RUN_USER:-browser}"
     DROP=()
     RUN_UID="" RUN_GID="" RUN_NAME="" RUN_GROUPS=""
-    RUN_NGINX_USER=""
 
     privileges_resolve_user
     if [ "${RUN_UID}" = "0" ]; then
@@ -28,8 +26,6 @@ privileges_setup() {
     fi
     privileges_prepare_home
     privileges_build_drop
-    # shellcheck disable=SC2034 # read by nginx.sh
-    RUN_NGINX_USER="${RUN_NAME}"
     privileges_own_profile
     privileges_clear_root_leftovers
     privileges_clear_run_user_leftovers

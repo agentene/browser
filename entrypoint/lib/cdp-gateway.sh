@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# cdp-gateway.sh — the CDP gateway (always on with ENABLE_CDP).
+# cdp-gateway.sh — the browser manager and web console (always on).
 # Sets: CDP_GATEWAY_PID (the supervised gateway, checked by the stop hook).
 #
 # A Node gateway between nginx and chromium. Default-context clients pass
@@ -12,8 +12,8 @@
 # main browser: it starts it from CHROMIUM_MAIN_FLAGS_FILE on demand and outlives it, so the
 # browser closing or crashing does not stop the container. It is the only
 # way to the browsers: they speak CDP on a pipe to it (no DevTools port),
-# and it listens on CDP_GATEWAY_SOCKET (no TCP port), which nginx proxies
-# the CDP port to.
+# Its console listens on CONSOLE_SOCKET, and CDP on CDP_GATEWAY_SOCKET when
+# enabled. nginx fronts each separately; neither listens on TCP.
 
 cdp_gateway_start() {
     local flags_file=""
@@ -43,10 +43,13 @@ cdp_gateway_start() {
     # applies it, when the browsers have a desktop to open windows on.
     local raise_switch="${ENTRYPOINT_HELPERS}/desktop-raise-new-windows.sh"
 
-    log "starting CDP gateway on ${CDP_GATEWAY_SOCKET} (main browser on demand, max ${CDP_CONTEXTS_MAX} running contexts, overflow=${CDP_CONTEXTS_OVERFLOW}, max ${CDP_CONTEXTS_HIBERNATED_MAX} sleepers, desktop=${DISPLAY_BACKEND}, data in ${CDP_CONTEXTS_DIR}, web page origins allowed: ${CDP_ALLOW_ORIGINS:-none}, client Browser.close reaches the browser: ${CDP_ALLOW_BROWSER_CLOSE}, local files clients may name: ${CDP_FILE_DIRS}, input overlay: ${CDP_INPUT_OVERLAY})"
+    local endpoints="console=${CONSOLE_SOCKET}"
+    [ "${ENABLE_CDP}" = "true" ] && endpoints="${endpoints} CDP=${CDP_GATEWAY_SOCKET}"
+    log "starting CDP gateway on ${endpoints} (main browser on demand, max ${CDP_CONTEXTS_MAX} running contexts, overflow=${CDP_CONTEXTS_OVERFLOW}, max ${CDP_CONTEXTS_HIBERNATED_MAX} sleepers, desktop=${DISPLAY_BACKEND}, data in ${CDP_CONTEXTS_DIR}, web page origins allowed: ${CDP_ALLOW_ORIGINS:-none}, client Browser.close reaches the browser: ${CDP_ALLOW_BROWSER_CLOSE}, local files clients may name: ${CDP_FILE_DIRS}, input overlay: ${CDP_INPUT_OVERLAY})"
     start_service /tmp/cdp-gateway.log \
         env CHROME_BIN="${CHROME_BIN:-}" CHROMIUM_USER_DATA_DIR="${CHROMIUM_USER_DATA_DIR}" \
-        CDP_LISTEN_PORT="${CDP_LISTEN_PORT}" CDP_GATEWAY_SOCKET="${CDP_GATEWAY_SOCKET}" \
+        CDP_PORT="${CDP_PORT}" CDP_GATEWAY_SOCKET="${CDP_GATEWAY_SOCKET}" \
+        CONSOLE_SOCKET="${CONSOLE_SOCKET}" \
         CDP_CONSOLE_ACTIONS="${CDP_CONSOLE_ACTIONS}" \
         CDP_CONSOLE_RESTART="${CDP_CONSOLE_RESTART}" \
         CDP_CONTEXTS_DIR="${CDP_CONTEXTS_DIR}" \
@@ -67,8 +70,12 @@ cdp_gateway_start() {
     CDP_GATEWAY_PID="${SERVICE_PID}"
 
     [ "${ENABLE_CDP}" = "true" ] && STOP_HOOKS+=(cdp_gateway_close_browser)
-    wait_until 100 0.2 curl -fsS --unix-socket "${CDP_GATEWAY_SOCKET}" http://gateway/console/api/settings >/dev/null 2>&1 \
+    wait_until 100 0.2 curl -fsS --unix-socket "${CONSOLE_SOCKET}" http://gateway/console/api/settings >/dev/null 2>&1 \
         || die "the settings service did not become ready"
+    if [ "${ENABLE_CDP}" = "true" ]; then
+        wait_until 100 0.2 curl -fsS --unix-socket "${CDP_GATEWAY_SOCKET}" http://gateway/json/list >/dev/null 2>&1 \
+            || die "the CDP service did not become ready"
+    fi
 
 }
 
@@ -83,6 +90,6 @@ cdp_gateway_close_browser() {
     # exited. There is no socket to ask in that case (or after a crash).
     kill -0 "${CDP_GATEWAY_PID}" 2>/dev/null || return 0
     timeout 8 curl -fsS -o /dev/null -X POST -H 'X-CDP-Console: 1' \
-        --unix-socket "${CDP_GATEWAY_SOCKET}" http://gateway/console/api/main/stop \
+        --unix-socket "${CONSOLE_SOCKET}" http://gateway/console/api/main/stop \
         || log "WARNING: the main browser did not close in time; stopping it with a signal (recent cookies may be lost)"
 }

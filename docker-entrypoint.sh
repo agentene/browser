@@ -16,18 +16,14 @@
 #                       own child on demand; it speaks CDP on a pipe to
 #                       the gateway only, no DevTools port
 #      CDP gateway     the gateway in front of it (always on with the CDP
-#                       endpoint, settings-only without it, on its unix socket); the
+#                       endpoint, settings-only without it, on separate console and CDP sockets); the
 #                       supervised service — the browser may exit and be
 #                       started again without the container
 #      auth service    the built-in login + CDP API key nginx checks every
 #                       request with (ENABLE_AUTH=true)
 #   5. nginx           the public front door (web UI over HTTP/HTTPS, the CDP
-#                       endpoint, PORT_FORWARDS), on the container ports
-#                       NGINX_LISTEN_HTTP_PORT / NGINX_LISTEN_HTTPS_PORT /
-#                       CDP_LISTEN_PORT. NGINX_HTTP_PORT / NGINX_HTTPS_PORT /
-#                       CDP_PORT are a different thing: they only pick the
-#                       HOST-side ports docker publishes (compose "ports:" /
-#                       docker -p).
+#                       endpoint, PORT_FORWARDS). HTTP_PORT, HTTPS_PORT and
+#                       CDP_PORT are the service ports inside the container.
 #
 # Container start == service start ("开机自启"): this script is the image
 # ENTRYPOINT; combine with `docker run --restart=always` for boot persistence.

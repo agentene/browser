@@ -25,6 +25,10 @@ fs.writeFileSync(path.join(${JSON.stringify(tmp)}, 'args-' + path.basename(path.
 // sockets, not fs streams: a blocking read of a pipe in the thread pool
 // would hold up process.exit
 const out = new net.Socket({ fd: 4, readable: false });
+let nextSession = 0;
+const discoverers = new Set();
+const targets = () => fs.existsSync(targetsFile) ? JSON.parse(fs.readFileSync(targetsFile, 'utf8')) : [];
+const emit = (method, params, sessionId) => out.write(JSON.stringify({ method, params, sessionId }) + '\\0');
 let buf = '';
 new net.Socket({ fd: 3, writable: false }).on('data', (d) => {
   buf += d;
@@ -32,9 +36,22 @@ new net.Socket({ fd: 3, writable: false }).on('data', (d) => {
   while ((i = buf.indexOf('\\0')) >= 0) {
     const msg = JSON.parse(buf.slice(0, i));
     buf = buf.slice(i + 1);
-    const result = msg.method === 'Browser.getVersion' ? { product: 'Fake/1', revision: '@fake' }
+    if (msg.method === 'Target.setDiscoverTargets') {
+      discoverers.add(msg.sessionId);
+      for (const targetInfo of targets().filter((t) => t.type === 'page')) emit('Target.targetCreated', { targetInfo }, msg.sessionId);
+    }
+    if (msg.method === 'Test.setTargets') {
+      const before = targets();
+      fs.writeFileSync(targetsFile, JSON.stringify(msg.params.targets));
+      for (const sessionId of discoverers) {
+        for (const t of before) if (!msg.params.targets.some((v) => v.targetId === t.targetId)) emit('Target.targetDestroyed', { targetId: t.targetId }, sessionId);
+        for (const targetInfo of msg.params.targets) if (!before.some((t) => t.targetId === targetInfo.targetId) && targetInfo.type === 'page') emit('Target.targetCreated', { targetInfo }, sessionId);
+      }
+    }
+    const result = msg.method === 'Target.attachToBrowserTarget' ? { sessionId: 'browser-' + ++nextSession }
+      : msg.method === 'Browser.getVersion' ? { product: 'Fake/1', revision: '@fake' }
       : msg.method === 'Storage.getCookies' ? { cookies: [] }
-      : msg.method === 'Target.getTargets' ? { targetInfos: fs.existsSync(targetsFile) ? JSON.parse(fs.readFileSync(targetsFile, 'utf8')) : [] } : {};
+      : msg.method === 'Target.getTargets' ? { targetInfos: targets() } : {};
     out.write(JSON.stringify({ id: msg.id, result, sessionId: msg.sessionId }) + '\\0');
     if (msg.method === 'Browser.close' && !fs.existsSync(${JSON.stringify(path.join(tmp, 'hang-close'))})) setImmediate(() => process.exit(0));
   }
@@ -51,12 +68,14 @@ let mainBrowser;
 
 before(async () => {
   fs.writeFileSync(path.join(tmp, 'settings.json'), JSON.stringify({ contexts: { maxRunning: 2, overflow: 'hibernate', maxHibernated: 2 } }));
+  fs.writeFileSync(path.join(tmp, 'protocol.json'), JSON.stringify({ domains: [] }));
   Object.assign(process.env, {
     CHROME_BIN: fakeChrome,
     CDP_CONTEXTS_DIR: path.join(tmp, 'contexts'),
     CHROMIUM_USER_DATA_DIR: path.join(tmp, 'main'),
     CDP_GATEWAY_FLAGS_FILE: path.join(tmp, 'flags'),
     CDP_GATEWAY_SETTINGS_FILE: path.join(tmp, 'settings.json'),
+    CDP_GATEWAY_PROTOCOL_FILE: path.join(tmp, 'protocol.json'),
   });
   ({ contexts } = await import('../src/contexts.mjs'));
   ({ mainBrowser } = await import('../src/main-browser.mjs'));
@@ -65,6 +84,9 @@ before(async () => {
 // The command line the fake chromium of a context was started with.
 const argsOf = (context) => fs.readFileSync(path.join(tmp, `args-${context.name}`), 'utf8').split('\n');
 const setTargets = (context, types) => fs.writeFileSync(path.join(context.profile, 'test-targets.json'), JSON.stringify(types.map((type, i) => ({ targetId: `target-${i}`, type, title: type, url: 'about:blank' }))));
+const changePages = (context, ids) => context.pipe.call('Test.setTargets', {
+  targets: ids.map((targetId) => ({ targetId, type: 'page', title: targetId, url: 'about:blank' })),
+});
 
 after(async () => {
   await Promise.all(contexts.values().map((c) => c.destroy('test over')));
@@ -152,6 +174,93 @@ test('a context browser is driven over its pipe: no DevTools port, webdriver hid
   } finally {
     await c.destroy('test');
   }
+});
+
+test('last-page closure stops the process, retains the context and restarts without old sessions', async () => {
+  const c = await contexts.create('window-close');
+  try {
+    assert.equal(c.state, 'running', 'a newly created empty context must stay usable');
+    const session = await c.connect();
+    const prefs = fs.readFileSync(path.join(c.profile, 'Default', 'Preferences'), 'utf8');
+    for (let round = 0; round < 3; round++) {
+      const proc = c.proc;
+      await changePages(c, ['first', 'second']);
+      await changePages(c, ['second']);
+      assert.equal(c.proc, proc, 'closing one window/tab must spare the others');
+      await changePages(c, []);
+      await c.closing;
+      assert.equal(c.state, 'stopped');
+      assert.equal(c.proc, null);
+      assert.equal(c.pipe, null);
+      assert.equal(proc.exitCode, 0);
+      assert.equal(c.slot, false);
+      assert.equal(contexts.get(c.name), c);
+      assert.equal(session.readyState, 1);
+      assert.deepEqual(c.snapshot.tabs, []);
+      assert.equal(fs.readFileSync(path.join(c.profile, 'Default', 'Preferences'), 'utf8'), prefs);
+      const oldSession = path.join(c.profile, 'Default', 'Sessions');
+      fs.mkdirSync(oldSession, { recursive: true });
+      fs.writeFileSync(path.join(oldSession, 'Session_closed'), 'closed windows');
+      await Promise.all([c.wake(), c.wake()]);
+      assert.notEqual(c.proc.pid, proc.pid);
+      assert.equal(c.session, session);
+      assert.equal(session.mode, 'running');
+      assert.ok(!fs.existsSync(oldSession), 'closed tabs must not trigger deferred native restoration');
+      assert.ok(!argsOf(c).includes('--restore-last-session'));
+    }
+  } finally { await c.destroy('test'); }
+});
+
+test('a page opened while last-page closure is queued cancels the stop', async () => {
+  const c = await contexts.create('racing-page');
+  try {
+    const pid = c.proc.pid;
+    await changePages(c, ['old']);
+    await changePages(c, ['new']); // destruction and creation in the same event batch
+    await c.closing;
+    assert.equal(c.state, 'running');
+    assert.equal(c.proc.pid, pid);
+    assert.equal((await c.pipe.call('Target.getTargets')).targetInfos[0].targetId, 'new');
+  } finally { await c.destroy('test'); }
+});
+
+test('capacity waits for an empty browser to close; deletion wins over reopening', async () => {
+  const a = await contexts.create('closing');
+  const b = await contexts.create('other');
+  let next;
+  try {
+    await changePages(a, ['last']);
+    a.holds++;
+    await changePages(a, []);
+    const creating = contexts.create('replacement');
+    a.holds--;
+    next = await creating;
+    assert.equal(a.state, 'stopped');
+    assert.equal(b.state, 'running', 'a closing browser frees capacity without hibernating another');
+    assert.equal(contexts.running, 2);
+    const waking = assert.rejects(a.wake(), /gone/);
+    await a.destroy('deleted while reopening');
+    await waking;
+    assert.ok(!fs.existsSync(a.dir));
+  } finally { await Promise.all([a, b, next].filter(Boolean).map((c) => c.destroy('test'))); }
+});
+
+test('failed reopen retains a stopped profile for retry, outside sleeper eviction', async () => {
+  const c = await contexts.create('failed-reopen');
+  const marker = path.join(tmp, 'fail-start');
+  try {
+    await changePages(c, ['last']);
+    await changePages(c, []);
+    await c.closing;
+    fs.writeFileSync(marker, '1');
+    await assert.rejects(c.wake());
+    assert.equal(c.state, 'stopped');
+    assert.equal(c.slot, false);
+    assert.ok(fs.existsSync(c.profile));
+    fs.rmSync(marker);
+    await c.wake();
+    assert.equal(c.state, 'running');
+  } finally { fs.rmSync(marker, { force: true }); await c.destroy('test'); }
 });
 
 test('LRU releases a real process before replacement; waking reuses its profile', async () => {
@@ -255,6 +364,39 @@ test('delete wins over a queued wake and never resurrects a removed profile', as
   await deleting;
   assert.equal(fs.existsSync(c.dir), false);
   assert.equal(contexts.size, 0);
+});
+
+test('client commands arriving during capture and process exit cannot queue a wake', async () => {
+  const c = await contexts.create('hibernate-race');
+  try {
+    const session = await c.connect();
+    const replies = [];
+    session.on('message', (data) => replies.push(JSON.parse(data)));
+    const pipe = c.pipe;
+    const call = pipe.call.bind(pipe);
+    const phases = [];
+    pipe.call = (method, ...args) => {
+      if (c.state === 'hibernating' && ['Target.getTargets', 'Browser.close'].includes(method)) {
+        phases.push(session.mode);
+        session.send({ id: phases.length, method: 'Storage.getCookies' });
+      }
+      return call(method, ...args);
+    };
+
+    await c.hibernate();
+    await c.waking;
+    assert.deepEqual(phases, ['quiescing', 'suspended']);
+    assert.equal(c.state, 'hibernated');
+    assert.equal(c.proc, null);
+    assert.deepEqual(replies.map((r) => r.id), [1, 2]);
+    for (const r of replies) assert.match(r.error.message, /hibernating/);
+    assert.equal(session.queue.length, 0);
+
+    const reply = new Promise((resolve) => session.once('message', (data) => resolve(JSON.parse(data))));
+    session.send({ id: 3, method: 'Storage.getCookies' });
+    assert.deepEqual(await reply, { id: 3, result: { cookies: [] } });
+    assert.equal(c.state, 'running');
+  } finally { await c.destroy('test'); }
 });
 
 test('forced hibernation retains its profile and reports reduced durability after waking', async () => {

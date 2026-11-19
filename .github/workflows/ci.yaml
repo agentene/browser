@@ -80,7 +80,7 @@ jobs:
         run: |
           node --check update-chrome-node.mjs
           for f in cdp-gateway/gateway.mjs cdp-gateway/src/*.mjs cdp-gateway/panel.js cdp-gateway/overlay.js cdp-gateway/settings-ui.js cdp-gateway/i18n.js; do node --check "$f"; done
-          for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/keepalive.js; do node --check "$f"; done
+          for f in auth-server/server.mjs auth-server/src/*.mjs auth-server/ui.js auth-server/client.js; do node --check "$f"; done
           python3 -m py_compile entrypoint/helpers/*.py
           python3 -m py_compile .github/tests/*.py
 
@@ -91,6 +91,15 @@ jobs:
 
       - name: auth server unit tests
         run: npm test --prefix auth-server
+
+      - name: Compose optional web paths
+        run: python3 .github/tests/compose-paths.py
+
+      - name: Compose access ports
+        run: python3 .github/tests/compose-ports.py
+
+      - name: Listener address
+        run: python3 .github/tests/listen-address.py
 
       - name: docker build --check (Dockerfile lint, BuildKit)
         run: docker build --check .
@@ -128,7 +137,7 @@ jobs:
             # arbitrary times, changing LRU order even when test tabs are idle.
             settings_dir="$(mktemp -d)"
             printf '%s\n' '{"contexts":{"maxRunning":2,"maxHibernated":2}}' > "$settings_dir/settings.json"
-            docker run -d --name hibernation-smoke --shm-size=1g \
+            docker run -d -e LISTEN_ADDR=0.0.0.0 --name hibernation-smoke --shm-size=1g \
               -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" \
               -e DISPLAY_BACKEND="$display_backend" \
               -e CHROMIUM_EXTRA_ARGS=--disable-component-extensions-with-background-pages \
@@ -140,9 +149,12 @@ jobs:
               sleep 1
             done
             docker logs hibernation-smoke 2>&1 | grep "starting CDP gateway .*desktop=$display_backend," >/dev/null
+            docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 -e CONSOLE_ENDPOINT=http://127.0.0.1:80 \
+              -e PLAYWRIGHT_CLI_JS=/test-deps/node_modules/cli-current/playwright-cli.js \
+              hibernation-smoke node /tests/context-window-close.mjs
             for cli in cli-current cli-previous; do
               echo "Context hibernation: backend=$backend cli=$cli"
-              docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 \
+              docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 -e CONSOLE_ENDPOINT=http://127.0.0.1:80 \
                 -e PLAYWRIGHT_CLI_JS="/test-deps/node_modules/$cli/playwright-cli.js" \
                 hibernation-smoke node /tests/context-hibernation.mjs
             done
@@ -160,7 +172,7 @@ jobs:
             if [[ "$backend" = cdp-* ]]; then selkies=false; fi
             # Keep the default extension environment; raw CDP does not emulate
             # focus, so this can observe each window's actual selected tab.
-            docker run -d --name native-restore-smoke --shm-size=1g \
+            docker run -d -e LISTEN_ADDR=0.0.0.0 --name native-restore-smoke --shm-size=1g \
               -e ENABLE_AUTH=false -e ENABLE_SELKIES="$selkies" \
               -e DISPLAY_BACKEND="$display_backend" \
               -v "$PWD/.github/tests:/tests:ro" localhost/ci:${{ env.IMAGE_NAME }}
@@ -170,7 +182,7 @@ jobs:
             done
             docker logs native-restore-smoke 2>&1 | grep "starting CDP gateway .*desktop=$display_backend," >/dev/null
             echo "Native multi-window restore: backend=$backend (default extensions)"
-            docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 native-restore-smoke node /tests/context-native-restore.mjs
+            docker exec -e CDP_ENDPOINT=http://127.0.0.1:9222 -e CONSOLE_ENDPOINT=http://127.0.0.1:80 native-restore-smoke node /tests/context-native-restore.mjs
             docker exec native-restore-smoke sh -c 'test -z "$(ls -A /browser/contexts)"'
             docker rm -f native-restore-smoke >/dev/null
           done
@@ -178,7 +190,7 @@ jobs:
       - name: Smoke test — chromium CDP endpoint
         run: |
           set -euo pipefail
-          docker run -d --name cdp-smoke -p 9222:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name cdp-smoke -p 9222:9222 \
             -e ENABLE_SELKIES=false localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker logs cdp-smoke || true; docker rm -f cdp-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
@@ -226,24 +238,27 @@ jobs:
       - name: Smoke test — Selkies web UI
         run: |
           set -euo pipefail
-          docker run -d --name web-smoke -p 8080:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name web-smoke -p 8080:80 \
             -e ENABLE_CDP=false -e AUTH_SETUP_CODE=ci-setup-code localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker logs web-smoke || true; docker rm -f web-smoke >/dev/null' EXIT
           # fresh container: the built-in login's setup form, in place (401)
           for i in $(seq 1 60); do
-            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)" = 401 ] && break
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/browser/)" = 401 ] && break
             sleep 1
           done
-          curl -s http://127.0.0.1:8080/ | grep -c 'data-mode="setup"' >/dev/null
+          curl -s http://127.0.0.1:8080/browser/ | grep -c 'data-mode="setup"' >/dev/null
           # skipped (with the setup code): the Selkies page itself
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:8080/__auth/api/setup >/dev/null
-          curl -sf http://127.0.0.1:8080/ | grep -ci '<html' >/dev/null \
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:8080/console/__auth/api/setup >/dev/null
+          curl -sf http://127.0.0.1:8080/browser/ | grep -ci '<html' >/dev/null \
             && echo "web UI smoke test OK"
+
+      - name: Smoke test — console routing and independent web listeners
+        run: python3 .github/tests/console-routing.py localhost/ci:${{ env.IMAGE_NAME }}
 
       - name: Smoke test — CDP gateway
         run: |
           set -euo pipefail
-          docker run -d --name gateway-smoke -p 9223:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name gateway-smoke -p 9223:9222 -p 8081:80 \
             -e ENABLE_SELKIES=false -e AUTH_SETUP_CODE=ci-setup-code \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec gateway-smoke cat /tmp/cdp-gateway.log || true; docker logs gateway-smoke || true; docker rm -f gateway-smoke >/dev/null' EXIT
@@ -254,7 +269,7 @@ jobs:
           curl -sf http://127.0.0.1:9223/json/version \
             | jq -e '.webSocketDebuggerUrl | startswith("ws://127.0.0.1:9223/")' >/dev/null
           # the console (live state below) waits for the login setup: skip it
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:9223/__auth/api/setup >/dev/null
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:8081/console/__auth/api/setup >/dev/null
           # web pages cannot use the CDP API (CDP_ALLOW_ORIGINS empty): a
           # page's WebSocket / fetch carries an Origin, a cross-site <img>
           # a Sec-Fetch-Site; CDP clients and the address bar send neither
@@ -269,9 +284,9 @@ jobs:
           # /json/new is PUT-only, like chromium's own
           [ "$(code http://127.0.0.1:9223/json/new?about:blank)" = 405 ]
           curl -sf -X PUT 'http://127.0.0.1:9223/json/new?about:blank' | jq -e '.id' >/dev/null
-          # every console write needs X-CDP-Console, on the CDP port too
-          [ "$(code -X DELETE http://127.0.0.1:9223/console/api/nope)" = 403 ]
-          [ "$(code -X DELETE -H 'X-CDP-Console: 1' http://127.0.0.1:9223/console/api/nope)" = 404 ]
+          # every console write needs X-CDP-Console
+          [ "$(code -X DELETE http://127.0.0.1:8081/console/api/nope)" = 403 ]
+          [ "$(code -X DELETE -H 'X-CDP-Console: 1' http://127.0.0.1:8081/console/api/nope)" = 404 ]
           # file:// is blocked in the browsers (CHROMIUM_ALLOW_FILE_URLS=false)
           docker exec -i gateway-smoke node --input-type=module - <<'EOF'
           const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
@@ -324,11 +339,12 @@ jobs:
           EOF
           ! docker exec gateway-smoke test -e /browser/settings/smoke.txt
           # nothing behind nginx on a TCP port a page could open: the only
-          # listener is nginx's CDP port (9222 = 0x2406), the browser has no
+          # listeners are nginx's HTTP and CDP ports; the browser has no
           # DevTools port, the gateway and the auth service unix sockets
           listening="$(docker exec gateway-smoke sh -c "awk 'NR > 1 && \$4 == \"0A\" { split(\$2, a, \":\"); print a[2] }' /proc/net/tcp /proc/net/tcp6 | sort -u")"
-          [ "${listening}" = "2406" ] || { echo "unexpected TCP listeners (hex): ${listening}"; exit 1; }
+          [ "${listening}" = "$(printf '0050\n2406')" ] || { echo "unexpected TCP listeners (hex): ${listening}"; exit 1; }
           docker exec gateway-smoke test -S /tmp/agentene/cdp-gateway.sock
+          docker exec gateway-smoke test -S /tmp/agentene/console.sock
           docker exec gateway-smoke test -S /tmp/agentene/auth.sock
           docker exec gateway-smoke grep -q -- --remote-debugging-pipe "/proc/$(docker exec gateway-smoke pgrep -o -x chrome)/cmdline"
           # an isolated context must get its own chromium and be
@@ -342,7 +358,7 @@ jobs:
           const send = (method, params = {}, sessionId) => new Promise((r) => { pending.set(++id, r); ws.send(JSON.stringify({ id, method, params, sessionId })); });
           // the console's live state: its first message is a full snapshot
           const snapshot = () => new Promise((r, j) => {
-            const live = new WebSocket('ws://127.0.0.1:9222/console/ws');
+            const live = new WebSocket('ws://127.0.0.1:80/console/ws');
             live.onmessage = (e) => { live.close(); r(JSON.parse(e.data).ops[0]); };
             live.onerror = j;
           });
@@ -397,7 +413,7 @@ jobs:
       - name: Smoke test — CDP console sidebar on the web UI
         run: |
           set -euo pipefail
-          docker run -d --name panel-smoke -p 9225:9222 -p 8082:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name panel-smoke -p 9225:9222 -p 8082:80 \
             -e AUTH_SETUP_CODE=panel-setup-code \
             -e SELKIES_ENABLE_BASIC_AUTH=true -e SELKIES_BASIC_AUTH_PASSWORD=unused \
             -e SELKIES_MASTER_TOKEN=unused-token \
@@ -406,33 +422,33 @@ jobs:
           trap 'docker exec panel-smoke cat /tmp/cdp-gateway.log /tmp/nginx/error.log || true; docker logs panel-smoke || true; docker rm -f panel-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9225/json/version >/dev/null \
-              && [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/)" = 401 ] && break
+              && [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/browser/)" = 401 ] && break
             sleep 1
           done
           J=$(mktemp)
-          curl -sf -c "$J" -H 'Content-Type: application/json' -d '{"code":"panel-setup-code","username":"admin","password":"password1"}' http://127.0.0.1:8082/__auth/api/setup | jq -e '.ok' >/dev/null
+          curl -sf -c "$J" -H 'Content-Type: application/json' -d '{"code":"panel-setup-code","username":"admin","password":"password1"}' http://127.0.0.1:8082/console/__auth/api/setup | jq -e '.ok' >/dev/null
           # Selkies' own auth (native env vars or CLI flags) must not add a
           # second gate: the built-in login is the only one.
           # The entry page carries the sidebar script, served by the gateway
-          curl -sf -b "$J" http://127.0.0.1:8082/ | grep -c 'cdp-console/panel.js' >/dev/null
-          curl -sf -b "$J" http://127.0.0.1:8082/cdp-console/panel.js | grep -c '__cdpConsolePanel' >/dev/null
+          curl -sf -b "$J" http://127.0.0.1:8082/browser/ | grep -c 'console/panel.js' >/dev/null
+          curl -sf -b "$J" http://127.0.0.1:8082/console/panel.js | grep -c '__cdpConsolePanel' >/dev/null
           # Selkies' own API must use the same session, without a native token.
-          curl -sf -b "$J" http://127.0.0.1:8082/api/sessions >/dev/null
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/api/sessions)" = 401 ]
+          curl -sf -b "$J" http://127.0.0.1:8082/browser/api/sessions >/dev/null
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/browser/api/sessions)" = 401 ]
           # a session is required for the sidebar
-          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/cdp-console/panel.js)" = 401 ]
-          if curl -sI http://127.0.0.1:8082/cdp-console/panel.js | grep -ci '^www-authenticate' >/dev/null; then
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/console/panel.js)" = 401 ]
+          if curl -sI http://127.0.0.1:8082/console/panel.js | grep -ci '^www-authenticate' >/dev/null; then
             echo "unexpected Basic Auth challenge" >&2
             exit 1
           fi
           # so does its live state WebSocket, from same-origin pages only
           ws_status() { curl -s -o /dev/null -m 2 -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" "http://127.0.0.1:8082${WS_PATH:-/cdp-console/ws}" || true; }
+            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" "http://127.0.0.1:8082${WS_PATH:-/console/ws}" || true; }
           [ "$(ws_status -b "$J")" = 101 ]
           [ "$(ws_status)" = 401 ]
           [ "$(ws_status -b "$J" -H 'Origin: http://evil.example')" = 403 ]
           # The desktop stream and overlay must have the same session gate.
-          for WS_PATH in /api/websockets /cdp-console/overlay; do
+          for WS_PATH in /browser/api/websockets /console/overlay; do
             export WS_PATH
             [ "$(ws_status -b "$J")" = 101 ]
             [ "$(ws_status)" = 401 ]
@@ -440,23 +456,25 @@ jobs:
           done
           unset WS_PATH
           # writes need the X-CDP-Console header
-          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -b "$J" http://127.0.0.1:8082/cdp-console/api/nope)" = 403 ]
-          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'X-CDP-Console: 1' -b "$J" http://127.0.0.1:8082/cdp-console/api/nope)" = 404 ]
-          # the CDP port's console is unchanged (and cannot forge the marker)
-          curl -sf -b "$J" http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
-          curl -sf -b "$J" -H 'X-CDP-Console-Via: web' http://127.0.0.1:9225/console/ | grep -ci '<html' >/dev/null
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -b "$J" http://127.0.0.1:8082/console/api/nope)" = 403 ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H 'X-CDP-Console: 1' -b "$J" http://127.0.0.1:8082/console/api/nope)" = 404 ]
+          curl -sf -b "$J" http://127.0.0.1:8082/console/ | grep -ci '<html' >/dev/null
+          # CDP exposes no web management routes, even with a login session.
+          for route in console console/ console/api/settings __auth/ __auth/api/setup; do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' -b "$J" "http://127.0.0.1:9225/$route")" = 404 ]
+          done
           # the web port reaches the console only: no CDP API through it, with
           # or without the session, however the path is spelled
           code() { curl -s -o /dev/null -w '%{http_code}' --path-as-is "$@"; }
-          [ "$(code 'http://127.0.0.1:8082/cdp-console/..\json/version')" = 401 ]
-          [ "$(code -b "$J" 'http://127.0.0.1:8082/cdp-console/..\json/version')" = 400 ]
-          [ "$(code -b "$J" 'http://127.0.0.1:8082/cdp-console/json/version')" = 404 ]
+          [ "$(code 'http://127.0.0.1:8082/console/..\json/version')" = 401 ]
+          [ "$(code -b "$J" 'http://127.0.0.1:8082/console/..\json/version')" = 400 ]
+          [ "$(code -b "$J" 'http://127.0.0.1:8082/console/json/version')" = 404 ]
           echo "CDP console sidebar smoke test OK"
 
       - name: Smoke test — built-in login and CDP API key
         run: |
           set -euo pipefail
-          docker run -d --name auth-smoke -p 9228:9222 -p 8084:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name auth-smoke -p 9228:9222 -p 8084:80 \
             -e AUTH_SETUP_CODE=ci-setup-code localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec auth-smoke cat /tmp/auth-server.log /tmp/nginx/error.log || true; docker logs auth-smoke || true; docker rm -f auth-smoke >/dev/null' EXIT
           W=http://127.0.0.1:8084 C=http://127.0.0.1:9228 J=$(mktemp)
@@ -465,51 +483,54 @@ jobs:
             -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$@" || true; }
           json() { curl -s -H 'Content-Type: application/json' "$@"; }
           for i in $(seq 1 60); do
-            curl -sf $C/json/version >/dev/null && [ "$(code $W/)" = 401 ] && break
+            curl -sf $C/json/version >/dev/null && [ "$(code $W/browser/)" = 401 ] && break
             sleep 1
           done
-          # not set up: the setup form on both ports, the CDP API open
-          curl -s $W/ | grep -c 'data-mode="setup"' >/dev/null
-          curl -s $C/console/ | grep -c 'data-mode="setup"' >/dev/null
+          # not set up: the setup form on web pages, the CDP API open
+          curl -s $W/browser/ | grep -c 'data-mode="setup"' >/dev/null
+          curl -s $W/console/ | grep -c 'data-mode="setup"' >/dev/null
           [ "$(code $C/json/version)" = 200 ]
           # setup: cross-origin refused, the setup code required, then the
           # admin login (session cookie)
-          [ "$(code -X POST -H 'Origin: http://evil.example' -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","username":"admin","password":"password1"}' $W/__auth/api/setup)" = 403 ]
-          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $W/__auth/api/setup)" = 403 ]
-          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"code":"wrong-code","skip":true}' $C/__auth/api/setup)" = 403 ]
-          json -c "$J" -X POST -d '{"code":"ci-setup-code","username":"admin","password":"password1"}' $W/__auth/api/setup | jq -e '.ok' >/dev/null
-          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' $W/__auth/api/setup)" = 409 ]
+          [ "$(code -X POST -H 'Origin: http://evil.example' -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","username":"admin","password":"password1"}' $W/console/__auth/api/setup)" = 403 ]
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $W/console/__auth/api/setup)" = 403 ]
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"code":"wrong-code","skip":true}' $W/console/__auth/api/setup)" = 403 ]
+          json -c "$J" -X POST -d '{"code":"ci-setup-code","username":"admin","password":"password1"}' $W/console/__auth/api/setup | jq -e '.ok' >/dev/null
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' $W/console/__auth/api/setup)" = 409 ]
           # without a session: the login form; with it: Selkies + sidebar, console, WebSockets
-          curl -s $W/ | grep -c 'data-mode="login"' >/dev/null
-          curl -sf -b "$J" $W/ | grep -c 'cdp-console/panel.js' >/dev/null
-          curl -sf -b "$J" $W/ | grep -c '__auth/keepalive.js' >/dev/null
-          curl -sf $W/__auth/keepalive.js | grep -c 'api/renew' >/dev/null
+          curl -s $W/browser/ | grep -c 'data-mode="login"' >/dev/null
+          curl -sf -b "$J" $W/browser/ | grep -c 'console/panel.js' >/dev/null
+          curl -sf -b "$J" $W/browser/ | grep -c '__auth/client.js' >/dev/null
+          curl -sf $W/console/__auth/client.js | grep -c 'api/renew' >/dev/null
           # renewal: a fresh session is not due yet; none without a session
-          json -b "$J" -X POST -d '{}' $W/__auth/api/renew | jq -e '.renewIn > 0' >/dev/null
-          [ "$(code -X POST -H 'Content-Type: application/json' -d '{}' $W/__auth/api/renew)" = 401 ]
-          [ "$(code -b "$J" $C/console/)" = 200 ] && [ "$(code $C/console/)" = 401 ]
-          [ "$(ws -b "$J" $W/cdp-console/ws)" = 101 ] && [ "$(ws $W/cdp-console/ws)" = 401 ]
-          [ "$(ws -b "$J" -H 'Origin: http://evil.example' $W/cdp-console/ws)" = 403 ]
+          json -b "$J" -X POST -d '{}' $W/console/__auth/api/renew | jq -e '.renewIn > 0' >/dev/null
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{}' $W/console/__auth/api/renew)" = 401 ]
+          [ "$(code -b "$J" $W/console/)" = 200 ] && [ "$(code $W/console/)" = 401 ]
+          [ "$(ws -b "$J" $W/console/ws)" = 101 ] && [ "$(ws $W/console/ws)" = 401 ]
+          [ "$(ws -b "$J" -H 'Origin: http://evil.example' $W/console/ws)" = 403 ]
           # login API
-          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-pass"}' $W/__auth/api/login)" = 401 ]
-          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $C/__auth/api/login)" = 200 ]
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"wrong-pass"}' $W/console/__auth/api/login)" = 401 ]
+          [ "$(code -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"password1"}' $W/console/__auth/api/login)" = 200 ]
           # API key: only with a session and the current password (a session
           # alone — a stolen cookie — cannot lock the owner out); then the CDP
           # API needs it, in either header
-          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123","currentPassword":"password1"}' $W/__auth/api/apikey)" = 401 ]
-          [ "$(code -b "$J" -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123"}' $W/__auth/api/apikey)" = 403 ]
-          [ "$(code -b "$J" -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123","currentPassword":"wrong-pass"}' $W/__auth/api/apikey)" = 403 ]
-          json -b "$J" -X PUT -d '{"apiKey":"ci-key-0123","currentPassword":"password1"}' $W/__auth/api/apikey | jq -e '.ok' >/dev/null
+          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123","currentPassword":"password1"}' $W/console/__auth/api/apikey)" = 401 ]
+          [ "$(code -b "$J" -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123"}' $W/console/__auth/api/apikey)" = 403 ]
+          [ "$(code -b "$J" -X PUT -H 'Content-Type: application/json' -d '{"apiKey":"ci-key-0123","currentPassword":"wrong-pass"}' $W/console/__auth/api/apikey)" = 403 ]
+          json -b "$J" -X PUT -d '{"apiKey":"ci-key-0123","currentPassword":"password1"}' $W/console/__auth/api/apikey | jq -e '.ok' >/dev/null
           [ "$(code $C/json/version)" = 401 ] && [ "$(code -b "$J" $C/json/version)" = 401 ]
           [ "$(code -H 'Authorization: Bearer ci-key-0123' $C/json/version)" = 200 ]
           [ "$(code -H 'X-API-Key: ci-key-0123' $C/json/list)" = 200 ]
           [ "$(ws $C/devtools/browser/x)" = 401 ]
-          # the console's session never opens the CDP API, however the path is
-          # spelled (nginx and the gateway must read it alike)
-          [ "$(code --path-as-is -b "$J" "$C/console/..\json/version")" = 400 ]
-          [ "$(code --path-as-is -b "$J" "$C/console\..\json/version")" = 401 ] # not under /console/: the API key
-          [ "$(ws --path-as-is -b "$J" "$C/console/..\devtools/browser/x")" = 400 ]
+          # A session never authorizes CDP; malformed targets stay rejected
+          # even when a valid API key is supplied.
           [ "$(code --path-as-is -b "$J" "$C/console/../json/version")" = 401 ]
+          [ "$(code --path-as-is -H 'X-API-Key: ci-key-0123' "$C/console/..\json/version")" = 400 ]
+          [ "$(ws --path-as-is -H 'X-API-Key: ci-key-0123' "$C/console/..\devtools/browser/x")" = 400 ]
+          for route in console/ console/api/settings __auth/ __auth/api/state; do
+            [ "$(code -H 'X-API-Key: ci-key-0123' "$C/$route")" = 404 ]
+          done
+          [ "$(code -H 'X-API-Key: ci-key-0123' $W/console/)" = 401 ]
           # ws() does the upgrade over http:// (the runner's curl 8.5 has no ws:// scheme)
           [ "$(ws -H 'X-API-Key: ci-key-0123' "$(curl -s -H 'X-API-Key: ci-key-0123' $C/json/version | jq -r .webSocketDebuggerUrl | sed 's#^ws://#http://#')")" = 101 ]
           # persisted (hashed) across a restart
@@ -519,43 +540,43 @@ jobs:
             curl -sf -H 'X-API-Key: ci-key-0123' $C/json/version >/dev/null && break
             sleep 1
           done
-          [ "$(code -b "$J" $W/)" = 200 ] && [ "$(code $C/json/version)" = 401 ]
+          [ "$(code -b "$J" $W/browser/)" = 200 ] && [ "$(code $C/json/version)" = 401 ]
           # a new login ends the other sessions; the login off opens the web UI
           J2=$(mktemp); cp "$J" "$J2"
-          json -b "$J" -c "$J" -X PUT -d '{"currentPassword":"password1","username":"boss","password":"password2"}' $W/__auth/api/credentials | jq -e '.ok' >/dev/null
-          [ "$(code -b "$J" $W/)" = 200 ] && [ "$(code -b "$J2" $W/)" = 401 ]
-          json -b "$J" -X PUT -d '{"currentPassword":"password2","username":"","password":""}' $W/__auth/api/credentials | jq -e '.ok' >/dev/null
-          [ "$(code $W/)" = 200 ] && [ "$(code $C/console/)" = 200 ] && [ "$(code $C/json/version)" = 401 ]
+          json -b "$J" -c "$J" -X PUT -d '{"currentPassword":"password1","username":"boss","password":"password2"}' $W/console/__auth/api/credentials | jq -e '.ok' >/dev/null
+          [ "$(code -b "$J" $W/browser/)" = 200 ] && [ "$(code -b "$J2" $W/browser/)" = 401 ]
+          json -b "$J" -X PUT -d '{"currentPassword":"password2","username":"","password":""}' $W/console/__auth/api/credentials | jq -e '.ok' >/dev/null
+          [ "$(code $W/browser/)" = 200 ] && [ "$(code $W/console/)" = 200 ] && [ "$(code $C/json/version)" = 401 ]
           # login off: the API key is what proves ownership — changing it or
           # setting a login needs the current one
-          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":""}' $W/__auth/api/apikey)" = 403 ]
-          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"username":"mallory","password":"password3"}' $C/__auth/api/credentials)" = 403 ]
+          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"apiKey":""}' $W/console/__auth/api/apikey)" = 403 ]
+          [ "$(code -X PUT -H 'Content-Type: application/json' -d '{"username":"mallory","password":"password3"}' $W/console/__auth/api/credentials)" = 403 ]
           [ "$(code $C/json/version)" = 401 ]
-          json -X PUT -d '{"apiKey":"ci-key-4567","currentApiKey":"ci-key-0123"}' $W/__auth/api/apikey | jq -e '.ok' >/dev/null
+          json -X PUT -d '{"apiKey":"ci-key-4567","currentApiKey":"ci-key-0123"}' $W/console/__auth/api/apikey | jq -e '.ok' >/dev/null
           [ "$(code -H 'X-API-Key: ci-key-4567' $C/json/version)" = 200 ]
           # deleting the file starts over
           docker exec auth-smoke rm /browser/settings/auth.json
           sleep 2
-          curl -s $W/ | grep -c 'data-mode="setup"' >/dev/null
+          curl -s $W/browser/ | grep -c 'data-mode="setup"' >/dev/null
           [ "$(code $C/json/version)" = 200 ]
           # ENABLE_AUTH=false: no auth service, nothing gated
           docker rm -f auth-smoke >/dev/null
-          docker run -d --name auth-smoke -p 9228:9222 -p 8084:80 -e ENABLE_AUTH=false \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name auth-smoke -p 9228:9222 -p 8084:80 -e ENABLE_AUTH=false \
             -e ALLOWED_HOSTS=browser.example,.lan.example localhost/ci:${{ env.IMAGE_NAME }}
           for i in $(seq 1 60); do
-            curl -sf $C/json/version >/dev/null && curl -sf $W/ >/dev/null && break
+            curl -sf $C/json/version >/dev/null && curl -sf $W/browser/ >/dev/null && break
             sleep 1
           done
-          [ "$(code $C/console/)" = 200 ] && [ "$(code $W/)" = 200 ]
+          [ "$(code $W/console/)" = 200 ] && [ "$(code $W/browser/)" = 200 ]
           # ALLOWED_HOSTS: IP addresses, localhost and the listed names only
           # (DNS rebinding: a site's own name pointed at the container)
-          [ "$(code -H 'Host: evil.example' $W/)" = 421 ]
-          [ "$(code -H 'Host: evil.example:9228' $C/console/)" = 421 ]
+          [ "$(code -H 'Host: evil.example' $W/browser/)" = 421 ]
+          [ "$(code -H 'Host: evil.example:8084' $W/console/)" = 421 ]
           [ "$(code -H 'Host: evil.example:9228' $C/json/version)" = 421 ]
-          [ "$(code -H 'Host: browser.example' $W/)" = 200 ]
+          [ "$(code -H 'Host: browser.example' $W/browser/)" = 200 ]
           [ "$(code -H 'Host: Box.LAN.example:9228' $C/json/version)" = 200 ]
           [ "$(code -H 'Host: localhost:9228' $C/json/version)" = 200 ]
-          [ "$(code -H 'Host: [::1]:8084' $W/)" = 200 ]
+          [ "$(code -H 'Host: [::1]:8084' $W/browser/)" = 200 ]
           docker exec auth-smoke sh -c '! pgrep -f "[a]uth-server/server.mjs"'
           echo "built-in login smoke test OK"
 
@@ -565,7 +586,7 @@ jobs:
           # /tmp survives a restart; files the last start handed to the run
           # user must not block this one (fs.protected_regular); Selkies on,
           # so the desktop settings (/tmp/desktop-raise-new-windows) apply
-          docker run -d --name restart-smoke -p 9230:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name restart-smoke -p 9230:9222 \
             -e ENABLE_AUTH=false -e RUN_USER=browser \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker logs restart-smoke || true; docker rm -f restart-smoke >/dev/null' EXIT
@@ -593,10 +614,10 @@ jobs:
       - name: Smoke test — RUN_USER default (browser) and RUN_USER=0 (root)
         run: |
           set -euo pipefail
-          docker run -d --name user-default -p 9231:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name user-default -p 9231:9222 \
             -e ENABLE_SELKIES=false -e ENABLE_AUTH=false \
             localhost/ci:${{ env.IMAGE_NAME }}
-          docker run -d --name user-root -p 9232:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name user-root -p 9232:9222 \
             -e ENABLE_SELKIES=false -e ENABLE_AUTH=false -e RUN_USER=0 \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'for c in user-default user-root; do docker logs $c || true; docker rm -f $c >/dev/null; done' EXIT
@@ -612,13 +633,14 @@ jobs:
           owner() { docker exec "$1" sh -c 'ps -o user= -p "$(pgrep -o -f -- "--user-data-dir=/browser/user-data")"'; }
           [ "$(owner user-default)" = browser ]
           [ "$(owner user-root)" = root ]
-          docker logs user-root 2>&1 | grep -qF 'RUN_USER=0: everything runs as root'
+          # Read the full log so a match on the first line cannot give docker logs a SIGPIPE.
+          docker logs user-root 2>&1 | grep -Fc 'RUN_USER=0: everything runs as root' >/dev/null
           echo "RUN_USER default/root smoke test OK"
 
       - name: Smoke test — chromium sandbox (RUN_USER + user namespaces)
         run: |
           set -euo pipefail
-          docker run -d --name sandbox-smoke -p 9227:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name sandbox-smoke -p 9227:9222 \
             -e ENABLE_SELKIES=false -e ENABLE_AUTH=false -e RUN_USER=browser \
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
             localhost/ci:${{ env.IMAGE_NAME }}
@@ -630,8 +652,10 @@ jobs:
           # the browser works either way; sandboxed when the runner's kernel
           # lets the container create user namespaces
           curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser' >/dev/null
-          if ! docker logs sandbox-smoke 2>&1 | grep -q 'chromium: sandboxed'; then
-            echo "::warning::chromium ran without its sandbox on this runner: $(docker logs sandbox-smoke 2>&1 | grep 'chromium: no sandbox' || true)"
+          sandbox_logs=$(docker logs sandbox-smoke 2>&1)
+          if ! grep -qF 'chromium: sandboxed' <<< "$sandbox_logs"; then
+            reason=$(grep -F 'chromium: no sandbox' <<< "$sandbox_logs")
+            echo "::warning::chromium ran without its sandbox on this runner: $reason"
             exit 0
           fi
           ! docker exec sandbox-smoke pgrep -af -- '--no-sandbox' >/dev/null
@@ -657,13 +681,13 @@ jobs:
           set -euo pipefail
           # CDP_ALLOW_BROWSER_CLOSE=true: a client's Browser.close stands in for
           # the browser closing itself (its last window)
-          docker run -d --name ondemand-smoke -p 9226:9222 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name ondemand-smoke -p 9226:9222 -p 8083:80 \
             -e AUTH_SETUP_CODE=ci-setup-code \
             -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec ondemand-smoke cat /tmp/cdp-gateway.log || true; docker logs ondemand-smoke || true; docker rm -f ondemand-smoke >/dev/null' EXIT
           # the main browser's state, from the console's live state snapshot
-          state() { docker exec ondemand-smoke node -e "const ws = new WebSocket('ws://127.0.0.1:9222/console/ws');
+          state() { docker exec ondemand-smoke node -e "const ws = new WebSocket('ws://127.0.0.1:80/console/ws');
             ws.onmessage = (e) => { console.log(JSON.parse(e.data).ops[0].browsers.find((b) => b.main).state); process.exit(0); };
             ws.onerror = () => process.exit(1);"; }
           nchrome() { docker exec ondemand-smoke sh -c 'pgrep -c -x chrome || true'; }
@@ -673,14 +697,14 @@ jobs:
             sleep 1
           done
           # the console (API, live state) waits for the login setup: skip it
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:9226/__auth/api/setup >/dev/null
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"code":"ci-setup-code","skip":true}' http://127.0.0.1:8083/console/__auth/api/setup >/dev/null
           # no chromium until something asks for it; listings do not
           [ "$(state)" = stopped ]
           [ "$(curl -sf http://127.0.0.1:9226/json/list)" = "[]" ]
           [ "$(nchrome)" = 0 ]
           # the console starts it; the browser closing itself (last window)
           # leaves the container running
-          curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:9226/console/api/main/start | jq -e '.state == "running"' >/dev/null
+          curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:8083/console/api/main/start | jq -e '.state == "running"' >/dev/null
           docker exec -i ondemand-smoke node --input-type=module - <<'EOF'
           const v = await (await fetch('http://127.0.0.1:9222/json/version')).json();
           const ws = new WebSocket(v.webSocketDebuggerUrl);
@@ -705,7 +729,7 @@ jobs:
           }
           ws.close();
           EOF
-          curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:9226/console/api/main/stop | jq -e '.state == "stopped"' >/dev/null
+          curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:8083/console/api/main/stop | jq -e '.state == "stopped"' >/dev/null
           [ "$(nchrome)" = 0 ]
           up
           # the cookie survives Stop, and a restart (the stop hook closes an
@@ -744,7 +768,7 @@ jobs:
           EOF
           # The main browser remains running until explicitly stopped.
           [ "$(state)" = running ]
-          curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:9226/console/api/main/stop | jq -e '.state == "stopped"' >/dev/null
+          curl -sf -X POST -H 'X-CDP-Console: 1' http://127.0.0.1:8083/console/api/main/stop | jq -e '.state == "stopped"' >/dev/null
           [ "$(state)" = stopped ]
           up
           echo "on-demand main browser smoke test OK"
@@ -752,7 +776,7 @@ jobs:
       - name: Smoke test — main browser close and subsequent CDP startup
         run: |
           set -euo pipefail
-          docker run -d --name close-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name close-smoke -p 9227:9222 -e ENABLE_SELKIES=false \
             -e CDP_ALLOW_BROWSER_CLOSE=true \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec close-smoke cat /tmp/cdp-gateway.log || true; docker logs close-smoke || true; docker rm -f close-smoke >/dev/null' EXIT
@@ -793,22 +817,22 @@ jobs:
       - name: Smoke test — Wayland desktop (the default DISPLAY_BACKEND)
         run: |
           set -euo pipefail
-          docker run -d --name wayland-smoke -p 9224:9222 -p 8081:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name wayland-smoke -p 9224:9222 -p 8081:80 \
             localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec wayland-smoke cat /tmp/labwc.log || true; docker logs wayland-smoke || true; docker rm -f wayland-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9224/json/version >/dev/null \
-              && curl -s -o /dev/null http://127.0.0.1:8081/ && break
+              && curl -s -o /dev/null http://127.0.0.1:8081/browser/ && break
             sleep 1
           done
           curl -sf http://127.0.0.1:9224/json/version | jq -e '.Browser' >/dev/null
-          curl -s http://127.0.0.1:8081/ | grep -ci '<html' >/dev/null
+          curl -s http://127.0.0.1:8081/browser/ | grep -ci '<html' >/dev/null
           curl -sf -X PUT 'http://127.0.0.1:9224/json/new?about:blank' | jq -e '.id' >/dev/null
           # the main browser must be a window of labwc (no X server)
           main_window() {
             docker exec wayland-smoke sh -c \
               'XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY="$(cat /tmp/labwc-display)" wlrctl toplevel list' \
-              | grep -q '^cdp-main:'
+              | grep -c '^cdp-main:' >/dev/null
           }
           for _ in $(seq 1 50); do main_window && break; sleep 0.1; done
           main_window
@@ -818,16 +842,16 @@ jobs:
       - name: Smoke test — X11 desktop (DISPLAY_BACKEND=x11)
         run: |
           set -euo pipefail
-          docker run -d --name x11-smoke -p 9227:9222 -p 8083:80 \
+          docker run -d -e LISTEN_ADDR=0.0.0.0 --name x11-smoke -p 9227:9222 -p 8083:80 \
             -e DISPLAY_BACKEND=x11 localhost/ci:${{ env.IMAGE_NAME }}
           trap 'docker exec x11-smoke cat /tmp/xvfb.log || true; docker logs x11-smoke || true; docker rm -f x11-smoke >/dev/null' EXIT
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9227/json/version >/dev/null \
-              && curl -s -o /dev/null http://127.0.0.1:8083/ && break
+              && curl -s -o /dev/null http://127.0.0.1:8083/browser/ && break
             sleep 1
           done
           curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser' >/dev/null
-          curl -s http://127.0.0.1:8083/ | grep -ci '<html' >/dev/null
+          curl -s http://127.0.0.1:8083/browser/ | grep -ci '<html' >/dev/null
           curl -sf -X PUT 'http://127.0.0.1:9227/json/new?about:blank' | jq -e '.id' >/dev/null
           # the main browser must run on Xvfb (no labwc)
           docker exec x11-smoke pgrep -x Xvfb >/dev/null
@@ -839,22 +863,20 @@ jobs:
           set -euo pipefail
           for backend in wayland x11; do
             name="background-${backend}-smoke"
-            docker run -d --name "$name" --shm-size=64m \
+            docker run -d -e LISTEN_ADDR=0.0.0.0 --name "$name" --shm-size=64m \
               -e DISPLAY_BACKEND="$backend" -e ENABLE_CDP=false -e ENABLE_AUTH=false -e WAYLAND_DEBUG=client \
               localhost/ci:${{ env.IMAGE_NAME }}
             trap 'docker logs "$name" || true; docker cp "$name":/tmp/desktop-background.log /tmp/background-smoke.log && cat /tmp/background-smoke.log; docker rm -f "$name" >/dev/null' EXIT
-            for _ in $(seq 1 60); do
-              docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
-                http://selkies/ >/dev/null 2>&1 && break
-              sleep 1
-            done
+            # Selkies serves its desktop subfolder on the Unix socket too.
+            desktop_probe=(docker exec "$name" curl -fsS --max-time 5 -o /dev/null
+              --unix-socket /tmp/agentene/selkies.sock http://selkies/browser/)
+            "${desktop_probe[@]}" --retry 60 --retry-delay 1 --retry-all-errors --retry-max-time 60
             if [ "$backend" = wayland ]; then
               # Read back real pixels as well as protocol buffer sizes. This capture tool is installed only in the disposable test container.
               docker exec -e DEBIAN_FRONTEND=noninteractive "$name" sh -c 'apt-get update >/dev/null && apt-get install -y --no-install-recommends grim >/dev/null'
             fi
             docker exec -i "$name" python3 - < .github/tests/desktop-background.py
-            docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
-              http://selkies/ >/dev/null
+            "${desktop_probe[@]}"
             [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$name")" = 'true 0' ]
             docker rm -f "$name" >/dev/null
             trap - EXIT
@@ -914,7 +936,7 @@ jobs:
             MSG="Release ${VERSION} (Chrome for Testing ${CHROME})"
             HINT="bump VERSION to release this change"
           elif git diff "$BEFORE" HEAD -- Dockerfile \
-                 | grep -qE '^[-+]ARG CHROME_VERSION='; then
+                 | grep -Ec '^[-+]ARG CHROME_VERSION=' >/dev/null; then
             # Chrome bump — no git tag: publish tags the image
             # <VERSION>-<chrome> straight from this job's kind output. No
             # released-once marker needed: the automatic bump only merges
@@ -963,10 +985,10 @@ jobs:
           # (same repo); print the PR's head sha so we can compare below.
           # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
           PR_HEAD="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-            --jq '.[] | select(.merged_at != null
-                             and .head.ref == $ENV.BRANCH
-                             and .head.repo.full_name == $ENV.GITHUB_REPOSITORY)
-                      | .head.sha' | head -n1)"
+            --jq 'first(.[] | select(.merged_at != null
+                                  and .head.ref == $ENV.BRANCH
+                                  and .head.repo.full_name == $ENV.GITHUB_REPOSITORY)
+                           | .head.sha) // empty')"
           if [ -z "$PR_HEAD" ]; then
             echo "${GITHUB_SHA} is not a merged ${BRANCH} PR — nothing to clean up"
             exit 0

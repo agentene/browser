@@ -28,10 +28,10 @@ export async function targetOwner(targetId) {
   return (await targetAddress(targetId))?.pipe ?? null;
 }
 
-export async function targetAddress(targetId, wake = false) {
+export async function targetAddress(targetId, wakeReason) {
   for (const context of contexts.values()) {
     const known = context.session?.targets.has(targetId) || context.snapshot?.tabs.some((t) => t.id === targetId);
-    if (known && wake) await context.wake();
+    if (known && wakeReason) await context.wake(wakeReason);
     if (context.state !== 'running') continue;
     let id;
     try { id = context.physicalTarget(targetId); } catch { continue; }
