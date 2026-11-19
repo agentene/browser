@@ -55,8 +55,20 @@ async function closeWindow(card) {
   if (process.env.DISPLAY_BACKEND === 'wayland') {
     env.WAYLAND_DISPLAY = (await fs.readFile('/tmp/labwc-display', 'utf8')).trim();
     env.XDG_RUNTIME_DIR ??= '/tmp';
-    await until(async () => (await run('wlrctl', ['toplevel', 'list'], { env })).stdout.includes(`cdp-${card.name}:`), 'window mapped');
-    await run('wlrctl', ['toplevel', 'close', `app_id:cdp-${card.name}`], { env });
+    const appId = `cdp-${card.name}`;
+    const mapped = async () => {
+      const { stdout } = await run('wlrctl', ['toplevel', 'list'], { env });
+      return stdout.split('\n').some((line) => line.startsWith(appId + ':'));
+    };
+    await until(mapped, `${appId} window mapped`);
+    try {
+      await run('wlrctl', ['toplevel', 'close', `app_id:${appId}`], { env });
+    } catch (err) {
+      // wlrctl can segfault after labwc accepts the close request.
+      if (err.signal !== 'SIGSEGV') throw err;
+      console.warn(`wlrctl received SIGSEGV while closing ${appId}. Checking that the window disappeared.`);
+      await until(async () => !(await mapped()), `${appId} window closed after wlrctl SIGSEGV`);
+    }
   } else {
     const sockets = (await fs.readdir('/tmp/.X11-unix')).filter((name) => /^X\d+$/.test(name));
     assert.equal(sockets.length, 1, 'the disposable X11 fixture must have one display');

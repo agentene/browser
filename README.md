@@ -609,7 +609,9 @@ node update-chrome-node.mjs --node 22        # force the Node major instead of t
 
 [![ci](https://github.com/agentene/browser/actions/workflows/ci.yaml/badge.svg)](https://github.com/agentene/browser/actions/workflows/ci.yaml)
 
-Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland and X11 desktops). Releases are cut from `main` only — `dev` and feature branches are only tested. When a merge to `main` is a release (see below), the same CI run builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for); only a `VERSION` change also gets a git tag:
+Every pull request and every push to `main` runs [`ci.yaml`](.github/workflows/ci.yaml): static checks (hadolint, `docker build --check`, shellcheck, `node --check`, `py_compile`), a full image build, and runtime smoke tests (CDP endpoint, web UI, CDP gateway, Wayland and X11 desktops). The window-close test checks that the isolated browser exits and retains its profile. If `wlrctl` receives `SIGSEGV` while closing a Wayland window, the test also checks that the window disappeared from the compositor’s list. CI also probes the Selkies desktop at `/browser/` on its Unix socket before and after the resize tests.
+
+Releases are cut from `main` only — `dev` and feature branches are only tested. When a merge to `main` is a release (see below), the same CI run builds and publishes the `linux/amd64` image (the only architecture the Dockerfile builds for); only a `VERSION` change also gets a git tag:
 
 * **GHCR**: `ghcr.io/agentene/browser` (uses the built-in `GITHUB_TOKEN`)
 * **Docker Hub**: `agentene/browser` (same `<owner>/<repo>` path as GHCR; needs the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets of an account allowed to push there; skipped otherwise)

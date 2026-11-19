@@ -864,18 +864,16 @@ jobs:
               -e DISPLAY_BACKEND="$backend" -e ENABLE_CDP=false -e ENABLE_AUTH=false -e WAYLAND_DEBUG=client \
               localhost/ci:${{ env.IMAGE_NAME }}
             trap 'docker logs "$name" || true; docker cp "$name":/tmp/desktop-background.log /tmp/background-smoke.log && cat /tmp/background-smoke.log; docker rm -f "$name" >/dev/null' EXIT
-            for _ in $(seq 1 60); do
-              docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
-                http://selkies/ >/dev/null 2>&1 && break
-              sleep 1
-            done
+            # Selkies serves its desktop subfolder on the Unix socket too.
+            desktop_probe=(docker exec "$name" curl -fsS --max-time 5 -o /dev/null
+              --unix-socket /tmp/agentene/selkies.sock http://selkies/browser/)
+            "${desktop_probe[@]}" --retry 60 --retry-delay 1 --retry-all-errors --retry-max-time 60
             if [ "$backend" = wayland ]; then
               # Read back real pixels as well as protocol buffer sizes. This capture tool is installed only in the disposable test container.
               docker exec -e DEBIAN_FRONTEND=noninteractive "$name" sh -c 'apt-get update >/dev/null && apt-get install -y --no-install-recommends grim >/dev/null'
             fi
             docker exec -i "$name" python3 - < .github/tests/desktop-background.py
-            docker exec "$name" curl -sf --unix-socket /tmp/agentene/selkies.sock \
-              http://selkies/ >/dev/null
+            "${desktop_probe[@]}"
             [ "$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$name")" = 'true 0' ]
             docker rm -f "$name" >/dev/null
             trap - EXIT
