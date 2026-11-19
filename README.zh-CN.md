@@ -438,6 +438,8 @@ RUN_USER=1000          # 数字 uid[:gid],例如与宿主机上
 RUN_USER=0             # 不降权:所有进程以 root 运行
 ```
 
+关闭降权时，启动日志会出现 `everything runs as root`。CI 会分别检查默认设置和 `RUN_USER=0` 下实际运行的 Chromium 进程属主。
+
 具体行为:
 
 * 接受已存在的用户名(镜像内置 `browser`,uid 1001)或 `uid[:gid]`;数字 id 缺失的 passwd/group 条目会在启动时合成。`0`(以及 `0:<gid>` 或 `root`)关闭降权 —— 此时下面各条都不适用。

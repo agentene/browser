@@ -440,6 +440,8 @@ RUN_USER=1000          # a numeric uid[:gid], e.g. to match the uid that
 RUN_USER=0             # no privilege drop: everything runs as root
 ```
 
+When privilege dropping is disabled, the startup log includes `everything runs as root`. CI checks the owner of the running Chromium process for both the default setting and `RUN_USER=0`.
+
 What it does:
 
 * Accepts an existing username (`browser`, uid 1001, ships in the image) or `uid[:gid]`; missing passwd/group entries for a numeric id are synthesized at startup. `0` (also `0:<gid>` or `root`) turns the drop off — none of the points below apply then.

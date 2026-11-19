@@ -633,7 +633,8 @@ jobs:
           owner() { docker exec "$1" sh -c 'ps -o user= -p "$(pgrep -o -f -- "--user-data-dir=/browser/user-data")"'; }
           [ "$(owner user-default)" = browser ]
           [ "$(owner user-root)" = root ]
-          docker logs user-root 2>&1 | grep -qF 'RUN_USER=0: everything runs as root'
+          # Read the full log so a match on the first line cannot give docker logs a SIGPIPE.
+          docker logs user-root 2>&1 | grep -Fc 'RUN_USER=0: everything runs as root' >/dev/null
           echo "RUN_USER default/root smoke test OK"
 
       - name: Smoke test — chromium sandbox (RUN_USER + user namespaces)
@@ -651,8 +652,10 @@ jobs:
           # the browser works either way; sandboxed when the runner's kernel
           # lets the container create user namespaces
           curl -sf http://127.0.0.1:9227/json/version | jq -e '.Browser' >/dev/null
-          if ! docker logs sandbox-smoke 2>&1 | grep -q 'chromium: sandboxed'; then
-            echo "::warning::chromium ran without its sandbox on this runner: $(docker logs sandbox-smoke 2>&1 | grep 'chromium: no sandbox' || true)"
+          sandbox_logs=$(docker logs sandbox-smoke 2>&1)
+          if ! grep -qF 'chromium: sandboxed' <<< "$sandbox_logs"; then
+            reason=$(grep -F 'chromium: no sandbox' <<< "$sandbox_logs")
+            echo "::warning::chromium ran without its sandbox on this runner: $reason"
             exit 0
           fi
           ! docker exec sandbox-smoke pgrep -af -- '--no-sandbox' >/dev/null
@@ -829,7 +832,7 @@ jobs:
           main_window() {
             docker exec wayland-smoke sh -c \
               'XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY="$(cat /tmp/labwc-display)" wlrctl toplevel list' \
-              | grep -q '^cdp-main:'
+              | grep -c '^cdp-main:' >/dev/null
           }
           for _ in $(seq 1 50); do main_window && break; sleep 0.1; done
           main_window
@@ -933,7 +936,7 @@ jobs:
             MSG="Release ${VERSION} (Chrome for Testing ${CHROME})"
             HINT="bump VERSION to release this change"
           elif git diff "$BEFORE" HEAD -- Dockerfile \
-                 | grep -qE '^[-+]ARG CHROME_VERSION='; then
+                 | grep -Ec '^[-+]ARG CHROME_VERSION=' >/dev/null; then
             # Chrome bump — no git tag: publish tags the image
             # <VERSION>-<chrome> straight from this job's kind output. No
             # released-once marker needed: the automatic bump only merges
@@ -982,10 +985,10 @@ jobs:
           # (same repo); print the PR's head sha so we can compare below.
           # shellcheck disable=SC2016 # $ENV is jq's, not the shell's
           PR_HEAD="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-            --jq '.[] | select(.merged_at != null
-                             and .head.ref == $ENV.BRANCH
-                             and .head.repo.full_name == $ENV.GITHUB_REPOSITORY)
-                      | .head.sha' | head -n1)"
+            --jq 'first(.[] | select(.merged_at != null
+                                  and .head.ref == $ENV.BRANCH
+                                  and .head.repo.full_name == $ENV.GITHUB_REPOSITORY)
+                           | .head.sha) // empty')"
           if [ -z "$PR_HEAD" ]; then
             echo "${GITHUB_SHA} is not a merged ${BRANCH} PR — nothing to clean up"
             exit 0
